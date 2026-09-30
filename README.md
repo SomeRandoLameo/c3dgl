@@ -1,0 +1,97 @@
+# c3dgl
+
+OpenGL 1.1 subset for the Nintendo 3DS, running on the GPU through [citro3d](https://github.com/devkitPro/citro3d).
+Code written against classic fixed-function OpenGL (immediate mode, matrix stacks, client arrays) can be
+ported to the 3DS without rewriting its renderer. It depends on nothing but libctru and citro3d.
+
+**Status:** early. 2D drawing (shapes, text, lines, textures) runs at a steady 60 FPS in the
+[Azahar](https://azahar-emu.org/) emulator. Not yet tested on real hardware; 3D, scissor and sub-viewports
+are covered by the cube example but not verified yet. Issues and pull requests are welcome.
+
+## Usage
+
+```c
+#include <3ds.h>
+#include <GL/gl.h>
+#include <c3dgl.h>
+
+int main(void)
+{
+    gfxInitDefault();
+    c3dglInit();                        // top screen, 400x240
+
+    while (aptMainLoop())
+    {
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glBegin(GL_TRIANGLES);
+            glColor3f(1, 0, 0); glVertex2f( 0.0f,  0.5f);
+            glColor3f(0, 1, 0); glVertex2f(-0.5f, -0.5f);
+            glColor3f(0, 0, 1); glVertex2f( 0.5f, -0.5f);
+        glEnd();
+        c3dglSwapBuffers();             // waits for VBlank on the next frame
+    }
+
+    c3dglClose();
+    gfxExit();
+}
+```
+
+`<GL/gl.h>` and `<c3dgl.h>` do not include `<3ds.h>`, so they also work next to headers that clash with
+libctru (e.g. other libraries defining `KEY_A`). See [`examples/cube`](examples/cube/main.cpp) for a complete program.
+
+## Integration
+
+Requires [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `3ds-dev` group (devkitARM, libctru,
+citro3d, picasso) and `$DEVKITPRO` set. Add c3dgl to your CMake project, e.g. as a git submodule:
+
+```sh
+git submodule add https://github.com/SomeRandoLameo/c3dgl.git third_party/c3dgl
+```
+
+```cmake
+add_subdirectory(third_party/c3dgl)
+target_link_libraries(my_app PRIVATE c3dgl::c3dgl)
+```
+
+## Building the example
+
+```sh
+cmake -S . -B build          # picks up $DEVKITPRO/cmake/3DS.cmake
+cmake --build build          # -> build/examples/cube/c3dgl_cube.3dsx
+```
+
+Run the `.3dsx` in an emulator or send it to a 3DS with `3dslink`. The bottom screen describes the
+expected picture. Examples are built by default only when c3dgl is the top-level project
+(`-DC3DGL_BUILD_EXAMPLES=ON/OFF`).
+
+## Supported
+
+- `glBegin`/`glEnd` and client arrays (`glDrawArrays`, `glDrawElements`) with `GL_TRIANGLES`, `GL_QUADS`, `GL_LINES`
+- Modelview/projection matrix stacks, `glOrtho`, `glFrustum`, `glTranslatef`, `glRotatef`, `glScalef`, `glMultMatrixf`
+- Textures of any size up to 1024x1024: RGBA8, RGB8, luminance/alpha, luminance, alpha, RGB565, RGBA5551, RGBA4;
+  `glTexSubImage2D`, `glGetTexImage`, nearest/linear filtering, repeat/clamp/mirror wrapping
+- Blending (`glBlendFunc`), depth test/function/mask, color mask, face culling, scissor, viewport, line width
+
+The full list of functions is `include/GL/gl.h`.
+
+## Not supported
+
+Lighting, fog, texture environment modes (always vertex color × texture), mipmaps (only level 0 is used),
+`glReadPixels`, `GL_POINTS`/strips/fans/polygons, `glPolygonMode` other than `GL_FILL`, the bottom screen and
+stereoscopic 3D. `glClear` ignores scissor and color mask. `GL_REPEAT` on non-power-of-two textures samples
+the padding.
+
+## How it works
+
+- Vertices are collected in one linear buffer per frame and drawn in batches. A batch is submitted when the
+  draw state (texture, matrices, blend, depth, ...) changes; the state is compared when drawing, not in the
+  setters, so code that binds and unbinds a texture around every quad still ends up in one draw call.
+- The PICA200 vertex shader (`shaders/c3dgl.v.pica`) applies `post * projection * modelview`, where `post`
+  rotates to the 3DS screen orientation and maps depth to PICA's [-1, 0] range.
+- `GL_LINES` has no PICA equivalent: lines are transformed on the CPU and expanded to screen-aligned quads.
+- Textures are padded to power-of-two sizes and Morton-swizzled on upload; the shader scales the UVs.
+- Textures deleted during a frame are freed after the GPU finished that frame.
+
+## License
+
+zlib, see [LICENSE](LICENSE).

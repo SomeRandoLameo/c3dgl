@@ -1,0 +1,8 @@
+build/
+build-*/
+compile_commands.json
+.cache/
+*.3dsx
+*.smdh
+*.elf
+*.shbin

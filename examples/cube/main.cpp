@@ -1,0 +1,177 @@
+// c3dgl example: plain OpenGL 1.1 on the 3DS, no raylib.
+// Doubles as a visual test for the parts raylib_test does not cover; the expected
+// result is printed on the bottom screen:
+//   - textured cube with depth test + back-face culling, drawn into the right half viewport
+//   - NPOT texture (12x12, padded to 16x16 internally)
+//   - scissor box in GL coordinates (bottom-left origin) and GL_LINES outline around it
+#include <3ds.h>
+#include <GL/gl.h>
+#include <c3dgl.h>
+
+#include <cstdio>
+
+namespace {
+
+constexpr int TEX_SIZE = 12;    // Not a power of two on purpose
+
+struct Face {
+    float vertices[4][3];       // Counter-clockwise seen from outside
+    GLubyte color[3];
+};
+
+constexpr Face CUBE[] = {
+    {{{-1, -1,  1}, { 1, -1,  1}, { 1,  1,  1}, {-1,  1,  1}}, {255, 80, 80}},    // +z
+    {{{ 1, -1, -1}, {-1, -1, -1}, {-1,  1, -1}, { 1,  1, -1}}, {80, 255, 80}},    // -z
+    {{{-1, -1, -1}, {-1, -1,  1}, {-1,  1,  1}, {-1,  1, -1}}, {80, 80, 255}},    // -x
+    {{{ 1, -1,  1}, { 1, -1, -1}, { 1,  1, -1}, { 1,  1,  1}}, {255, 255, 80}},   // +x
+    {{{-1,  1,  1}, { 1,  1,  1}, { 1,  1, -1}, {-1,  1, -1}}, {80, 255, 255}},   // +y
+    {{{-1, -1, -1}, { 1, -1, -1}, { 1, -1,  1}, {-1, -1,  1}}, {255, 80, 255}},   // -y
+};
+
+constexpr float UVS[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+
+GLuint createCheckerTexture() {
+    GLubyte pixels[TEX_SIZE][TEX_SIZE][4];
+    for (int y = 0; y < TEX_SIZE; y++) {
+        for (int x = 0; x < TEX_SIZE; x++) {
+            const bool light = ((x / 2) + (y / 2)) % 2 == 0;
+            const GLubyte v = light ? 255 : 90;
+            pixels[y][x][0] = pixels[y][x][1] = pixels[y][x][2] = v;
+            pixels[y][x][3] = 255;
+        }
+    }
+
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, TEX_SIZE, TEX_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return id;
+}
+
+void drawCube(GLuint texture, float angle) {
+    // Right half of the screen
+    const int x = C3DGL_SCREEN_WIDTH / 2, w = C3DGL_SCREEN_WIDTH / 2, h = C3DGL_SCREEN_HEIGHT;
+    glViewport(x, 0, w, h);
+
+    const float aspect = static_cast<float>(w) / h;
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glFrustum(-0.1 * aspect, 0.1 * aspect, -0.1, 0.1, 0.1, 100.0);
+
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glTranslatef(0.0f, 0.0f, -5.0f);
+    glRotatef(25.0f, 1.0f, 0.0f, 0.0f);
+    glRotatef(angle, 0.0f, 1.0f, 0.0f);
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glFrontFace(GL_CCW);
+
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glBegin(GL_QUADS);
+    for (const Face& face : CUBE) {
+        glColor4ub(face.color[0], face.color[1], face.color[2], 255);
+        for (int i = 0; i < 4; i++) {
+            glTexCoord2f(UVS[i][0], UVS[i][1]);
+            glVertex3f(face.vertices[i][0], face.vertices[i][1], face.vertices[i][2]);
+        }
+    }
+    glEnd();
+    glDisable(GL_TEXTURE_2D);
+
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+}
+
+void drawOverlay() {
+    // Full screen, y down like most 2D code
+    glViewport(0, 0, C3DGL_SCREEN_WIDTH, C3DGL_SCREEN_HEIGHT);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, C3DGL_SCREEN_WIDTH, C3DGL_SCREEN_HEIGHT, 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    // Scissor box in GL coordinates: 10 px from the left, 10 px from the BOTTOM, 120x50
+    const int sx = 10, sy = 10, sw = 120, sh = 50;
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(sx, sy, sw, sh);
+
+    // Large quad, only the scissor box of it must be visible
+    glColor4ub(255, 200, 0, 255);
+    glBegin(GL_QUADS);
+    glVertex2f(0.0f, 0.0f);
+    glVertex2f(200.0f, 0.0f);
+    glVertex2f(200.0f, 240.0f);
+    glVertex2f(0.0f, 240.0f);
+    glEnd();
+    glDisable(GL_SCISSOR_TEST);
+
+    // Outline 2 px outside the scissor box (y down: top = height - (sy + sh))
+    const float left = sx - 2.0f, right = sx + sw + 2.0f;
+    const float top = C3DGL_SCREEN_HEIGHT - (sy + sh) - 2.0f, bottom = C3DGL_SCREEN_HEIGHT - sy + 2.0f;
+    glColor4ub(255, 255, 255, 255);
+    glBegin(GL_LINES);
+    glVertex2f(left, top);     glVertex2f(right, top);
+    glVertex2f(right, top);    glVertex2f(right, bottom);
+    glVertex2f(right, bottom); glVertex2f(left, bottom);
+    glVertex2f(left, bottom);  glVertex2f(left, top);
+    glEnd();
+}
+
+} // namespace
+
+int main() {
+    gfxInitDefault();
+    consoleInit(GFX_BOTTOM, nullptr);
+
+    if (!c3dglInit()) {
+        std::printf("c3dglInit failed\n");
+        while (aptMainLoop()) {
+            hidScanInput();
+            if (hidKeysDown() & KEY_START) break;
+            gspWaitForVBlank();
+        }
+        gfxExit();
+        return 1;
+    }
+
+    std::printf("c3dgl cube test\n\n"
+                "Expected on the top screen:\n"
+                "- cube in the RIGHT half, solid\n"
+                "  (no see-through faces), 6x6\n"
+                "  checker per face, no dark band\n"
+                "- yellow box BOTTOM LEFT, inside\n"
+                "  a white outline with 2px gap\n\n"
+                "START: exit\n");
+
+    const GLuint texture = createCheckerTexture();
+    glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
+
+    float angle = 0.0f;
+    while (aptMainLoop()) {
+        hidScanInput();
+        if (hidKeysDown() & KEY_START) break;
+
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        drawCube(texture, angle);
+        drawOverlay();
+        c3dglSwapBuffers();
+
+        angle += 1.0f;
+    }
+
+    glDeleteTextures(1, &texture);
+    c3dglClose();
+    gfxExit();
+    return 0;
+}
