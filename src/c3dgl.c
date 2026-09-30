@@ -10,6 +10,8 @@
 //     `post` maps OpenGL clip space to PICA clip space: 90 degree screen rotation + depth range [-1, 0].
 //   - GL_LINES has no PICA equivalent: lines are transformed on the CPU and expanded to quads in NDC.
 //   - Textures are padded to power-of-two sizes and Morton-swizzled; the shader scales UVs back.
+//   - One render target per screen, sharing the vertex buffer and GL state; c3dglSetScreen() flushes the
+//     batch and switches the target (C3D_FrameDrawOn), citro3d presents every target drawn on in the frame.
 //
 // Known limitations: no mipmaps, no glReadPixels, glClear ignores scissor/color mask,
 // REPEAT wrap on non-power-of-two textures samples the padding.
@@ -38,10 +40,12 @@
 // glTexImage2D data starts at t = 0, so rows are flipped while swizzling (verified in Azahar)
 #define C3DGL_TEXTURE_FLIP_Y    1
 
+// Output format is added per screen, see screenTransferFlags()
 #define DISPLAY_TRANSFER_FLAGS \
     (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | \
-     GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) | \
-     GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
+     GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
+
+#define C3DGL_SCREEN_COUNT      2
 
 #define LOG(...) printf("C3DGL: " __VA_ARGS__)
 #define WARN_ONCE(...) do { static bool warned = false; if (!warned) { warned = true; LOG(__VA_ARGS__); } } while (0)
@@ -106,7 +110,8 @@ enum { ARRAY_VERTEX, ARRAY_TEXCOORD, ARRAY_COLOR, ARRAY_COUNT };
 //----------------------------------------------------------------------------------
 static struct {
     bool ready;
-    C3D_RenderTarget *target;
+    C3D_RenderTarget *targets[C3DGL_SCREEN_COUNT];
+    C3DGLscreen screen;                 // Screen drawn on, see c3dglSetScreen()
     DVLB_s *dvlb;
     shaderProgram_s program;
     int uLocMvp, uLocTexScale;
@@ -337,13 +342,42 @@ static void deferTextureDelete(const C3D_Tex *tex)
     gl.deferredDeletes[gl.deferredCount++] = *tex;
 }
 
+static int screenWidth(C3DGLscreen screen)
+{
+    return (screen == C3DGL_SCREEN_BOTTOM)? C3DGL_BOTTOM_SCREEN_WIDTH : C3DGL_TOP_SCREEN_WIDTH;
+}
+
+// The display transfer has to write the framebuffer format the screen is currently set to
+// (gfxInitDefault: BGR8, consoleInit changes it to RGB565)
+static u32 screenTransferFlags(gfxScreen_t screen)
+{
+    GX_TRANSFER_FORMAT out;
+    switch (gfxGetScreenFormat(screen))
+    {
+        case GSP_RGBA8_OES: out = GX_TRANSFER_FMT_RGBA8; break;
+        case GSP_RGB565_OES: out = GX_TRANSFER_FMT_RGB565; break;
+        case GSP_RGB5_A1_OES: out = GX_TRANSFER_FMT_RGB5A1; break;
+        case GSP_RGBA4_OES: out = GX_TRANSFER_FMT_RGBA4; break;
+        default: out = GX_TRANSFER_FMT_RGB8; break;
+    }
+    return DISPLAY_TRANSFER_FLAGS | GX_TRANSFER_OUT_FORMAT(out);
+}
+
+// Link the current screen's target to its display. Done on every switch, as the app may have
+// changed the screen format in between (e.g. from the console to graphics)
+static void linkTarget(void)
+{
+    gfxScreen_t screen = (gl.screen == C3DGL_SCREEN_BOTTOM)? GFX_BOTTOM : GFX_TOP;
+    C3D_RenderTargetSetOutput(gl.targets[gl.screen], screen, GFX_LEFT, screenTransferFlags(screen));
+}
+
 static void ensureFrame(void)
 {
     if (gl.frameActive) return;
 
     // SYNCDRAW: waits until the GPU finished the previous frame, so the vertex buffer can be reused
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
-    C3D_FrameDrawOn(gl.target);         // Also resets the viewport, hence batchValid = false
+    C3D_FrameDrawOn(gl.targets[gl.screen]);     // Also resets the viewport, hence batchValid = false
 
     gl.frameActive = true;
     gl.drawnThisFrame = false;
@@ -368,11 +402,11 @@ static void flush(void)
 }
 
 // Logical (landscape, bottom-left origin) rectangle -> physical render target rectangle.
-// The target is 240x400 (portrait); `post` maps logical x to physical -y and logical y to physical x.
+// The target is 240xN (portrait); `post` maps logical x to physical -y and logical y to physical x.
 static void physicalRect(const GLint r[4], int *x, int *y, int *w, int *h)
 {
     *x = r[1];
-    *y = C3DGL_SCREEN_WIDTH - r[0] - r[2];
+    *y = screenWidth(gl.screen) - r[0] - r[2];
     *w = r[3];
     *h = r[2];
 }
@@ -583,10 +617,15 @@ bool c3dglInit(void)
 
     if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) { LOG("C3D_Init failed\n"); return false; }
 
-    // Render target is portrait (240x400) because the screens are rotated
-    gl.target = C3D_RenderTargetCreate(C3DGL_SCREEN_HEIGHT, C3DGL_SCREEN_WIDTH, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
-    if (gl.target == NULL) { LOG("Failed to create render target\n"); C3D_Fini(); return false; }
-    C3D_RenderTargetSetOutput(gl.target, GFX_TOP, GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
+    // Render targets are portrait (240x400, 240x320) because the screens are rotated.
+    // The bottom one is linked to its display on the first c3dglSetScreen(), so a console there stays untouched
+    for (int i = 0; i < C3DGL_SCREEN_COUNT; i++)
+    {
+        gl.targets[i] = C3D_RenderTargetCreate(C3DGL_SCREEN_HEIGHT, screenWidth((C3DGLscreen)i), GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
+        if (gl.targets[i] == NULL) { LOG("Failed to create render target\n"); c3dglClose(); return false; }
+    }
+    gl.screen = C3DGL_SCREEN_TOP;
+    linkTarget();
 
     gl.vbo = linearAlloc(C3DGL_MAX_VERTICES*sizeof(Vertex));
     if (gl.vbo == NULL) { LOG("Failed to allocate vertex buffer\n"); c3dglClose(); return false; }
@@ -620,7 +659,7 @@ bool c3dglInit(void)
     for (int row = 0; row < 4; row++) gl.post.m[2*4 + row] = -gl.post.m[2*4 + row];
 
     // OpenGL default state
-    gl.state.viewport[2] = gl.state.scissorBox[2] = C3DGL_SCREEN_WIDTH;
+    gl.state.viewport[2] = gl.state.scissorBox[2] = C3DGL_TOP_SCREEN_WIDTH;
     gl.state.viewport[3] = gl.state.scissorBox[3] = C3DGL_SCREEN_HEIGHT;
     gl.state.blendSrc = GL_ONE;
     gl.state.blendDst = GL_ZERO;
@@ -652,10 +691,42 @@ void c3dglClose(void)
 
     if (gl.dvlb != NULL) { shaderProgramFree(&gl.program); DVLB_Free(gl.dvlb); }
     if (gl.vbo != NULL) linearFree(gl.vbo);
-    if (gl.target != NULL) C3D_RenderTargetDelete(gl.target);
+    for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) if (gl.targets[i] != NULL) C3D_RenderTargetDelete(gl.targets[i]);
     C3D_Fini();
 
     memset(&gl, 0, sizeof(gl));
+}
+
+void c3dglSetScreen(C3DGLscreen screen)
+{
+    if ((screen != C3DGL_SCREEN_TOP) && (screen != C3DGL_SCREEN_BOTTOM)) return;
+
+    if (gl.frameActive) flush();    // Pending vertices belong to the previous screen
+
+    gl.screen = screen;
+    linkTarget();
+
+    // Viewport and scissor box of the new screen size, like a freshly bound framebuffer
+    gl.state.viewport[0] = gl.state.viewport[1] = 0;
+    gl.state.viewport[2] = screenWidth(screen);
+    gl.state.viewport[3] = C3DGL_SCREEN_HEIGHT;
+    memcpy(gl.state.scissorBox, gl.state.viewport, sizeof(gl.state.viewport));
+
+    if (gl.frameActive)
+    {
+        C3D_FrameDrawOn(gl.targets[screen]);
+        gl.batchValid = false;
+    }
+}
+
+C3DGLscreen c3dglGetScreen(void)
+{
+    return gl.screen;
+}
+
+int c3dglGetScreenWidth(C3DGLscreen screen)
+{
+    return screenWidth(screen);
 }
 
 void c3dglSwapBuffers(void)
@@ -778,7 +849,7 @@ void glClear(GLbitfield mask)
     float depth = 1.0f - gl.clearDepth;     // Reversed depth, see depthFunc()
     if (depth < 0.0f) depth = 0.0f;
     if (depth > 1.0f) depth = 1.0f;
-    C3D_RenderTargetClear(gl.target, (C3D_ClearBits)bits, gl.clearColor, (u32)(depth*0xFFFFFF));
+    C3D_RenderTargetClear(gl.targets[gl.screen], (C3D_ClearBits)bits, gl.clearColor, (u32)(depth*0xFFFFFF));
 }
 
 void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha)

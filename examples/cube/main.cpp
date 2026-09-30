@@ -55,7 +55,7 @@ GLuint createCheckerTexture() {
 
 void drawCube(GLuint texture, float angle) {
     // Right half of the screen
-    const int x = C3DGL_SCREEN_WIDTH / 2, w = C3DGL_SCREEN_WIDTH / 2, h = C3DGL_SCREEN_HEIGHT;
+    const int x = C3DGL_TOP_SCREEN_WIDTH / 2, w = C3DGL_TOP_SCREEN_WIDTH / 2, h = C3DGL_SCREEN_HEIGHT;
     glViewport(x, 0, w, h);
 
     const float aspect = static_cast<float>(w) / h;
@@ -94,10 +94,10 @@ void drawCube(GLuint texture, float angle) {
 
 void drawOverlay() {
     // Full screen, y down like most 2D code
-    glViewport(0, 0, C3DGL_SCREEN_WIDTH, C3DGL_SCREEN_HEIGHT);
+    glViewport(0, 0, C3DGL_TOP_SCREEN_WIDTH, C3DGL_SCREEN_HEIGHT);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    glOrtho(0.0, C3DGL_SCREEN_WIDTH, C3DGL_SCREEN_HEIGHT, 0.0, -1.0, 1.0);
+    glOrtho(0.0, C3DGL_TOP_SCREEN_WIDTH, C3DGL_SCREEN_HEIGHT, 0.0, -1.0, 1.0);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 

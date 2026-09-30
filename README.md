@@ -18,7 +18,7 @@ are covered by the cube example but not verified yet. Issues and pull requests a
 int main(void)
 {
     gfxInitDefault();
-    c3dglInit();                        // top screen, 400x240
+    c3dglInit();                        // top screen (400x240) is current
 
     while (aptMainLoop())
     {
@@ -28,7 +28,13 @@ int main(void)
             glColor3f(0, 1, 0); glVertex2f(-0.5f, -0.5f);
             glColor3f(0, 0, 1); glVertex2f( 0.5f, -0.5f);
         glEnd();
-        c3dglSwapBuffers();             // waits for VBlank on the next frame
+
+        c3dglSetScreen(C3DGL_SCREEN_BOTTOM);    // 320x240, viewport is reset to the full screen
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        // ... draw the bottom screen ...
+        c3dglSetScreen(C3DGL_SCREEN_TOP);
+
+        c3dglSwapBuffers();             // presents both screens, waits for VBlank on the next frame
     }
 
     c3dglClose();
@@ -38,6 +44,14 @@ int main(void)
 
 `<GL/gl.h>` and `<c3dgl.h>` do not include `<3ds.h>`, so they also work next to headers that clash with
 libctru (e.g. other libraries defining `KEY_A`). See [`examples/cube`](examples/cube/main.cpp) for a complete program.
+
+### Screens
+
+Both screens have their own render target and share all other GL state (textures, matrices, blending, ...).
+`c3dglSetScreen()` selects where the following draws and clears go, it can be switched any number of times per
+frame and resets viewport and scissor box to the full screen. `c3dglSwapBuffers()` presents every screen that was
+drawn on in that frame, the other one keeps its last picture. The bottom screen is not touched until the first
+switch to it, so `consoleInit(GFX_BOTTOM, NULL)` works as long as nothing is rendered there.
 
 ## Integration
 
@@ -71,14 +85,14 @@ expected picture. Examples are built by default only when c3dgl is the top-level
 - Textures of any size up to 1024x1024: RGBA8, RGB8, luminance/alpha, luminance, alpha, RGB565, RGBA5551, RGBA4;
   `glTexSubImage2D`, `glGetTexImage`, nearest/linear filtering, repeat/clamp/mirror wrapping
 - Blending (`glBlendFunc`), depth test/function/mask, color mask, face culling, scissor, viewport, line width
+- Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
 
 ## Not supported
 
 Lighting, fog, texture environment modes (always vertex color × texture), mipmaps (only level 0 is used),
-`glReadPixels`, `GL_POINTS`/strips/fans/polygons, `glPolygonMode` other than `GL_FILL`, the bottom screen and
-stereoscopic 3D. `glClear` ignores scissor and color mask. `GL_REPEAT` on non-power-of-two textures samples
+`glReadPixels`, `GL_POINTS`/strips/fans/polygons, `glPolygonMode` other than `GL_FILL` and stereoscopic 3D. `glClear` ignores scissor and color mask. `GL_REPEAT` on non-power-of-two textures samples
 the padding.
 
 ## How it works
@@ -91,6 +105,7 @@ the padding.
 - `GL_LINES` has no PICA equivalent: lines are transformed on the CPU and expanded to screen-aligned quads.
 - Textures are padded to power-of-two sizes and Morton-swizzled on upload; the shader scales the UVs.
 - Textures deleted during a frame are freed after the GPU finished that frame.
+- One render target per screen; switching flushes the batch and changes the target within the same frame.
 
 ## License
 

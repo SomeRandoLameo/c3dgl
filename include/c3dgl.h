@@ -22,25 +22,41 @@
 //
 // Not supported: lighting, fog, texture environment modes (always vertex color * texture),
 // mipmaps, glReadPixels, GL_POINTS/strips/fans/polygons, glPolygonMode other than GL_FILL.
-// Rendering goes to the top screen at 400x240, the bottom screen is left alone (e.g. for consoleInit()).
+//
+// Screens: rendering goes to the top screen (400x240) by default. c3dglSetScreen() switches to the
+// bottom screen (320x240) and back, also within a frame; both are presented by c3dglSwapBuffers().
+// The bottom screen is only touched once something is drawn on it, until then it can be used for
+// consoleInit(). Do not use the console on a screen that c3dgl renders to.
 #ifndef C3DGL_H
 #define C3DGL_H
 
 #include <stdbool.h>
 
-#define C3DGL_SCREEN_WIDTH      400     // Top screen, landscape
-#define C3DGL_SCREEN_HEIGHT     240
+#define C3DGL_TOP_SCREEN_WIDTH      400     // Landscape
+#define C3DGL_BOTTOM_SCREEN_WIDTH   320
+#define C3DGL_SCREEN_HEIGHT         240     // Both screens
+
+typedef enum {
+    C3DGL_SCREEN_TOP = 0,
+    C3DGL_SCREEN_BOTTOM,
+} C3DGLscreen;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Initialize citro3d and the top screen render target.
+// Initialize citro3d and the render targets of both screens; the top screen is current.
 // Requires gfxInit*() to be done. Call before any gl* function.
 bool c3dglInit(void);
 void c3dglClose(void);
 
-// Submit everything drawn since the last call and present it on the top screen.
+// Select the screen that following gl* calls draw on and glClear clears (like binding a framebuffer).
+// All other GL state is shared, except that viewport and scissor box are reset to the full screen.
+void c3dglSetScreen(C3DGLscreen screen);
+C3DGLscreen c3dglGetScreen(void);
+int c3dglGetScreenWidth(C3DGLscreen screen);   // 400 or 320; the height is always C3DGL_SCREEN_HEIGHT
+
+// Submit everything drawn since the last call and present it on the screens drawn on in this frame.
 // The next frame starts lazily with the next gl* call that draws or clears;
 // that is also where citro3d waits for VBlank (C3D_FRAME_SYNCDRAW).
 void c3dglSwapBuffers(void);
