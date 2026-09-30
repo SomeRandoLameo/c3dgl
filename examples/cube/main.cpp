@@ -3,12 +3,16 @@
 // result is printed on the bottom screen:
 //   - textured cube with depth test + back-face culling, drawn into the right half viewport
 //   - NPOT texture (12x12, padded to 16x16 internally)
+//   - second cube in the top left with a 256x256 PNG from romfs (loaded with libpng), linear filtering
 //   - scissor box in GL coordinates (bottom-left origin) and GL_LINES outline around it
 #include <3ds.h>
 #include <GL/gl.h>
 #include <c3dgl.h>
 
+#include <png.h>
+
 #include <cstdio>
+#include <vector>
 
 namespace {
 
@@ -29,6 +33,8 @@ constexpr Face CUBE[] = {
 };
 
 constexpr float UVS[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+
+constexpr const char* IMAGE_PATH = "romfs:/tonk.png";
 
 GLuint createCheckerTexture() {
     GLubyte pixels[TEX_SIZE][TEX_SIZE][4];
@@ -53,10 +59,39 @@ GLuint createCheckerTexture() {
     return id;
 }
 
-void drawCube(GLuint texture, float angle) {
-    // Right half of the screen
-    const int x = C3DGL_TOP_SCREEN_WIDTH / 2, w = C3DGL_TOP_SCREEN_WIDTH / 2, h = C3DGL_SCREEN_HEIGHT;
-    glViewport(x, 0, w, h);
+// PNG as RGBA8 texture, 0 on failure. Rows are stored top to bottom, so v = 0 is the top of the image
+GLuint loadPngTexture(const char* path) {
+    png_image image = {};
+    image.version = PNG_IMAGE_VERSION;
+    if (!png_image_begin_read_from_file(&image, path)) {
+        std::printf("%s: %s\n", path, image.message);
+        return 0;
+    }
+
+    image.format = PNG_FORMAT_RGBA;
+    std::vector<GLubyte> pixels(PNG_IMAGE_SIZE(image));
+    if (!png_image_finish_read(&image, nullptr, pixels.data(), 0, nullptr)) {
+        std::printf("%s: %s\n", path, image.message);
+        png_image_free(&image);
+        return 0;
+    }
+
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image.width, image.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return id;
+}
+
+// Cube with the texture on every face, in the given viewport. Face colors tint the texture,
+// white leaves it unchanged
+void drawCube(GLuint texture, float angle, int x, int y, int w, int h, bool tinted) {
+    glViewport(x, y, w, h);
 
     const float aspect = static_cast<float>(w) / h;
     glMatrixMode(GL_PROJECTION);
@@ -79,9 +114,11 @@ void drawCube(GLuint texture, float angle) {
     glBindTexture(GL_TEXTURE_2D, texture);
     glBegin(GL_QUADS);
     for (const Face& face : CUBE) {
-        glColor4ub(face.color[0], face.color[1], face.color[2], 255);
+        if (tinted) glColor4ub(face.color[0], face.color[1], face.color[2], 255);
+        else glColor4ub(255, 255, 255, 255);
         for (int i = 0; i < 4; i++) {
-            glTexCoord2f(UVS[i][0], UVS[i][1]);
+            // Vertices go counter-clockwise from the bottom left, the image's v = 0 is its top row
+            glTexCoord2f(UVS[i][0], tinted ? UVS[i][1] : 1.0f - UVS[i][1]);
             glVertex3f(face.vertices[i][0], face.vertices[i][1], face.vertices[i][2]);
         }
     }
@@ -131,6 +168,7 @@ void drawOverlay() {
 } // namespace
 
 int main() {
+    romfsInit();
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, nullptr);
 
@@ -151,10 +189,13 @@ int main() {
                 "  (no see-through faces), 6x6\n"
                 "  checker per face, no dark band\n"
                 "- yellow box BOTTOM LEFT, inside\n"
-                "  a white outline with 2px gap\n\n"
+                "  a white outline with 2px gap\n"
+                "- cube TOP LEFT with the tonk\n"
+                "  image upright on the side faces\n\n"
                 "START: exit\n");
 
     const GLuint texture = createCheckerTexture();
+    const GLuint image = loadPngTexture(IMAGE_PATH);
     glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
 
     float angle = 0.0f;
@@ -163,15 +204,20 @@ int main() {
         if (hidKeysDown() & KEY_START) break;
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        drawCube(texture, angle);
+        // Checker cube in the right half, image cube in the top left quarter (GL viewport: y up)
+        const int halfW = C3DGL_TOP_SCREEN_WIDTH / 2, h = C3DGL_SCREEN_HEIGHT;
+        drawCube(texture, angle, halfW, 0, halfW, h, true);
+        drawCube(image, -angle, 0, h / 2, halfW, h / 2, false);
         drawOverlay();
         c3dglSwapBuffers();
 
         angle += 1.0f;
     }
 
+    glDeleteTextures(1, &image);
     glDeleteTextures(1, &texture);
     c3dglClose();
     gfxExit();
+    romfsExit();
     return 0;
 }

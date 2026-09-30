@@ -74,6 +74,9 @@ cmake -S . -B build          # picks up $DEVKITPRO/cmake/3DS.cmake
 cmake --build build          # -> build/examples/cube/c3dgl_cube.3dsx
 ```
 
+The example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
+c3dgl itself does not.
+
 Run the `.3dsx` in an emulator or send it to a 3DS with `3dslink`. The bottom screen describes the
 expected picture. Examples are built by default only when c3dgl is the top-level project
 (`-DC3DGL_BUILD_EXAMPLES=ON/OFF`).
