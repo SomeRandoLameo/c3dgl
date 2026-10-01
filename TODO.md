@@ -188,6 +188,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] Top and bottom screen, `c3dglSetScreen`, `c3dglSwapBuffers`
 * [ ] Stereoscopic 3D (right eye, 3D slider)
 * [ ] Real hardware verification (everything so far is verified in Azahar only)
+  * [x] Fixed: GPU lockup on the first draw (since bf91bd4): the vertex shader left `outtc0.w` unwritten
 
 ## Known Bugs / Limits
 

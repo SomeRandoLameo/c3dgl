@@ -56,6 +56,7 @@
 	dp4 outtc0.x, texmat0[0], r2
 	dp4 outtc0.y, texmat0[1], r2
 	dp4 outtc0.z, texmat0[2], r2
+	mov outtc0.w, one           ; Unused, but real hardware hangs on output registers that are not fully written
 
 	; Unit 1
 	mov r2.xy, intc1.xy
