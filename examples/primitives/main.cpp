@@ -1,7 +1,8 @@
 // c3dgl example: primitives and rasterization, one cell each on the top screen (4x2 grid, 100x120 px per cell).
 // Page 1: every primitive mode. Face culling (GL_BACK, CCW front) is on for all filled shapes, so a strip, fan or
 // quad strip that is assembled with the wrong winding shows up as missing triangles.
-// Page 2: flat shading, polygon modes, edge flags, polygon offset, depth range. A switches pages.
+// Page 2: flat shading, polygon modes, edge flags, polygon offset, depth range.
+// Page 3: evaluators (glMap1/2, glEvalMesh, glEvalCoord). A switches pages.
 // The expected result is printed on the bottom screen.
 #include <3ds.h>
 #include <GL/gl.h>
@@ -285,9 +286,172 @@ void drawDepthRange() {
     glDisable(GL_DEPTH_TEST);
 }
 
+// Page 3 ------------------------------------------------------------------------------------------------
+
+// Cubic Bezier through 4 control points, drawn with glEvalMesh1 as a line; gray control polygon
+const GLfloat curvePoints[4][3] = {{-0.8f, -0.8f, 0}, {-0.6f, 0.9f, 0}, {0.6f, -0.9f, 0}, {0.8f, 0.8f, 0}};
+
+void drawControlPolygon() {
+    glColor3f(0.5f, 0.5f, 0.5f);
+    glBegin(GL_LINE_STRIP);
+    for (const auto& p : curvePoints) glVertex3fv(p);
+    glEnd();
+}
+
+void drawEvalCurve() {
+    drawControlPolygon();
+    glMap1f(GL_MAP1_VERTEX_3, 0.0f, 1.0f, 3, 4, &curvePoints[0][0]);
+    glEnable(GL_MAP1_VERTEX_3);
+    glMapGrid1f(30, 0.0f, 1.0f);
+    glColor3f(1.0f, 0.9f, 0.2f);
+    glLineWidth(2.0f);
+    glEvalMesh1(GL_LINE, 0, 30);
+    glLineWidth(1.0f);
+    glDisable(GL_MAP1_VERTEX_3);
+}
+
+// Same curve, colors from a MAP1_COLOR_4 (red -> blue), points sent with glEvalCoord1f over a different domain
+void drawEvalColorCurve() {
+    drawControlPolygon();
+    static const GLfloat colors[2][4] = {{1, 0.2f, 0.2f, 1}, {0.3f, 0.5f, 1, 1}};
+    glMap1f(GL_MAP1_VERTEX_3, 2.0f, 4.0f, 3, 4, &curvePoints[0][0]);
+    glMap1f(GL_MAP1_COLOR_4, 2.0f, 4.0f, 4, 2, &colors[0][0]);
+    glEnable(GL_MAP1_VERTEX_3);
+    glEnable(GL_MAP1_COLOR_4);
+    glLineWidth(3.0f);
+    glBegin(GL_LINE_STRIP);
+    for (int i = 0; i <= 30; i++) glEvalCoord1f(2.0f + 2.0f * i / 30);
+    glEnd();
+    glLineWidth(1.0f);
+    glDisable(GL_MAP1_COLOR_4);
+    glDisable(GL_MAP1_VERTEX_3);
+}
+
+// glEvalMesh1 GL_POINT: 11 points along the curve
+void drawEvalPoints() {
+    drawControlPolygon();
+    glMap1f(GL_MAP1_VERTEX_3, 0.0f, 1.0f, 3, 4, &curvePoints[0][0]);
+    glEnable(GL_MAP1_VERTEX_3);
+    glMapGrid1f(10, 0.0f, 1.0f);
+    glColor3f(1, 1, 1);
+    glPointSize(5.0f);
+    glEvalMesh1(GL_POINT, 0, 10);
+    glPointSize(1.0f);
+    glDisable(GL_MAP1_VERTEX_3);
+}
+
+// Rational quadratic (MAP1_VERTEX_4) = exact quarter circle of radius 0.8; gray reference points on the circle
+void drawEvalRational() {
+    glColor3f(0.5f, 0.5f, 0.5f);
+    glPointSize(3.0f);
+    glBegin(GL_POINTS);
+    for (int i = 0; i <= 12; i++) {
+        const float a = 3.14159265f / 2 * i / 12;
+        glVertex2f(-0.4f + 0.8f * std::cos(a), -0.4f + 0.8f * std::sin(a));
+    }
+    glEnd();
+    glPointSize(1.0f);
+
+    const float w = 0.70710678f;
+    const GLfloat points[3][4] = {{0.4f, -0.4f, 0, 1}, {0.4f * w, 0.4f * w, 0, w}, {-0.4f, 0.4f, 0, 1}};
+    glMap1f(GL_MAP1_VERTEX_4, 0.0f, 1.0f, 4, 3, &points[0][0]);
+    glEnable(GL_MAP1_VERTEX_4);
+    glMapGrid1f(24, 0.0f, 1.0f);
+    glColor3f(0.3f, 1.0f, 0.3f);
+    glEvalMesh1(GL_LINE, 0, 24);
+    glDisable(GL_MAP1_VERTEX_4);
+}
+
+// Bicubic patch with a bump; corner colors from a bilinear MAP2_COLOR_4, texcoords from MAP2_TEXTURE_COORD_2
+void setupPatch() {
+    static GLfloat patch[4][4][3];
+    for (int u = 0; u < 4; u++)
+        for (int v = 0; v < 4; v++) {
+            patch[u][v][0] = -0.8f + 0.533f * u;
+            patch[u][v][1] = -0.8f + 0.533f * v;
+            patch[u][v][2] = ((u == 1 || u == 2) && (v == 1 || v == 2)) ? 0.8f : 0.0f;
+        }
+    static const GLfloat colors[2][2][4] = {{{1, 0.2f, 0.2f, 1}, {0.2f, 1, 0.2f, 1}}, {{0.2f, 0.4f, 1, 1}, {1, 1, 0.2f, 1}}};
+    static const GLfloat texcoords[2][2][2] = {{{0, 0}, {0, 1}}, {{1, 0}, {1, 1}}};
+    glMap2f(GL_MAP2_VERTEX_3, 0, 1, 12, 4, 0, 1, 3, 4, &patch[0][0][0]);
+    glMap2f(GL_MAP2_COLOR_4, 0, 1, 8, 2, 0, 1, 4, 2, &colors[0][0][0]);
+    glMap2f(GL_MAP2_TEXTURE_COORD_2, 0, 1, 4, 2, 0, 1, 2, 2, &texcoords[0][0][0]);
+    glMapGrid2f(12, 0.0f, 1.0f, 12, 0.0f, 1.0f);
+}
+
+// Patch seen from above at an angle
+void beginPatchCell(int column, int row) {
+    beginCell(column, row);
+    glRotatef(-50.0f, 1.0f, 0.0f, 0.0f);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_MAP2_VERTEX_3);
+}
+
+void endPatchCell() {
+    glDisable(GL_MAP2_VERTEX_3);
+    glDisable(GL_MAP2_COLOR_4);
+    glDisable(GL_MAP2_TEXTURE_COORD_2);
+    glDisable(GL_DEPTH_TEST);
+}
+
+void drawEvalSurfaces(GLuint checker) {
+    setupPatch();
+
+    beginPatchCell(0, 1);                   // Filled, colored corners
+    glEnable(GL_MAP2_COLOR_4);
+    glEvalMesh2(GL_FILL, 0, 12, 0, 12);
+    endPatchCell();
+
+    beginPatchCell(1, 1);                   // Wireframe
+    glColor3f(0.5f, 0.8f, 1.0f);
+    glEvalMesh2(GL_LINE, 0, 12, 0, 12);
+    endPatchCell();
+
+    beginPatchCell(2, 1);                   // Textured
+    glEnable(GL_MAP2_TEXTURE_COORD_2);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, checker);
+    glColor3f(1, 1, 1);
+    glEvalMesh2(GL_FILL, 0, 12, 0, 12);
+    glDisable(GL_TEXTURE_2D);
+    endPatchCell();
+
+    beginPatchCell(3, 1);                   // Points of a coarser grid, with glEvalPoint2 for the corners in red
+    glMapGrid2f(6, 0.0f, 1.0f, 6, 0.0f, 1.0f);
+    glColor3f(1, 1, 1);
+    glPointSize(3.0f);
+    glEvalMesh2(GL_POINT, 0, 6, 0, 6);
+    glColor3f(1, 0.2f, 0.2f);
+    glPointSize(6.0f);
+    glBegin(GL_POINTS);
+    glEvalPoint2(0, 0); glEvalPoint2(6, 0); glEvalPoint2(0, 6); glEvalPoint2(6, 6);
+    glEnd();
+    glPointSize(1.0f);
+    endPatchCell();
+}
+
+GLuint createChecker() {
+    GLubyte pixels[8][8][3];
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++) {
+            const bool light = (x / 2 + y / 2) % 2 == 0;
+            pixels[y][x][0] = light ? 255 : 40;
+            pixels[y][x][1] = light ? 220 : 60;
+            pixels[y][x][2] = light ? 120 : 160;
+        }
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 8, 8, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    return id;
+}
+
 void printPage(int page) {
     consoleClear();
-    std::printf("c3dgl primitives test, page %i/2\n\n", page + 1);
+    std::printf("c3dgl primitives test, page %i/3\n\n", page + 1);
     if (page == 0) {
         std::printf("Expected on the top screen,\n"
                     "left to right, top row:\n"
@@ -305,6 +469,21 @@ void printPage(int page) {
                     "  closed white outline\n\n"
                     "Any hole in a filled shape means\n"
                     "wrong winding (culling is on).\n");
+    } else if (page == 2) {
+        std::printf("Evaluators. Expected,\n"
+                    "left to right, top row:\n"
+                    "- yellow Bezier curve, gray\n"
+                    "  control polygon\n"
+                    "- same curve, red -> blue\n"
+                    "- 11 white points on the curve\n"
+                    "- rational quarter circle (green)\n"
+                    "  through the gray points\n"
+                    "bottom row (patch with a bump):\n"
+                    "- filled, red/green/blue/yellow\n"
+                    "  corners\n"
+                    "- light blue wireframe\n"
+                    "- checker textured\n"
+                    "- 7x7 points, red corners\n");
     } else {
         std::printf("Expected on the top screen,\n"
                     "left to right, top row:\n"
@@ -347,6 +526,7 @@ int main() {
 
     glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
 
+    const GLuint checker = createChecker();
     int page = 0;
     printPage(page);
 
@@ -355,7 +535,7 @@ int main() {
         const u32 keys = hidKeysDown();
         if (keys & KEY_START) break;
         if (keys & KEY_A) {
-            page = 1 - page;
+            page = (page + 1) % 3;
             printPage(page);
         }
 
@@ -376,6 +556,12 @@ int main() {
             beginCell(3, 1); drawElements();
 
             glDisable(GL_CULL_FACE);
+        } else if (page == 2) {
+            beginCell(0, 0); drawEvalCurve();
+            beginCell(1, 0); drawEvalColorCurve();
+            beginCell(2, 0); drawEvalPoints();
+            beginCell(3, 0); drawEvalRational();
+            drawEvalSurfaces(checker);
         } else {
             beginCell(0, 0); drawFlatFan();
             beginCell(1, 0); drawFlatPolygon();

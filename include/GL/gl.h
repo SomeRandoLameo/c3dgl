@@ -450,6 +450,14 @@ typedef void            GLvoid;
 #define GL_MAP2_TEXTURE_COORD_4             0x0DB6
 #define GL_MAP2_VERTEX_3                    0x0DB7
 #define GL_MAP2_VERTEX_4                    0x0DB8
+#define GL_MAP1_GRID_DOMAIN                 0x0DD0
+#define GL_MAP1_GRID_SEGMENTS               0x0DD1
+#define GL_MAP2_GRID_DOMAIN                 0x0DD2
+#define GL_MAP2_GRID_SEGMENTS               0x0DD3
+#define GL_MAX_EVAL_ORDER                   0x0D30
+#define GL_COEFF                            0x0A00
+#define GL_ORDER                            0x0A01
+#define GL_DOMAIN                           0x0A02
 
 // Texture parameters
 #define GL_TEXTURE_MAG_FILTER               0x2800
@@ -732,21 +740,36 @@ void glPopAttrib(void);
 void glPushClientAttrib(GLbitfield mask);
 void glPopClientAttrib(void);
 
-// Not implemented yet: these log a warning and set GL_INVALID_OPERATION
-void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border,
-                  GLenum format, GLenum type, const GLvoid *pixels);
+// Evaluators (GL): order up to 30; evaluated normals are computed but not used yet (no lighting)
 void glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat *points);
+void glMap1d(GLenum target, GLdouble u1, GLdouble u2, GLint stride, GLint order, const GLdouble *points);
 void glMap2f(GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLint uorder,
              GLfloat v1, GLfloat v2, GLint vstride, GLint vorder, const GLfloat *points);
+void glMap2d(GLenum target, GLdouble u1, GLdouble u2, GLint ustride, GLint uorder,
+             GLdouble v1, GLdouble v2, GLint vstride, GLint vorder, const GLdouble *points);
 void glMapGrid1f(GLint un, GLfloat u1, GLfloat u2);
+void glMapGrid1d(GLint un, GLdouble u1, GLdouble u2);
 void glMapGrid2f(GLint un, GLfloat u1, GLfloat u2, GLint vn, GLfloat v1, GLfloat v2);
 void glMapGrid2d(GLint un, GLdouble u1, GLdouble u2, GLint vn, GLdouble v1, GLdouble v2);
 void glEvalCoord1f(GLfloat u);
+void glEvalCoord1d(GLdouble u);
+void glEvalCoord1fv(const GLfloat *u);
+void glEvalCoord1dv(const GLdouble *u);
 void glEvalCoord2f(GLfloat u, GLfloat v);
+void glEvalCoord2d(GLdouble u, GLdouble v);
+void glEvalCoord2fv(const GLfloat *u);
+void glEvalCoord2dv(const GLdouble *u);
 void glEvalMesh1(GLenum mode, GLint i1, GLint i2);
 void glEvalMesh2(GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2);
 void glEvalPoint1(GLint i);
 void glEvalPoint2(GLint i, GLint j);
+void glGetMapiv(GLenum target, GLenum query, GLint *v);
+void glGetMapfv(GLenum target, GLenum query, GLfloat *v);
+void glGetMapdv(GLenum target, GLenum query, GLdouble *v);
+
+// Not implemented yet: these log a warning and set GL_INVALID_OPERATION
+void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border,
+                  GLenum format, GLenum type, const GLvoid *pixels);
 
 // GL 1.2, only so that GLU links: always fails with GL_INVALID_ENUM (no 3D textures)
 void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth,

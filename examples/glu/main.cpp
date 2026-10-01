@@ -1,6 +1,7 @@
 // c3dgl example: GLU (Mesa GLU, c3dgl::glu), one cell each on the top screen (4x2 grid, 100x120 px per cell),
 // numeric self-checks on the bottom screen. The expected result is printed there as well.
-// Page 1: matrices, images, quadrics. Page 2: tessellator and NURBS (tessellator mode). A switches pages.
+// Page 1: matrices, images, quadrics. Page 2: tessellator and NURBS (tessellator mode).
+// Page 3: NURBS rendered through GL evaluators (GLU_NURBS_RENDERER). A switches pages.
 #include <3ds.h>
 #include <GL/gl.h>
 #include <GL/glu.h>
@@ -10,6 +11,12 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+
+// GLU's NURBS code keeps large arrays on the stack and recurses: libctru's default 32 KB main thread stack is
+// too small for NURBS rendering (stack overflow in Patch::Patch). Any app using GLU NURBS needs this
+extern "C" {
+u32 __stacksize__ = 256 * 1024;
+}
 
 namespace {
 
@@ -304,9 +311,135 @@ void drawNurbs(GLUnurbs* nurbs, float angle) {
     glDisable(GL_DEPTH_TEST);
 }
 
+// Page 3 ------------------------------------------------------------------------------------------------
+
+GLUnurbs* newRenderer(GLfloat displayMode) {
+    GLUnurbs* nurbs = gluNewNurbsRenderer();
+    gluNurbsProperty(nurbs, GLU_SAMPLING_METHOD, GLU_DOMAIN_DISTANCE);
+    gluNurbsProperty(nurbs, GLU_U_STEP, 10);
+    gluNurbsProperty(nurbs, GLU_V_STEP, 10);
+    gluNurbsProperty(nurbs, GLU_DISPLAY_MODE, displayMode);
+    gluNurbsCallback(nurbs, GLU_NURBS_ERROR, reinterpret_cast<_GLUfuncptr>(nurbsError));
+    return nurbs;
+}
+
+struct Renderers {
+    GLUnurbs *fill, *outlinePolygon, *outlinePatch;
+};
+
+// Bicubic Bezier patch with a bump, 4x4 control points
+GLfloat bumpPatch[4][4][3];
+GLfloat patchKnots[8] = {0, 0, 0, 0, 1, 1, 1, 1};
+
+void initBumpPatch() {
+    for (int u = 0; u < 4; u++)
+        for (int v = 0; v < 4; v++) {
+            bumpPatch[u][v][0] = -0.9f + 0.6f * u;
+            bumpPatch[u][v][1] = -0.9f + 0.6f * v;
+            bumpPatch[u][v][2] = ((u == 1 || u == 2) && (v == 1 || v == 2)) ? 1.2f : 0.0f;
+        }
+}
+
+void beginNurbsCell(int column, int row, float angle) {
+    beginCell(column, row, 1.5);
+    glRotatef(angle, 0, 1, 0);
+    glRotatef(-90, 1, 0, 0);
+    glEnable(GL_DEPTH_TEST);
+}
+
+void patchSurface(GLUnurbs* nurbs) {
+    gluNurbsSurface(nurbs, 8, patchKnots, 8, patchKnots, 4 * 3, 3, &bumpPatch[0][0][0], 4, 4, GL_MAP2_VERTEX_3);
+}
+
+void drawNurbsRendererPage(const Renderers& r, float angle, GLuint checker) {
+    // 1: cubic B-spline curve (same as page 2, now through glMap1/glEvalMesh1)
+    static GLfloat curve[6][3] = {{-0.9f, -0.8f, 0}, {-0.6f, 0.8f, 0}, {-0.1f, -0.9f, 0},
+                                  {0.2f, 0.9f, 0}, {0.6f, -0.6f, 0}, {0.9f, 0.7f, 0}};
+    static GLfloat curveKnots[10] = {0, 0, 0, 0, 1, 2, 3, 3, 3, 3};
+    beginFlatCell(0, 0);
+    glColor3f(0.5f, 0.5f, 0.5f);
+    glBegin(GL_LINE_STRIP);
+    for (const auto& p : curve) glVertex3fv(p);
+    glEnd();
+    glColor3f(1.0f, 0.4f, 0.8f);
+    glLineWidth(2.0f);
+    gluBeginCurve(r.fill);
+    gluNurbsCurve(r.fill, 10, curveKnots, 3, &curve[0][0], 4, GL_MAP1_VERTEX_3);
+    gluEndCurve(r.fill);
+    glLineWidth(1.0f);
+
+    // 2-4: the bump patch filled, as tessellation outline, as patch outline
+    GLUnurbs* modes[3] = {r.fill, r.outlinePolygon, r.outlinePatch};
+    for (int i = 0; i < 3; i++) {
+        beginNurbsCell(1 + i, 0, angle);
+        glColor3f(0.5f, 0.8f, 1.0f);
+        gluBeginSurface(modes[i]);
+        patchSurface(modes[i]);
+        gluEndSurface(modes[i]);
+        glDisable(GL_DEPTH_TEST);
+    }
+
+    // 5: trimmed by a square hole (piecewise linear trim: outer boundary counter-clockwise, hole clockwise)
+    static GLfloat outer[5][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}, {0, 0}};
+    static GLfloat square[5][2] = {{0.3f, 0.3f}, {0.3f, 0.7f}, {0.7f, 0.7f}, {0.7f, 0.3f}, {0.3f, 0.3f}};
+    beginNurbsCell(0, 1, angle);
+    glColor3f(1.0f, 0.6f, 0.2f);
+    gluBeginSurface(r.fill);
+    patchSurface(r.fill);
+    gluBeginTrim(r.fill); gluPwlCurve(r.fill, 5, &outer[0][0], 2, GLU_MAP1_TRIM_2); gluEndTrim(r.fill);
+    gluBeginTrim(r.fill); gluPwlCurve(r.fill, 5, &square[0][0], 2, GLU_MAP1_TRIM_2); gluEndTrim(r.fill);
+    gluEndSurface(r.fill);
+    glDisable(GL_DEPTH_TEST);
+
+    // 6: trimmed by a round hole: a rational quadratic NURBS circle of radius 0.25 (clockwise)
+    static GLfloat circle[9][3];
+    static GLfloat circleKnots[12] = {0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4};
+    {
+        const float w = 0.70710678f;
+        static const float corner[9][2] = {{1, 0}, {1, -1}, {0, -1}, {-1, -1}, {-1, 0}, {-1, 1}, {0, 1}, {1, 1}, {1, 0}};
+        for (int i = 0; i < 9; i++) {
+            const float wi = (i % 2) ? w : 1.0f;
+            circle[i][0] = (0.5f + 0.25f * corner[i][0]) * wi;
+            circle[i][1] = (0.5f + 0.25f * corner[i][1]) * wi;
+            circle[i][2] = wi;
+        }
+    }
+    beginNurbsCell(1, 1, angle);
+    glColor3f(0.3f, 0.9f, 0.4f);
+    gluBeginSurface(r.fill);
+    patchSurface(r.fill);
+    gluBeginTrim(r.fill); gluPwlCurve(r.fill, 5, &outer[0][0], 2, GLU_MAP1_TRIM_2); gluEndTrim(r.fill);
+    gluBeginTrim(r.fill); gluNurbsCurve(r.fill, 12, circleKnots, 3, &circle[0][0], 3, GLU_MAP1_TRIM_3); gluEndTrim(r.fill);
+    gluEndSurface(r.fill);
+    glDisable(GL_DEPTH_TEST);
+
+    // 7: texture coordinates from a second NURBS surface (GL_MAP2_TEXTURE_COORD_2): checkered patch
+    static GLfloat texPoints[2][2][2] = {{{0, 0}, {0, 2}}, {{2, 0}, {2, 2}}};
+    static GLfloat linearKnots[4] = {0, 0, 1, 1};
+    beginNurbsCell(2, 1, angle);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, checker);
+    glColor3f(1, 1, 1);
+    gluBeginSurface(r.fill);
+    patchSurface(r.fill);
+    gluNurbsSurface(r.fill, 4, linearKnots, 4, linearKnots, 2 * 2, 2, &texPoints[0][0][0], 2, 2, GL_MAP2_TEXTURE_COORD_2);
+    gluEndSurface(r.fill);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_DEPTH_TEST);
+
+    // 8: colors from a GL_MAP2_COLOR_4 surface: red, green, blue, yellow corners
+    static GLfloat colorPoints[2][2][4] = {{{1, 0.2f, 0.2f, 1}, {0.2f, 1, 0.2f, 1}}, {{0.2f, 0.4f, 1, 1}, {1, 1, 0.2f, 1}}};
+    beginNurbsCell(3, 1, angle);
+    gluBeginSurface(r.fill);
+    patchSurface(r.fill);
+    gluNurbsSurface(r.fill, 4, linearKnots, 4, linearKnots, 2 * 4, 4, &colorPoints[0][0][0], 2, 2, GL_MAP2_COLOR_4);
+    gluEndSurface(r.fill);
+    glDisable(GL_DEPTH_TEST);
+}
+
 void printPage(int page) {
     consoleClear();
-    std::printf("c3dgl glu test, page %i/2\n%i/%i checks passed\n\n", page + 1, checks - failures, checks);
+    std::printf("c3dgl glu test, page %i/3\n%i/%i checks passed\n\n", page + 1, checks - failures, checks);
     if (page == 0) {
         std::printf("Expected on the top screen,\n"
                     "left to right, top row:\n"
@@ -323,6 +456,20 @@ void printPage(int page) {
                     "- outline of a 3/4 ring\n"
                     "- crosshair stays on the moving\n"
                     "  ball (gluProject)\n");
+    } else if (page == 2) {
+        std::printf("NURBS through GL evaluators.\n"
+                    "Expected, top row:\n"
+                    "- pink curve along its gray\n"
+                    "  control polygon\n"
+                    "- bump patch: filled, its\n"
+                    "  triangles, its outline\n"
+                    "  (all turning)\n"
+                    "bottom row (bump patch):\n"
+                    "- orange, square hole\n"
+                    "- green, round hole\n"
+                    "- checkered (texcoord surface)\n"
+                    "- red/green/blue/yellow corners\n"
+                    "  (color surface)\n");
     } else {
         std::printf("Expected on the top screen,\n"
                     "left to right, top row (tess):\n"
@@ -363,7 +510,9 @@ int main() {
     GLUquadric* quad = gluNewQuadric();
     GLUtesselator* tess = newTess();
     GLUnurbs* nurbs = newNurbs();
-    int page = 0;
+    initBumpPatch();
+    const Renderers renderers = {newRenderer(GLU_FILL), newRenderer(GLU_OUTLINE_POLYGON), newRenderer(GLU_OUTLINE_PATCH)};
+    int page = 2;
     printPage(page);
 
     glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
@@ -374,11 +523,17 @@ int main() {
         const u32 keys = hidKeysDown();
         if (keys & KEY_START) break;
         if (keys & KEY_A) {
-            page = 1 - page;
+            page = (page + 1) % 3;
             printPage(page);
         }
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        if (page == 2) {
+            drawNurbsRendererPage(renderers, angle, checker);
+            c3dglSwapBuffers();
+            angle += 1.0f;
+            continue;
+        }
         if (page == 1) {
             drawTessellation(tess);
             drawNurbs(nurbs, angle);
