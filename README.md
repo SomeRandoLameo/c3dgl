@@ -87,6 +87,7 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
   edge flags, polygon offset, depth range
 - `api` (C): self-check of queries, errors and entry point variants; green screen = all checks passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
+- `texture`: texture features; page 1: texture matrix
 - `fragment`: per-fragment operations (alpha test, texture environment, stencil, `glClear`); A switches pages
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
@@ -106,7 +107,8 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 
 - `glBegin`/`glEnd` and client arrays (`glDrawArrays`, `glDrawElements`) with every primitive: points, lines,
   line strips/loops, triangles, triangle strips/fans, quads, quad strips and convex polygons
-- Modelview/projection matrix stacks, `glOrtho`, `glFrustum`, `glTranslatef`, `glRotatef`, `glScalef`, `glMultMatrixf`
+- Modelview/projection/texture matrix stacks (projective texture matrices included), `glOrtho`, `glFrustum`,
+  `glTranslatef`, `glRotatef`, `glScalef`, `glMultMatrixf`
 - Textures of any size up to 1024x1024: RGBA8, RGB8, luminance/alpha, luminance, alpha, RGB565, RGBA5551, RGBA4;
   `glTexSubImage2D`, `glGetTexImage`, nearest/linear filtering, repeat/clamp/mirror wrapping
 - Texture environment (`glTexEnv`): `GL_MODULATE`, `GL_REPLACE`, `GL_DECAL`, `GL_BLEND`, `GL_ADD`, `GL_TEXTURE_ENV_COLOR`

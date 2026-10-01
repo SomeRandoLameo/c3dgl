@@ -12,7 +12,8 @@
 //     (provoking vertex color), glPolygonMode (outlines/vertices of each polygon, culled on the CPU) and the
 //     slope part of glPolygonOffset (per-vertex depth bias that the vertex shader adds).
 //   - Lines and points have no PICA equivalent: they are transformed on the CPU and expanded to quads in NDC.
-//   - Textures are padded to power-of-two sizes and Morton-swizzled; the shader scales UVs back.
+//   - Textures are padded to power-of-two sizes and Morton-swizzled. The shader applies the texture matrix
+//     combined with the scale back from the padded size; a projective texture matrix uses PICA's projection mode.
 //   - One render target per screen, sharing the vertex buffer and GL state; c3dglSetScreen() flushes the
 //     batch and switches the target (C3D_FrameDrawOn), citro3d presents every target drawn on in the frame.
 //
@@ -106,6 +107,7 @@ typedef struct {
     u32 texEnvColor;            // GL_TEXTURE_ENV_COLOR, 0xAABBGGRR like the PICA
     bool clipSpace;             // Vertices are already in NDC (expanded lines and points)
     u32 matrixSerial;           // Matrix version (0 for clipSpace)
+    u32 texMatrixSerial;        // Texture matrix version (0 when untextured)
     bool blend;
     GLenum blendSrc, blendDst;
     bool depthTest, depthMask;
@@ -145,7 +147,7 @@ static struct {
     C3DGLscreen screen;                 // Screen drawn on, see c3dglSetScreen()
     DVLB_s *dvlb;
     shaderProgram_s program;
-    int uLocMvp, uLocTexScale;
+    int uLocMvp, uLocTexMat;
     Mat4 post;                          // OpenGL clip space -> PICA clip space (rotation, depth range)
 
     // Frame and vertex batching
@@ -178,6 +180,7 @@ static struct {
     Mat4 stack[3][C3DGL_MATRIX_STACK];
     int stackDepth[3];
     u32 matrixSerial;                   // Incremented on every modelview/projection change
+    u32 texMatrixSerial;                // Incremented on every texture matrix change
     Mat4 pmv;                           // projection * modelview, cached for pmvSerial
     u32 pmvSerial;
 
@@ -274,6 +277,7 @@ static Mat4 *currentMatrix(void)
 static void matrixChanged(void)
 {
     if (gl.matrixMode != 2) gl.matrixSerial++;
+    else gl.texMatrixSerial++;
 }
 
 static void multCurrent(const Mat4 *m)
@@ -601,9 +605,21 @@ static void applyState(const DrawState *s)
     if (s->texture != 0)
     {
         Texture *t = &gl.textures[s->texture];
+
+        // Texture matrix rows s, t, q; s and t scaled from the image to the padded texture size
+        const Mat4 *tm = &gl.stack[2][gl.stackDepth[2]];
+        float scale[2] = { (float)t->width/t->tex.width, (float)t->height/t->tex.height };
+        for (int row = 0; row < 2; row++)
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat + row, tm->m[row]*scale[row], tm->m[4 + row]*scale[row],
+                          tm->m[8 + row]*scale[row], tm->m[12 + row]*scale[row]);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat + 2, tm->m[3], tm->m[7], tm->m[11], tm->m[15]);
+
+        // q != 1: let PICA divide s and t by q (r is always 0, so m[11] does not matter)
+        bool projective = (tm->m[3] != 0.0f) || (tm->m[7] != 0.0f) || (tm->m[15] != 1.0f);
+        t->tex.param = (t->tex.param & ~GPU_TEXTURE_MODE(7)) | GPU_TEXTURE_MODE(projective? GPU_TEX_PROJECTION : GPU_TEX_2D);
+
         C3D_TexBind(0, &t->tex);
         setupTexEnv(env, s->texEnvMode, s->texEnvColor, t->format.format);
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexScale, (float)t->width/t->tex.width, (float)t->height/t->tex.height, 1.0f, 1.0f);
     }
     else
     {
@@ -645,7 +661,8 @@ static void prepareDraw(bool clipSpace)
     key.clipSpace = clipSpace;
     key.matrixSerial = clipSpace? 0 : gl.matrixSerial;
     key.texture = (gl.texture2D && textureValid(gl.boundTexture))? gl.boundTexture : 0;
-    if (key.texture == 0) { key.texEnvMode = 0; key.texEnvColor = 0; }     // Unused, don't split batches over it
+    key.texMatrixSerial = gl.texMatrixSerial;
+    if (key.texture == 0) { key.texEnvMode = 0; key.texEnvColor = 0; key.texMatrixSerial = 0; }    // Unused, don't split batches over it
     if (!key.stencilTest)
     {
         key.stencilFunc = key.stencilFail = key.stencilDepthFail = key.stencilPass = 0;
@@ -1046,7 +1063,7 @@ bool c3dglInit(void)
     shaderProgramSetVsh(&gl.program, &gl.dvlb->DVLE[0]);
     C3D_BindProgram(&gl.program);
     gl.uLocMvp = shaderInstanceGetUniformLocation(gl.program.vertexShader, "mvp");
-    gl.uLocTexScale = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texscale");
+    gl.uLocTexMat = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texmat");
 
     // Vertex layout: v0 = position (3 floats), v1 = texcoord (2 floats), v2 = color (4 ubytes), v3 = depth bias (float)
     C3D_AttrInfo *attrInfo = C3D_GetAttrInfo();
@@ -1098,7 +1115,7 @@ bool c3dglInit(void)
     memset(gl.current.color, 255, 4);
 
     for (int i = 0; i < 3; i++) mat4Identity(&gl.stack[i][0]);
-    gl.matrixSerial = 1;
+    gl.matrixSerial = gl.texMatrixSerial = 1;
 
     gl.ready = true;
     return true;

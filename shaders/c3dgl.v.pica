@@ -1,21 +1,24 @@
 ; c3dgl vertex shader (PICA200): the whole fixed-function vertex stage of c3dgl.c
 ;   position: mvp * (x, y, z, 1)   (mvp already contains screen rotation and PICA depth range)
 ;             z += bias * w        (polygon offset of filled polygons, in PICA NDC units)
-;   texcoord: uv * texscale.xy     (NPOT textures are padded to POT, see c3dgl.c)
+;   texcoord: texmat * (u, v, 0, 1) -> (s, t, q), q is divided out by projection mode when used
+;             (texmat = texture matrix with NPOT padding scale, see c3dgl.c)
 ;   color:    ubyte RGBA -> 0..1
 
 ; Uniforms
 .fvec mvp[4]
-.fvec texscale
+.fvec texmat[3]                 ; Rows s, t, q
 
 ; Constants
 .constf consts(1.0, 0.00392156862745, 0.0, 0.0)
 .alias  one       consts.xxxx
 .alias  inv255    consts.yyyy
+.alias  zero      consts.zzzz
 
 ; Outputs
 .out outpos position
-.out outtc0 texcoord0
+.out outtc0 texcoord0.st
+.out -      texcoord0w outtc0.p
 .out outclr color
 
 ; Inputs
@@ -39,7 +42,13 @@
 	add r1.z, r1.z, r2.x
 	mov outpos, r1
 
-	mul outtc0, texscale, intc
+	; r2 = (u, v, 0, 1)
+	mov r2.xy, intc
+	mov r2.z,  zero
+	mov r2.w,  one
+	dp4 outtc0.x, texmat[0], r2
+	dp4 outtc0.y, texmat[1], r2
+	dp4 outtc0.z, texmat[2], r2
 
 	mul outclr, inv255, inclr
 

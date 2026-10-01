@@ -17,7 +17,7 @@
 // Supported:
 //   - glBegin/glEnd and glDrawArrays/glDrawElements (client arrays) with all primitives
 //     (points, lines, line strips/loops, triangles, triangle strips/fans, quads, quad strips, convex polygons)
-//   - Matrix stacks (modelview, projection), glOrtho/glFrustum/glTranslate/glRotate/glScale/glMultMatrix
+//   - Matrix stacks (modelview, projection, texture), glOrtho/glFrustum/glTranslate/glRotate/glScale/glMultMatrix
 //   - Textures: RGBA8, RGB8, LA8, L8, A8, RGB565, RGBA5551, RGBA4; any size up to 1024x1024
 //   - Texture environment: GL_MODULATE, GL_REPLACE, GL_DECAL, GL_BLEND, GL_ADD
 //   - Blending, alpha test, stencil, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
