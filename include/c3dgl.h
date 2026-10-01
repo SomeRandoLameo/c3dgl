@@ -23,8 +23,9 @@
 //   - Blending, alpha test, stencil, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
 //   - glClear of color/depth/stencil honors scissor and write masks
 //   - glGetError, glGet*v, glIsEnabled; common glVertex/glColor/glTexCoord/glRect/matrix variants
+//   - GL_FLAT, glPolygonMode (with edge flags), glPolygonOffset, glDepthRange
 //
-// Not supported: lighting, fog, polygon offset, GL_FLAT, display lists, mipmaps, glReadPixels, glPolygonMode other than GL_FILL. Points are always square (no GL_POINT_SMOOTH).
+// Not supported: lighting, fog, display lists, mipmaps, glReadPixels. Points are always square (no GL_POINT_SMOOTH).
 //
 // Screens: rendering goes to the top screen (400x240) by default. c3dglSetScreen() switches to the
 // bottom screen (320x240) and back, also within a frame; both are presented by c3dglSwapBuffers().

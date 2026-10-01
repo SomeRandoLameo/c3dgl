@@ -75,7 +75,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 ```
 
 - `cube`: 3D, depth test, culling, textures (NPOT and PNG), scissor, sub-viewports
-- `primitives`: every primitive mode, one cell each, with culling on to catch wrong winding
+- `primitives`: every primitive mode with culling on to catch wrong winding; page 2: flat shading, polygon modes,
+  edge flags, polygon offset, depth range
 - `api` (C): self-check of queries, errors and entry point variants; green screen = all checks passed
 - `fragment`: per-fragment operations (alpha test, texture environment, stencil, `glClear`); A switches pages
 
@@ -100,21 +101,22 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - Textures of any size up to 1024x1024: RGBA8, RGB8, luminance/alpha, luminance, alpha, RGB565, RGBA5551, RGBA4;
   `glTexSubImage2D`, `glGetTexImage`, nearest/linear filtering, repeat/clamp/mirror wrapping
 - Texture environment (`glTexEnv`): `GL_MODULATE`, `GL_REPLACE`, `GL_DECAL`, `GL_BLEND`, `GL_ADD`, `GL_TEXTURE_ENV_COLOR`
+- Flat shading with GL's provoking vertices, `glPolygonMode` (fill/line/point per face, with edge flags),
+  `glPolygonOffset` (including the slope factor) and `glDepthRange`
 - Blending (`glBlendFunc`), alpha test (`glAlphaFunc`), stencil (`glStencilFunc`/`Op`/`Mask`), depth
   test/function/mask, color mask, face culling, scissor, viewport, line width, point size
 - `glClear` of color, depth and stencil, honoring scissor and write masks
 - `glGetError`, `glGet{Boolean,Integer,Float,Double}v` for the common state, `glIsEnabled`, `glIsTexture`
 - The common variants of the immediate mode calls (`glVertex2/3/4{f,d,i,s}[v]`, `glColor3/4{f,d,ub}[v]`, ...),
   `glRect*`, `glLoadMatrix*`, `glTranslated`/`glRotated`/`glScaled`
-- Lighting, fog, dithering, smoothing and polygon offset can be enabled and queried but have no effect yet
+- Lighting, fog, dithering and smoothing can be enabled and queried but have no effect yet
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
 
 ## Not supported
 
-Lighting, fog, polygon offset, flat shading (`GL_FLAT`), display lists, mipmaps (only level 0 is used),
-`glReadPixels`, `glPolygonMode` other than `GL_FILL`, round points (`GL_POINT_SMOOTH`) and stereoscopic 3D.
+Lighting, fog, display lists, mipmaps (only level 0 is used), `glReadPixels`, round points (`GL_POINT_SMOOTH`) and stereoscopic 3D.
 `GL_REPEAT` on non-power-of-two textures samples the padding.
 
 ## How it works
@@ -126,6 +128,9 @@ Lighting, fog, polygon offset, flat shading (`GL_FLAT`), display lists, mipmaps 
   rotates to the 3DS screen orientation and maps depth to PICA's [-1, 0] range.
 - Strips, fans, quads and polygons are split into triangles on the CPU. Lines and points have no PICA
   equivalent: they are transformed on the CPU and expanded to screen-aligned quads.
+- Assembling primitives on the CPU also gives flat shading (the provoking vertex's color on every vertex),
+  `glPolygonMode` (outlines and vertices per polygon, culled on the CPU) and the slope part of `glPolygonOffset`
+  (computed per polygon, passed as a per-vertex depth bias that the vertex shader adds).
 - Depth and stencil share one D24S8 buffer. `glClear` uses a memory fill when it can; clearing only depth or
   only stencil (once stencil is in use), or clearing with a scissor box or color mask, draws a full-screen quad.
 - Textures are padded to power-of-two sizes and Morton-swizzled on upload; the shader scales the UVs.

@@ -107,6 +107,9 @@ typedef void            GLvoid;
 #define GL_BLEND                            0x0BE2
 #define GL_SCISSOR_TEST                     0x0C11
 #define GL_TEXTURE_2D                       0x0DE1
+#define GL_POLYGON_OFFSET_POINT             0x2A01
+#define GL_POLYGON_OFFSET_LINE              0x2A02
+#define GL_POLYGON_OFFSET_FILL              0x8037
 
 // Capabilities that are accepted and reported by glIsEnabled, but have no effect (enabling the
 // non-cosmetic ones logs a warning)
@@ -117,7 +120,6 @@ typedef void            GLvoid;
 #define GL_FOG                              0x0B60
 #define GL_NORMALIZE                        0x0BA1
 #define GL_DITHER                           0x0BD0
-#define GL_POLYGON_OFFSET_FILL              0x8037
 #define GL_LIGHT0                           0x4000
 #define GL_LIGHT1                           0x4001
 #define GL_LIGHT2                           0x4002
@@ -131,6 +133,7 @@ typedef void            GLvoid;
 #define GL_VERTEX_ARRAY                     0x8074
 #define GL_NORMAL_ARRAY                     0x8075
 #define GL_COLOR_ARRAY                      0x8076
+#define GL_EDGE_FLAG_ARRAY                  0x8079
 #define GL_TEXTURE_COORD_ARRAY              0x8078
 
 // Queries (glGet*)
@@ -143,6 +146,10 @@ typedef void            GLvoid;
 #define GL_FRONT_FACE                       0x0B46
 #define GL_SHADE_MODEL                      0x0B54
 #define GL_DEPTH_RANGE                      0x0B70
+#define GL_POLYGON_MODE                     0x0B40
+#define GL_EDGE_FLAG                        0x0B43
+#define GL_POLYGON_OFFSET_UNITS             0x2A00
+#define GL_POLYGON_OFFSET_FACTOR            0x8038
 #define GL_DEPTH_WRITEMASK                  0x0B72
 #define GL_DEPTH_CLEAR_VALUE                0x0B73
 #define GL_DEPTH_FUNC                       0x0B74
@@ -253,7 +260,7 @@ GLboolean glIsEnabled(GLenum cap);
 void glEnableClientState(GLenum array);
 void glDisableClientState(GLenum array);
 void glHint(GLenum target, GLenum mode);
-void glShadeModel(GLenum mode);         // GL_FLAT is accepted but colors are always interpolated
+void glShadeModel(GLenum mode);
 void glPixelStorei(GLenum pname, GLint param);
 void glGetBooleanv(GLenum pname, GLboolean *params);
 void glGetIntegerv(GLenum pname, GLint *params);
@@ -281,6 +288,8 @@ void glBlendFunc(GLenum sfactor, GLenum dfactor);
 void glCullFace(GLenum mode);
 void glFrontFace(GLenum mode);
 void glPolygonMode(GLenum face, GLenum mode);
+void glPolygonOffset(GLfloat factor, GLfloat units);
+void glDepthRange(GLclampd zNear, GLclampd zFar);
 void glLineWidth(GLfloat width);
 void glPointSize(GLfloat size);
 
@@ -333,6 +342,9 @@ void glTexCoord2s(GLshort s, GLshort t);
 void glTexCoord2fv(const GLfloat *v);
 void glTexCoord2dv(const GLdouble *v);
 
+void glEdgeFlag(GLboolean flag);
+void glEdgeFlagv(const GLboolean *flag);
+
 void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz);    // Stored only, there is no lighting
 void glNormal3d(GLdouble nx, GLdouble ny, GLdouble nz);
 void glNormal3fv(const GLfloat *v);
@@ -362,6 +374,7 @@ void glRectiv(const GLint *v1, const GLint *v2);
 void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer);
 void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer);
 void glNormalPointer(GLenum type, GLsizei stride, const GLvoid *pointer);
+void glEdgeFlagPointer(GLsizei stride, const GLvoid *pointer);
 void glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer);
 void glDrawArrays(GLenum mode, GLint first, GLsizei count);
 void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices);

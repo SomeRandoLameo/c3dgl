@@ -8,7 +8,9 @@
 //     lazily at draw time instead of flushing inside the gl* setters.
 //   - Vertices stay in object space, the vertex shader applies post * projection * modelview.
 //     `post` maps OpenGL clip space to PICA clip space: 90 degree screen rotation + depth range [-1, 0].
-//   - Strips, fans, quads and polygons are split into triangles on the CPU.
+//   - Strips, fans, quads and polygons are split into triangles on the CPU, which also implements flat shading
+//     (provoking vertex color), glPolygonMode (outlines/vertices of each polygon, culled on the CPU) and the
+//     slope part of glPolygonOffset (per-vertex depth bias that the vertex shader adds).
 //   - Lines and points have no PICA equivalent: they are transformed on the CPU and expanded to quads in NDC.
 //   - Textures are padded to power-of-two sizes and Morton-swizzled; the shader scales UVs back.
 //   - One render target per screen, sharing the vertex buffer and GL state; c3dglSetScreen() flushes the
@@ -60,6 +62,7 @@ typedef struct {
     float pos[3];
     float uv[2];
     u8 color[4];
+    float depthBias;            // Added to PICA NDC depth by the shader: polygon offset of filled polygons
 } Vertex;
 
 typedef struct {
@@ -92,6 +95,7 @@ typedef struct {
     GLenum blendSrc, blendDst;
     bool depthTest, depthMask;
     GLenum depthFunc;
+    float depthNear, depthFar;  // glDepthRange
     bool alphaTest;
     GLenum alphaFunc;
     u8 alphaRef;                // 0..255
@@ -115,7 +119,7 @@ typedef struct {
     GLsizei stride;
 } ClientArray;
 
-enum { ARRAY_VERTEX, ARRAY_TEXCOORD, ARRAY_COLOR, ARRAY_COUNT };
+enum { ARRAY_VERTEX, ARRAY_TEXCOORD, ARRAY_COLOR, ARRAY_EDGEFLAG, ARRAY_COUNT };
 
 //----------------------------------------------------------------------------------
 // Global state
@@ -166,6 +170,18 @@ static struct {
     GLenum primitive;
     Vertex current;                     // Current texcoord and color
     Vertex prim[4];                     // Vertices kept for the primitive being assembled, see submitVertex()
+    bool primEdge[4];                   // Their edge flags
+    bool currentEdge;                   // glEdgeFlag
+    GLenum polygonMode[2];              // Front, back
+    bool offsetFill, offsetLine, offsetPoint;
+    float offsetFactor, offsetUnits;
+
+    // GL_POLYGON is collected until glEnd when it is not simply filled (outline, vertices)
+    bool collectPolygon;
+    Vertex *polyVerts;
+    const Vertex **polyPtrs;
+    bool *polyEdges;
+    int polyCount, polyCapacity;
     int primCount;                      // Vertices in prim
     int primTotal;                      // Vertices submitted since glBegin/glDraw*
 
@@ -540,6 +556,9 @@ static void applyState(const DrawState *s)
     }
     else C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
 
+    // Stored depth = 1 - window depth (see depthFunc()), window depth = n + (f - n)*(z_pica + 1) with z_pica in [-1, 0]
+    C3D_DepthMap(true, -(s->depthFar - s->depthNear), 1.0f - s->depthFar);
+
     GPU_WRITEMASK writeMask = (GPU_WRITEMASK)(s->colorMask | ((s->depthTest && s->depthMask)? GPU_WRITE_DEPTH : 0));
     C3D_DepthTest(s->depthTest, s->depthTest? depthFunc(s->depthFunc) : GPU_ALWAYS, writeMask);
     C3D_AlphaTest(s->alphaTest, testFunc(s->alphaFunc), s->alphaRef);
@@ -664,8 +683,9 @@ static void emitExpandedQuad(const Vertex *a, const Vertex *b, const float pa[3]
     emitTriangle(&q[0], &q[2], &q[3]);
 }
 
-// Expand a line to a screen-aligned quad in NDC (batch must be in clipSpace mode)
-static void emitLine(const Vertex *a, const Vertex *b)
+// Expand a line to a screen-aligned quad in NDC (batch must be in clipSpace mode).
+// zBias is added to the NDC depth (polygon offset of polygon outlines)
+static void emitLine(const Vertex *a, const Vertex *b, float zBias)
 {
     const Mat4 *pmv = projectionModelview();
 
@@ -690,8 +710,8 @@ static void emitLine(const Vertex *a, const Vertex *b)
         lerpVertex(&vb, b, a, t);
     }
 
-    float pa[3] = { ca[0]/ca[3], ca[1]/ca[3], ca[2]/ca[3] };
-    float pb[3] = { cb[0]/cb[3], cb[1]/cb[3], cb[2]/cb[3] };
+    float pa[3] = { ca[0]/ca[3], ca[1]/ca[3], ca[2]/ca[3] + zBias };
+    float pb[3] = { cb[0]/cb[3], cb[1]/cb[3], cb[2]/cb[3] + zBias };
 
     // Direction in pixels, then half line width back to NDC (perpendicular and along the line for square caps)
     float halfW = 0.5f*(float)gl.state.viewport[2], halfH = 0.5f*(float)gl.state.viewport[3];
@@ -705,13 +725,13 @@ static void emitLine(const Vertex *a, const Vertex *b)
 }
 
 // Expand a point to a screen-aligned square of glPointSize pixels in NDC (batch must be in clipSpace mode)
-static void emitPoint(const Vertex *v)
+static void emitPoint(const Vertex *v, float zBias)
 {
     float c[4];
     mat4Transform(projectionModelview(), v->pos, c);
     if (c[3] < CLIP_W_MIN) return;
 
-    float p[3] = { c[0]/c[3], c[1]/c[3], c[2]/c[3] };
+    float p[3] = { c[0]/c[3], c[1]/c[3], c[2]/c[3] + zBias };
     float r = 0.5f*gl.pointSize;
     float rx = 2.0f*r/(float)gl.state.viewport[2], ry = 2.0f*r/(float)gl.state.viewport[3];
 
@@ -719,10 +739,121 @@ static void emitPoint(const Vertex *v)
     emitExpandedQuad(v, v, p, p, 0.0f, ry, rx, 0.0f);
 }
 
-static bool primitiveInClipSpace(GLenum mode)
+// Copy of v with the color of the provoking vertex pv (flat shading, NULL: smooth) and a depth bias
+static Vertex shadeVertex(const Vertex *v, const Vertex *pv, float depthBias)
 {
-    return (mode == GL_POINTS) || (mode == GL_LINES) || (mode == GL_LINE_STRIP) || (mode == GL_LINE_LOOP);
+    Vertex out = *v;
+    if (pv != NULL) memcpy(out.color, pv->color, sizeof(out.color));
+    out.depthBias = depthBias;
+    return out;
 }
+
+// Provoking vertex for flat shading, NULL when shading is smooth
+#define FLAT(pv) ((gl.shadeModel == GL_FLAT)? (pv) : NULL)
+
+static void emitShadedLine(const Vertex *a, const Vertex *b, const Vertex *pv)
+{
+    Vertex va = shadeVertex(a, pv, 0.0f), vb = shadeVertex(b, pv, 0.0f);
+    emitLine(&va, &vb, 0.0f);
+}
+
+// Twice the signed area of the polygon in clip space (x, y, w), positive when counter-clockwise on screen.
+// Homogeneous, so it is also right for vertices behind the viewer
+static float polygonArea(const Vertex *const *vs, int n)
+{
+    const Mat4 *pmv = projectionModelview();
+    float c0[4], c1[4], c2[4];
+    mat4Transform(pmv, vs[0]->pos, c0);
+    mat4Transform(pmv, vs[1]->pos, c1);
+
+    float area = 0.0f;
+    for (int i = 2; i < n; i++)
+    {
+        mat4Transform(pmv, vs[i]->pos, c2);
+        area += c0[0]*(c1[1]*c2[3] - c2[1]*c1[3]) - c1[0]*(c0[1]*c2[3] - c2[1]*c0[3]) + c2[0]*(c0[1]*c1[3] - c1[1]*c0[3]);
+        memcpy(c1, c2, sizeof(c1));
+    }
+    return area;
+}
+
+#define DEPTH_RESOLUTION    (1.0f/16777216.0f)  // r of glPolygonOffset: one step of the 24-bit depth buffer
+
+// glPolygonOffset in window depth units: factor*m + r*units, m = max depth slope in window space
+static float polygonOffset(const Vertex *const *vs, int n)
+{
+    if (gl.offsetFactor == 0.0f) return gl.offsetUnits*DEPTH_RESOLUTION;
+
+    const Mat4 *pmv = projectionModelview();
+    float halfW = 0.5f*(float)gl.state.viewport[2], halfH = 0.5f*(float)gl.state.viewport[3];
+    float halfD = 0.5f*(gl.state.depthFar - gl.state.depthNear);
+
+    // Window coordinates of three vertices (the polygon is planar); behind the viewer: no slope
+    float w[3][3];
+    for (int i = 0; i < 3; i++)
+    {
+        float c[4];
+        mat4Transform(pmv, vs[(i == 0)? 0 : (n - 3 + i)]->pos, c);
+        if (c[3] < CLIP_W_MIN) return gl.offsetUnits*DEPTH_RESOLUTION;
+        w[i][0] = c[0]/c[3]*halfW;
+        w[i][1] = c[1]/c[3]*halfH;
+        w[i][2] = c[2]/c[3]*halfD;
+    }
+
+    // Depth gradient from the plane normal
+    float e1[3] = { w[1][0] - w[0][0], w[1][1] - w[0][1], w[1][2] - w[0][2] };
+    float e2[3] = { w[2][0] - w[0][0], w[2][1] - w[0][1], w[2][2] - w[0][2] };
+    float nx = e1[1]*e2[2] - e1[2]*e2[1], ny = e1[2]*e2[0] - e1[0]*e2[2], nz = e1[0]*e2[1] - e1[1]*e2[0];
+    float m = (fabsf(nz) > 1e-12f)? fmaxf(fabsf(nx/nz), fabsf(ny/nz)) : 0.0f;
+
+    return gl.offsetFactor*m + gl.offsetUnits*DEPTH_RESOLUTION;
+}
+
+// A polygon (triangle, quad, polygon) with edge flags: filled, outlined or as vertices depending on
+// glPolygonMode of the side that faces the viewer. pv: provoking vertex for flat shading
+static void emitPolygon(const Vertex *const *vs, const bool *edges, int n, const Vertex *pv)
+{
+    GLenum mode = GL_FILL;
+    if ((gl.polygonMode[0] != GL_FILL) || (gl.polygonMode[1] != GL_FILL))
+    {
+        // Facing and culling on the CPU: outlines and vertices are drawn in NDC, the GPU cannot cull them
+        bool front = (polygonArea(vs, n) > 0.0f) == (gl.state.frontFace == GL_CCW);
+        if (gl.state.cull && ((gl.state.cullFace == GL_FRONT_AND_BACK) || ((gl.state.cullFace == GL_FRONT) == front))) return;
+
+        mode = gl.polygonMode[front? 0 : 1];
+        prepareDraw(mode != GL_FILL);
+    }
+
+    bool offset = (mode == GL_FILL)? gl.offsetFill : (mode == GL_LINE)? gl.offsetLine : gl.offsetPoint;
+    float range = gl.state.depthFar - gl.state.depthNear;
+    float windowOffset = (offset && (range != 0.0f))? polygonOffset(vs, n)/range : 0.0f;    // In PICA NDC (= 1/2 GL NDC)
+
+    if (mode == GL_FILL)
+    {
+        Vertex a = shadeVertex(vs[0], pv, windowOffset);
+        for (int i = 1; i + 1 < n; i++)
+        {
+            Vertex b = shadeVertex(vs[i], pv, windowOffset), c = shadeVertex(vs[i + 1], pv, windowOffset);
+            emitTriangle(&a, &b, &c);
+        }
+    }
+    else
+    {
+        // Edge i runs from vertex i to i + 1; its flag also decides whether vertex i is drawn as a point
+        for (int i = 0; i < n; i++)
+        {
+            if (!edges[i]) continue;
+            Vertex a = shadeVertex(vs[i], pv, 0.0f);
+            if (mode == GL_LINE)
+            {
+                Vertex b = shadeVertex(vs[(i + 1) % n], pv, 0.0f);
+                emitLine(&a, &b, 2.0f*windowOffset);
+            }
+            else emitPoint(&a, 2.0f*windowOffset);
+        }
+    }
+}
+
+static const bool allEdges[4] = { true, true, true, true };
 
 static bool beginPrimitive(GLenum mode)
 {
@@ -733,17 +864,41 @@ static bool beginPrimitive(GLenum mode)
         return false;
     }
 
-    prepareDraw(primitiveInClipSpace(mode));
+    bool lineOrPoint = (mode == GL_POINTS) || (mode == GL_LINES) || (mode == GL_LINE_STRIP) || (mode == GL_LINE_LOOP);
+    prepareDraw(lineOrPoint);
     gl.primitive = mode;
     gl.primCount = 0;
     gl.primTotal = 0;
+    gl.collectPolygon = (mode == GL_POLYGON) && ((gl.polygonMode[0] != GL_FILL) || (gl.polygonMode[1] != GL_FILL));
+    gl.polyCount = 0;
     return true;
+}
+
+static void collectPolygonVertex(const Vertex *v, bool edge)
+{
+    if (gl.polyCount == gl.polyCapacity)
+    {
+        int capacity = gl.polyCapacity? gl.polyCapacity*2 : 32;
+        Vertex *verts = realloc(gl.polyVerts, capacity*sizeof(Vertex));
+        if (verts != NULL) gl.polyVerts = verts;
+        bool *edges = realloc(gl.polyEdges, capacity*sizeof(bool));
+        if (edges != NULL) gl.polyEdges = edges;
+        const Vertex **ptrs = realloc(gl.polyPtrs, capacity*sizeof(Vertex *));
+        if (ptrs != NULL) gl.polyPtrs = ptrs;
+        if ((verts == NULL) || (edges == NULL) || (ptrs == NULL)) { setError(GL_OUT_OF_MEMORY); return; }
+        gl.polyCapacity = capacity;
+    }
+    gl.polyVerts[gl.polyCount] = *v;
+    gl.polyEdges[gl.polyCount] = edge;
+    gl.polyCount++;
 }
 
 // Assemble the primitive from the submitted vertices. prim[] holds what the mode still needs:
 //   strips:              the last two vertices (quad strip: up to four)
 //   fans, polygons, line loops/strips: the first and the last vertex
-static void submitVertex(const Vertex *v)
+// Provoking vertices (flat shading) follow GL: the last vertex of each primitive, the first one for GL_POLYGON.
+// Edge flags only apply to separate triangles, quads and polygons
+static void submitVertex(const Vertex *v, bool edge)
 {
     Vertex *p = gl.prim;
     int n = gl.primTotal++;
@@ -751,44 +906,65 @@ static void submitVertex(const Vertex *v)
     switch (gl.primitive)
     {
         case GL_POINTS:
-            emitPoint(v);
+            emitPoint(v, 0.0f);
             break;
         case GL_LINES:
             p[gl.primCount++] = *v;
-            if (gl.primCount == 2) { emitLine(&p[0], &p[1]); gl.primCount = 0; }
+            if (gl.primCount == 2) { emitShadedLine(&p[0], &p[1], FLAT(&p[1])); gl.primCount = 0; }
             break;
         case GL_LINE_STRIP:
         case GL_LINE_LOOP:
             if (n == 0) p[0] = *v;
-            else emitLine(&p[1], v);
+            else emitShadedLine(&p[1], v, FLAT(v));
             p[1] = *v;
             break;
         case GL_TRIANGLES:
+            gl.primEdge[gl.primCount] = edge;
             p[gl.primCount++] = *v;
-            if (gl.primCount == 3) { emitTriangle(&p[0], &p[1], &p[2]); gl.primCount = 0; }
+            if (gl.primCount == 3)
+            {
+                const Vertex *tri[3] = { &p[0], &p[1], &p[2] };
+                emitPolygon(tri, gl.primEdge, 3, FLAT(&p[2]));
+                gl.primCount = 0;
+            }
             break;
         case GL_TRIANGLE_STRIP:
             // Every other triangle is flipped to keep the winding of the first one
             if (n >= 2)
             {
-                if (n & 1) emitTriangle(&p[1], &p[0], v);
-                else emitTriangle(&p[0], &p[1], v);
+                const Vertex *odd[3] = { &p[1], &p[0], v }, *even[3] = { &p[0], &p[1], v };
+                emitPolygon((n & 1)? odd : even, allEdges, 3, FLAT(v));
             }
             p[0] = p[1];
             p[1] = *v;
             break;
         case GL_TRIANGLE_FAN:
-        case GL_POLYGON:    // Convex, so a fan
             if (n == 0) p[0] = *v;
-            else if (n >= 2) emitTriangle(&p[0], &p[1], v);
+            else if (n >= 2)
+            {
+                const Vertex *tri[3] = { &p[0], &p[1], v };
+                emitPolygon(tri, allEdges, 3, FLAT(v));
+            }
+            p[1] = *v;
+            break;
+        case GL_POLYGON:
+            if (gl.collectPolygon) { collectPolygonVertex(v, edge); break; }
+            // Filled: a fan, all triangles shaded with the first vertex
+            if (n == 0) p[0] = *v;
+            else if (n >= 2)
+            {
+                const Vertex *tri[3] = { &p[0], &p[1], v };
+                emitPolygon(tri, allEdges, 3, FLAT(&p[0]));
+            }
             p[1] = *v;
             break;
         case GL_QUADS:
+            gl.primEdge[gl.primCount] = edge;
             p[gl.primCount++] = *v;
             if (gl.primCount == 4)
             {
-                emitTriangle(&p[0], &p[1], &p[2]);
-                emitTriangle(&p[0], &p[2], &p[3]);
+                const Vertex *quad[4] = { &p[0], &p[1], &p[2], &p[3] };
+                emitPolygon(quad, gl.primEdge, 4, FLAT(&p[3]));
                 gl.primCount = 0;
             }
             break;
@@ -797,8 +973,8 @@ static void submitVertex(const Vertex *v)
             p[gl.primCount++] = *v;
             if (gl.primCount == 4)
             {
-                emitTriangle(&p[0], &p[1], &p[3]);
-                emitTriangle(&p[0], &p[3], &p[2]);
+                const Vertex *quad[4] = { &p[0], &p[1], &p[3], &p[2] };
+                emitPolygon(quad, allEdges, 4, FLAT(&p[3]));
                 p[0] = p[2];
                 p[1] = p[3];
                 gl.primCount = 2;
@@ -808,12 +984,22 @@ static void submitVertex(const Vertex *v)
     }
 }
 
-// glEnd or the end of a glDraw* call: close line loops, drop incomplete primitives
+// glEnd or the end of a glDraw* call: close line loops, draw collected polygons, drop incomplete primitives
 static void endPrimitive(void)
 {
-    if ((gl.primitive == GL_LINE_LOOP) && (gl.primTotal >= 2)) emitLine(&gl.prim[1], &gl.prim[0]);
+    // The closing segment of a loop is shaded with the first vertex
+    if ((gl.primitive == GL_LINE_LOOP) && (gl.primTotal >= 2)) emitShadedLine(&gl.prim[1], &gl.prim[0], FLAT(&gl.prim[0]));
+
+    if (gl.collectPolygon && (gl.polyCount >= 3))
+    {
+        for (int i = 0; i < gl.polyCount; i++) gl.polyPtrs[i] = &gl.polyVerts[i];
+        emitPolygon(gl.polyPtrs, gl.polyEdges, gl.polyCount, FLAT(&gl.polyVerts[0]));
+    }
+
     gl.primCount = 0;
     gl.primTotal = 0;
+    gl.polyCount = 0;
+    gl.collectPolygon = false;
 }
 
 //----------------------------------------------------------------------------------
@@ -846,16 +1032,17 @@ bool c3dglInit(void)
     gl.uLocMvp = shaderInstanceGetUniformLocation(gl.program.vertexShader, "mvp");
     gl.uLocTexScale = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texscale");
 
-    // Vertex layout: v0 = position (3 floats), v1 = texcoord (2 floats), v2 = color (4 ubytes)
+    // Vertex layout: v0 = position (3 floats), v1 = texcoord (2 floats), v2 = color (4 ubytes), v3 = depth bias (float)
     C3D_AttrInfo *attrInfo = C3D_GetAttrInfo();
     AttrInfo_Init(attrInfo);
     AttrInfo_AddLoader(attrInfo, 0, GPU_FLOAT, 3);
     AttrInfo_AddLoader(attrInfo, 1, GPU_FLOAT, 2);
     AttrInfo_AddLoader(attrInfo, 2, GPU_UNSIGNED_BYTE, 4);
+    AttrInfo_AddLoader(attrInfo, 3, GPU_FLOAT, 1);
 
     C3D_BufInfo *bufInfo = C3D_GetBufInfo();
     BufInfo_Init(bufInfo);
-    BufInfo_Add(bufInfo, gl.vbo, sizeof(Vertex), 3, 0x210);
+    BufInfo_Add(bufInfo, gl.vbo, sizeof(Vertex), 4, 0x3210);
 
     // Stored depth = -z_clip: near = 1, far = 0 (see depthFunc())
     C3D_DepthMap(true, -1.0f, 0.0f);
@@ -886,6 +1073,9 @@ bool c3dglInit(void)
     gl.lineWidth = gl.pointSize = 1.0f;
     gl.clearColor = 0x000000FF;
     gl.clearDepth = 1.0f;
+    gl.state.depthFar = 1.0f;
+    gl.polygonMode[0] = gl.polygonMode[1] = GL_FILL;
+    gl.currentEdge = true;
     gl.shadeModel = GL_SMOOTH;
     gl.currentNormal[2] = 1.0f;
     gl.ignoredCaps = 1u << 0;     // GL_DITHER is enabled by default
@@ -905,6 +1095,9 @@ void c3dglClose(void)
     for (int i = 1; i < C3DGL_MAX_TEXTURES; i++) if (gl.textures[i].loaded) C3D_TexDelete(&gl.textures[i].tex);
     processDeferredDeletes();
     free(gl.deferredDeletes);
+    free(gl.polyVerts);
+    free(gl.polyEdges);
+    free(gl.polyPtrs);
 
     if (gl.dvlb != NULL) { shaderProgramFree(&gl.program); DVLB_Free(gl.dvlb); }
     if (gl.vbo != NULL) linearFree(gl.vbo);
@@ -961,7 +1154,7 @@ void c3dglSwapBuffers(void)
 // enabling the ones that change the picture warns once
 static const GLenum ignoredCaps[] = {
     GL_DITHER, GL_LINE_SMOOTH, GL_POINT_SMOOTH, GL_POLYGON_SMOOTH, GL_LIGHTING, GL_COLOR_MATERIAL, GL_FOG,
-    GL_NORMALIZE, GL_POLYGON_OFFSET_FILL, GL_LIGHT0, GL_LIGHT1, GL_LIGHT2, GL_LIGHT3, GL_LIGHT4, GL_LIGHT5,
+    GL_NORMALIZE, GL_LIGHT0, GL_LIGHT1, GL_LIGHT2, GL_LIGHT3, GL_LIGHT4, GL_LIGHT5,
     GL_LIGHT6, GL_LIGHT7,
 };
 
@@ -996,6 +1189,9 @@ static void setCapability(GLenum cap, bool enable)
             break;
         case GL_CULL_FACE: gl.state.cull = enable; break;
         case GL_SCISSOR_TEST: gl.state.scissor = enable; break;
+        case GL_POLYGON_OFFSET_FILL: gl.offsetFill = enable; break;
+        case GL_POLYGON_OFFSET_LINE: gl.offsetLine = enable; break;
+        case GL_POLYGON_OFFSET_POINT: gl.offsetPoint = enable; break;
         default:
             WARN_ONCE("glEnable/glDisable: capability 0x%x not supported\n", cap);
             setError(GL_INVALID_ENUM);
@@ -1013,6 +1209,7 @@ static void setClientState(GLenum array, bool enable)
         case GL_VERTEX_ARRAY: gl.arrays[ARRAY_VERTEX].enabled = enable; break;
         case GL_TEXTURE_COORD_ARRAY: gl.arrays[ARRAY_TEXCOORD].enabled = enable; break;
         case GL_COLOR_ARRAY: gl.arrays[ARRAY_COLOR].enabled = enable; break;
+        case GL_EDGE_FLAG_ARRAY: gl.arrays[ARRAY_EDGEFLAG].enabled = enable; break;
         case GL_NORMAL_ARRAY: break;    // Normals are not used (no lighting)
         default: setError(GL_INVALID_ENUM); break;
     }
@@ -1038,7 +1235,11 @@ GLboolean glIsEnabled(GLenum cap)
         case GL_VERTEX_ARRAY: return gl.arrays[ARRAY_VERTEX].enabled;
         case GL_TEXTURE_COORD_ARRAY: return gl.arrays[ARRAY_TEXCOORD].enabled;
         case GL_COLOR_ARRAY: return gl.arrays[ARRAY_COLOR].enabled;
+        case GL_EDGE_FLAG_ARRAY: return gl.arrays[ARRAY_EDGEFLAG].enabled;
         case GL_NORMAL_ARRAY: return GL_FALSE;
+        case GL_POLYGON_OFFSET_FILL: return gl.offsetFill;
+        case GL_POLYGON_OFFSET_LINE: return gl.offsetLine;
+        case GL_POLYGON_OFFSET_POINT: return gl.offsetPoint;
         default: setError(GL_INVALID_ENUM); return GL_FALSE;
     }
 }
@@ -1059,7 +1260,6 @@ void glHint(GLenum target, GLenum mode) { (void)target; (void)mode; }
 void glShadeModel(GLenum mode)
 {
     if ((mode != GL_SMOOTH) && (mode != GL_FLAT)) { setError(GL_INVALID_ENUM); return; }
-    if (mode == GL_FLAT) WARN_ONCE("glShadeModel: GL_FLAT not supported, colors are interpolated\n");
     gl.shadeModel = mode;
 }
 
@@ -1098,7 +1298,11 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_VIEWPORT: for (int i = 0; i < 4; i++) v[i] = gl.state.viewport[i]; return 4;
         case GL_SCISSOR_BOX: for (int i = 0; i < 4; i++) v[i] = gl.state.scissorBox[i]; return 4;
         case GL_MAX_VIEWPORT_DIMS: v[0] = C3DGL_TOP_SCREEN_WIDTH; v[1] = C3DGL_SCREEN_HEIGHT; return 2;
-        case GL_DEPTH_RANGE: v[0] = 0.0; v[1] = 1.0; *normalized = true; return 2;
+        case GL_DEPTH_RANGE: v[0] = gl.state.depthNear; v[1] = gl.state.depthFar; *normalized = true; return 2;
+        case GL_POLYGON_MODE: v[0] = gl.polygonMode[0]; v[1] = gl.polygonMode[1]; return 2;
+        case GL_POLYGON_OFFSET_FACTOR: v[0] = gl.offsetFactor; return 1;
+        case GL_POLYGON_OFFSET_UNITS: v[0] = gl.offsetUnits; return 1;
+        case GL_EDGE_FLAG: v[0] = gl.currentEdge; return 1;
 
         case GL_CURRENT_COLOR: for (int i = 0; i < 4; i++) v[i] = gl.current.color[i]/255.0; *normalized = true; return 4;
         case GL_CURRENT_TEXTURE_COORDS: v[0] = gl.current.uv[0]; v[1] = gl.current.uv[1]; v[2] = 0.0; v[3] = 1.0; return 4;
@@ -1150,7 +1354,9 @@ static int getState(GLenum pname, double v[16], bool *normalized)
             // Capabilities can be queried with glGet too
             if ((ignoredCapBit(pname) >= 0) || (pname == GL_TEXTURE_2D) || (pname == GL_BLEND) || (pname == GL_DEPTH_TEST) ||
                 (pname == GL_ALPHA_TEST) || (pname == GL_STENCIL_TEST) || (pname == GL_CULL_FACE) || (pname == GL_SCISSOR_TEST) ||
-                (pname == GL_VERTEX_ARRAY) || (pname == GL_TEXTURE_COORD_ARRAY) || (pname == GL_COLOR_ARRAY) || (pname == GL_NORMAL_ARRAY))
+                (pname == GL_VERTEX_ARRAY) || (pname == GL_TEXTURE_COORD_ARRAY) || (pname == GL_COLOR_ARRAY) || (pname == GL_NORMAL_ARRAY) ||
+                (pname == GL_EDGE_FLAG_ARRAY) || (pname == GL_POLYGON_OFFSET_FILL) || (pname == GL_POLYGON_OFFSET_LINE) ||
+                (pname == GL_POLYGON_OFFSET_POINT))
             {
                 v[0] = glIsEnabled(pname);
                 return 1;
@@ -1255,6 +1461,7 @@ static void clearWithQuad(bool color, bool depth, bool stencil)
     key.depthTest = true;                           // Depth writes need the test enabled
     key.depthFunc = GL_ALWAYS;
     key.depthMask = depth;
+    key.depthFar = 1.0f;                            // The clear depth is not affected by glDepthRange
     if (stencil)
     {
         key.stencilTest = true;
@@ -1352,8 +1559,27 @@ void glFrontFace(GLenum mode) { gl.state.frontFace = mode; }
 
 void glPolygonMode(GLenum face, GLenum mode)
 {
-    (void)face;
-    if (mode != GL_FILL) WARN_ONCE("glPolygonMode: only GL_FILL is supported\n");
+    if ((mode != GL_POINT) && (mode != GL_LINE) && (mode != GL_FILL)) { setError(GL_INVALID_ENUM); return; }
+
+    switch (face)
+    {
+        case GL_FRONT: gl.polygonMode[0] = mode; break;
+        case GL_BACK: gl.polygonMode[1] = mode; break;
+        case GL_FRONT_AND_BACK: gl.polygonMode[0] = gl.polygonMode[1] = mode; break;
+        default: setError(GL_INVALID_ENUM); break;
+    }
+}
+
+void glPolygonOffset(GLfloat factor, GLfloat units)
+{
+    gl.offsetFactor = factor;
+    gl.offsetUnits = units;
+}
+
+void glDepthRange(GLclampd zNear, GLclampd zFar)
+{
+    gl.state.depthNear = (zNear < 0.0)? 0.0f : (zNear > 1.0)? 1.0f : (float)zNear;
+    gl.state.depthFar = (zFar < 0.0)? 0.0f : (zFar > 1.0)? 1.0f : (float)zFar;
 }
 
 void glLineWidth(GLfloat width) { gl.lineWidth = width; }
@@ -1514,7 +1740,7 @@ void glVertex3f(GLfloat x, GLfloat y, GLfloat z)
     v.pos[0] = x;
     v.pos[1] = y;
     v.pos[2] = z;
-    submitVertex(&v);
+    submitVertex(&v, gl.currentEdge);
 }
 
 void glVertex2f(GLfloat x, GLfloat y) { glVertex3f(x, y, 0.0f); }
@@ -1525,6 +1751,9 @@ void glTexCoord2f(GLfloat s, GLfloat t)
     gl.current.uv[0] = s;
     gl.current.uv[1] = t;
 }
+
+void glEdgeFlag(GLboolean flag) { gl.currentEdge = flag; }
+void glEdgeFlagv(const GLboolean *flag) { gl.currentEdge = *flag; }
 
 void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz)
 {
@@ -1623,6 +1852,7 @@ static void setArray(int index, GLint size, GLenum type, GLsizei stride, const G
 void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { setArray(ARRAY_VERTEX, size, type, stride, pointer); }
 void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { setArray(ARRAY_TEXCOORD, size, type, stride, pointer); }
 void glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { setArray(ARRAY_COLOR, size, type, stride, pointer); }
+void glEdgeFlagPointer(GLsizei stride, const GLvoid *pointer) { setArray(ARRAY_EDGEFLAG, 1, GL_UNSIGNED_BYTE, stride, pointer); }
 void glNormalPointer(GLenum type, GLsizei stride, const GLvoid *pointer) { (void)type; (void)stride; (void)pointer; }
 
 static const u8 *arrayElement(const ClientArray *a, int index, int componentSize)
@@ -1664,7 +1894,11 @@ static void submitArrayVertex(int index)
         }
     }
 
-    submitVertex(&v);
+    bool edge = gl.currentEdge;
+    const ClientArray *ef = &gl.arrays[ARRAY_EDGEFLAG];
+    if (ef->enabled && (ef->pointer != NULL)) edge = *arrayElement(ef, index, 1) != 0;
+
+    submitVertex(&v, edge);
 }
 
 static bool arraysReady(void)
