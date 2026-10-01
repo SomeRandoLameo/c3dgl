@@ -14,8 +14,10 @@
 //   - One render target per screen, sharing the vertex buffer and GL state; c3dglSetScreen() flushes the
 //     batch and switches the target (C3D_FrameDrawOn), citro3d presents every target drawn on in the frame.
 //
-// Known limitations: no mipmaps, no glReadPixels, glClear ignores scissor/color mask,
-// REPEAT wrap on non-power-of-two textures samples the padding.
+//   - Depth and stencil share one D24S8 buffer that a memory fill can only clear as a whole. glClear uses the
+//     fill when that is equivalent, otherwise it draws a full-screen quad (scissor, masks, depth or stencil only).
+//
+// Known limitations: no mipmaps, no glReadPixels, REPEAT wrap on non-power-of-two textures samples the padding.
 #include "GL/gl.h"
 #include "c3dgl.h"
 
@@ -93,6 +95,10 @@ typedef struct {
     bool alphaTest;
     GLenum alphaFunc;
     u8 alphaRef;                // 0..255
+    bool stencilTest;
+    GLenum stencilFunc;
+    u8 stencilRef, stencilFuncMask, stencilWriteMask;
+    GLenum stencilFail, stencilDepthFail, stencilPass;
     u8 colorMask;
     bool cull;
     GLenum cullFace, frontFace;
@@ -140,6 +146,8 @@ static struct {
     float lineWidth, pointSize;
     u32 clearColor;                     // 0xRRGGBBAA
     float clearDepth;
+    u8 clearStencil;
+    bool stencilUsed;                   // GL_STENCIL_TEST was enabled once: glClear must preserve stencil values
 
     // Matrices
     int matrixMode;                     // 0: modelview, 1: projection, 2: texture
@@ -290,6 +298,21 @@ static GPU_TESTFUNC depthFunc(GLenum f)
         case GL_GREATER: return GPU_LESS;
         case GL_GEQUAL: return GPU_LEQUAL;
         default: return testFunc(f);
+    }
+}
+
+static GPU_STENCILOP stencilOp(GLenum op)
+{
+    switch (op)
+    {
+        case GL_ZERO: return GPU_STENCIL_ZERO;
+        case GL_REPLACE: return GPU_STENCIL_REPLACE;
+        case GL_INCR: return GPU_STENCIL_INCR;
+        case GL_DECR: return GPU_STENCIL_DECR;
+        case GL_INVERT: return GPU_STENCIL_INVERT;
+        case GL_INCR_WRAP: return GPU_STENCIL_INCR_WRAP;
+        case GL_DECR_WRAP: return GPU_STENCIL_DECR_WRAP;
+        default: return GPU_STENCIL_KEEP;
     }
 }
 
@@ -511,6 +534,13 @@ static void applyState(const DrawState *s)
     C3D_DepthTest(s->depthTest, s->depthTest? depthFunc(s->depthFunc) : GPU_ALWAYS, writeMask);
     C3D_AlphaTest(s->alphaTest, testFunc(s->alphaFunc), s->alphaRef);
 
+    if (s->stencilTest)
+    {
+        C3D_StencilTest(true, testFunc(s->stencilFunc), s->stencilRef, s->stencilFuncMask, s->stencilWriteMask);
+        C3D_StencilOp(stencilOp(s->stencilFail), stencilOp(s->stencilDepthFail), stencilOp(s->stencilPass));
+    }
+    else C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0x00);
+
     if (s->blend)
     {
         GPU_BLENDFACTOR src = blendFactor(s->blendSrc), dst = blendFactor(s->blendDst);
@@ -548,26 +578,36 @@ static bool textureValid(GLuint id)
     return (id > 0) && (id < C3DGL_MAX_TEXTURES) && gl.textures[id].loaded;
 }
 
-// Call before emitting vertices: starts a new batch if the draw state changed
-static void prepareDraw(bool clipSpace)
+// Start a new batch if key differs from the applied state. memcmp: keys are built with zeroed padding
+static void useState(const DrawState *key)
 {
     ensureFrame();
 
-    // memcpy/memcmp: padding bytes must match too
+    if (!gl.batchValid || (memcmp(key, &gl.batch, sizeof(DrawState)) != 0))
+    {
+        flush();
+        applyState(key);
+        memcpy(&gl.batch, key, sizeof(DrawState));
+        gl.batchValid = true;
+    }
+}
+
+// Call before emitting vertices: starts a new batch if the draw state changed
+static void prepareDraw(bool clipSpace)
+{
     DrawState key;
     memcpy(&key, &gl.state, sizeof(DrawState));
     key.clipSpace = clipSpace;
     key.matrixSerial = clipSpace? 0 : gl.matrixSerial;
     key.texture = (gl.texture2D && textureValid(gl.boundTexture))? gl.boundTexture : 0;
     if (key.texture == 0) { key.texEnvMode = 0; key.texEnvColor = 0; }     // Unused, don't split batches over it
-
-    if (!gl.batchValid || (memcmp(&key, &gl.batch, sizeof(DrawState)) != 0))
+    if (!key.stencilTest)
     {
-        flush();
-        applyState(&key);
-        memcpy(&gl.batch, &key, sizeof(DrawState));
-        gl.batchValid = true;
+        key.stencilFunc = key.stencilFail = key.stencilDepthFail = key.stencilPass = 0;
+        key.stencilRef = key.stencilFuncMask = key.stencilWriteMask = 0;
     }
+
+    useState(&key);
 }
 
 static bool reserveVertices(int count)
@@ -825,6 +865,9 @@ bool c3dglInit(void)
     gl.state.depthMask = true;
     gl.state.alphaFunc = GL_ALWAYS;
     gl.state.texEnvMode = GL_MODULATE;
+    gl.state.stencilFunc = GL_ALWAYS;
+    gl.state.stencilFuncMask = gl.state.stencilWriteMask = 0xFF;
+    gl.state.stencilFail = gl.state.stencilDepthFail = gl.state.stencilPass = GL_KEEP;
     gl.state.colorMask = GPU_WRITE_COLOR;
     gl.state.cullFace = GL_BACK;
     gl.state.frontFace = GL_CCW;
@@ -908,6 +951,10 @@ static void setCapability(GLenum cap, bool enable)
         case GL_BLEND: gl.state.blend = enable; break;
         case GL_DEPTH_TEST: gl.state.depthTest = enable; break;
         case GL_ALPHA_TEST: gl.state.alphaTest = enable; break;
+        case GL_STENCIL_TEST:
+            gl.state.stencilTest = enable;
+            if (enable) gl.stencilUsed = true;
+            break;
         case GL_CULL_FACE: gl.state.cull = enable; break;
         case GL_SCISSOR_TEST: gl.state.scissor = enable; break;
         case GL_LINE_SMOOTH: break;
@@ -992,14 +1039,70 @@ void glClearColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha)
     gl.clearColor = ((u32)colorByte(red) << 24) | ((u32)colorByte(green) << 16) | ((u32)colorByte(blue) << 8) | colorByte(alpha);
 }
 
-void glClearDepth(GLclampd depth) { gl.clearDepth = (float)depth; }
+void glClearDepth(GLclampd depth)
+{
+    gl.clearDepth = (depth < 0.0)? 0.0f : (depth > 1.0)? 1.0f : (float)depth;
+}
+
+void glClearStencil(GLint s) { gl.clearStencil = (u8)s; }
+
+// Clear by drawing a full-screen quad at the clear depth: honors scissor and all write masks
+static void clearWithQuad(bool color, bool depth, bool stencil)
+{
+    DrawState key;
+    memset(&key, 0, sizeof(key));
+    key.clipSpace = true;
+    key.viewport[2] = screenWidth(gl.screen);       // glClear ignores the viewport
+    key.viewport[3] = C3DGL_SCREEN_HEIGHT;
+    key.scissor = gl.state.scissor;
+    memcpy(key.scissorBox, gl.state.scissorBox, sizeof(key.scissorBox));
+    key.colorMask = color? gl.state.colorMask : 0;
+    key.depthTest = true;                           // Depth writes need the test enabled
+    key.depthFunc = GL_ALWAYS;
+    key.depthMask = depth;
+    if (stencil)
+    {
+        key.stencilTest = true;
+        key.stencilFunc = GL_ALWAYS;
+        key.stencilRef = gl.clearStencil;
+        key.stencilFuncMask = 0xFF;
+        key.stencilWriteMask = gl.state.stencilWriteMask;
+        key.stencilFail = key.stencilDepthFail = key.stencilPass = GL_REPLACE;
+    }
+    useState(&key);
+
+    Vertex v[4];
+    memset(v, 0, sizeof(v));
+    for (int i = 0; i < 4; i++)
+    {
+        v[i].pos[0] = (i == 1 || i == 2)? 1.0f : -1.0f;
+        v[i].pos[1] = (i >= 2)? 1.0f : -1.0f;
+        v[i].pos[2] = 2.0f*gl.clearDepth - 1.0f;    // Window depth -> NDC
+        for (int c = 0; c < 4; c++) v[i].color[c] = (u8)(gl.clearColor >> (24 - 8*c));
+    }
+    emitTriangle(&v[0], &v[1], &v[2]);
+    emitTriangle(&v[0], &v[2], &v[3]);
+}
 
 void glClear(GLbitfield mask)
 {
-    int bits = 0;
-    if (mask & GL_COLOR_BUFFER_BIT) bits |= C3D_CLEAR_COLOR;
-    if (mask & GL_DEPTH_BUFFER_BIT) bits |= C3D_CLEAR_DEPTH;
-    if (bits == 0) return;
+    // Write masks apply to clears
+    bool color = (mask & GL_COLOR_BUFFER_BIT) && (gl.state.colorMask != 0);
+    bool depth = (mask & GL_DEPTH_BUFFER_BIT) && gl.state.depthMask;
+    bool stencil = (mask & GL_STENCIL_BUFFER_BIT) && (gl.state.stencilWriteMask != 0);
+    if (!color && !depth && !stencil) return;
+
+    // The memory fill clears whole buffers, and depth and stencil only together. Stencil may be
+    // overwritten as long as it was never used
+    bool fill = !gl.state.scissor &&
+                (!color || (gl.state.colorMask == GPU_WRITE_COLOR)) &&
+                (!stencil || (gl.state.stencilWriteMask == 0xFF)) &&
+                ((depth == stencil) || (depth && !gl.stencilUsed));
+    if (!fill)
+    {
+        clearWithQuad(color, depth, stencil);
+        return;
+    }
 
     ensureFrame();
     flush();
@@ -1007,10 +1110,10 @@ void glClear(GLbitfield mask)
     // Clears run as memory fills outside the command list; split it so earlier draws stay before the clear
     if (gl.drawnThisFrame) C3D_FrameSplit(0);
 
-    float depth = 1.0f - gl.clearDepth;     // Reversed depth, see depthFunc()
-    if (depth < 0.0f) depth = 0.0f;
-    if (depth > 1.0f) depth = 1.0f;
-    C3D_RenderTargetClear(gl.targets[gl.screen], (C3D_ClearBits)bits, gl.clearColor, (u32)(depth*0xFFFFFF));
+    // D24S8: stencil in the top byte, depth reversed (see depthFunc())
+    u32 depthStencil = ((u32)gl.clearStencil << 24) | (u32)((1.0f - gl.clearDepth)*0xFFFFFF);
+    int bits = (color? C3D_CLEAR_COLOR : 0) | ((depth || stencil)? C3D_CLEAR_DEPTH : 0);
+    C3D_RenderTargetClear(gl.targets[gl.screen], (C3D_ClearBits)bits, gl.clearColor, depthStencil);
 }
 
 void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha)
@@ -1020,6 +1123,22 @@ void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha
 
 void glDepthMask(GLboolean flag) { gl.state.depthMask = flag; }
 void glDepthFunc(GLenum func) { gl.state.depthFunc = func; }
+
+void glStencilFunc(GLenum func, GLint ref, GLuint mask)
+{
+    gl.state.stencilFunc = func;
+    gl.state.stencilRef = (u8)((ref < 0)? 0 : (ref > 255)? 255 : ref);
+    gl.state.stencilFuncMask = (u8)mask;
+}
+
+void glStencilOp(GLenum fail, GLenum zfail, GLenum zpass)
+{
+    gl.state.stencilFail = fail;
+    gl.state.stencilDepthFail = zfail;
+    gl.state.stencilPass = zpass;
+}
+
+void glStencilMask(GLuint mask) { gl.state.stencilWriteMask = (u8)mask; }
 
 void glAlphaFunc(GLenum func, GLclampf ref)
 {

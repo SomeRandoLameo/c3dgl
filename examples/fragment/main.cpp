@@ -1,5 +1,6 @@
 // c3dgl example: per-fragment operations, one cell each on the top screen (4x2 grid, 100x120 px per cell).
-// Top row: alpha test, bottom row: texture environment. The expected result is printed on the bottom screen.
+// Page 1: alpha test, texture environment. Page 2: stencil, glClear with scissor/masks. A switches pages.
+// The expected result is printed on the bottom screen.
 #include <3ds.h>
 #include <GL/gl.h>
 #include <c3dgl.h>
@@ -213,6 +214,225 @@ void drawBlendAdd(const Textures& t) {
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 }
 
+// Stencil and clear tests (page 2). The frame starts with stencil cleared to 3 by the memory fill
+
+// Scissor box of the cell, inset by `inset` px
+void scissorCell(int column, int row, int inset) {
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(column * CELL_W + inset, (ROWS - 1 - row) * CELL_H + inset, CELL_W - 2 * inset, CELL_H - 2 * inset);
+}
+
+// Clear only the stencil of the cell (quad path: stencil without depth)
+void clearCellStencil(int column, int row) {
+    scissorCell(column, row, 0);
+    glClearStencil(0);
+    glClear(GL_STENCIL_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+}
+
+void drawDisc(float x, float y, float r, float z = 0.0f) {
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex3f(x, y, z);
+    for (int i = 0; i <= 32; i++) {
+        const float a = 6.2831853f * i / 32;
+        glVertex3f(x + r * std::cos(a), y + r * std::sin(a), z);
+    }
+    glEnd();
+}
+
+void drawRect(float x0, float y0, float x1, float y1, float z = 0.0f) {
+    glBegin(GL_QUADS);
+    glVertex3f(x0, y0, z); glVertex3f(x1, y0, z); glVertex3f(x1, y1, z); glVertex3f(x0, y1, z);
+    glEnd();
+}
+
+// Blue/white vertical stripes over the whole cell
+void drawStripes(float z = 0.0f) {
+    for (int i = 0; i < 10; i++) {
+        if (i % 2) glColor3f(1.0f, 1.0f, 1.0f);
+        else glColor3f(0.2f, 0.3f, 0.9f);
+        drawRect(-1.0f + 0.2f * i, -1.2f, -0.8f + 0.2f * i, 1.2f, z);
+    }
+}
+
+// Stencil = 1 inside a disc, nothing drawn to color
+void writeStencilDisc() {
+    glEnable(GL_STENCIL_TEST);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glStencilFunc(GL_ALWAYS, 1, 0xFF);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+    drawDisc(0.0f, 0.0f, 0.7f);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+}
+
+// EQUAL 1: stripes only inside the disc
+void drawStencilInside() {
+    writeStencilDisc();
+    glStencilFunc(GL_EQUAL, 1, 0xFF);
+    drawStripes();
+    glDisable(GL_STENCIL_TEST);
+}
+
+// EQUAL 3 (the value of the frame clear): stripes only outside the disc
+void drawStencilClearValue() {
+    writeStencilDisc();
+    glStencilFunc(GL_EQUAL, 3, 0xFF);
+    drawStripes();
+    glDisable(GL_STENCIL_TEST);
+}
+
+// INCR with three overlapping discs, then one color per count: 1 blue, 2 green, 3 yellow
+void drawStencilCount(int column, int row) {
+    clearCellStencil(column, row);
+    glEnable(GL_STENCIL_TEST);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glStencilFunc(GL_ALWAYS, 0, 0xFF);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
+    drawDisc(-0.3f, 0.25f, 0.5f);
+    drawDisc(0.3f, 0.25f, 0.5f);
+    drawDisc(0.0f, -0.25f, 0.5f);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+
+    const float colors[3][3] = {{0.2f, 0.3f, 0.9f}, {0.2f, 0.8f, 0.3f}, {1.0f, 0.9f, 0.2f}};
+    for (int count = 1; count <= 3; count++) {
+        glStencilFunc(GL_EQUAL, count, 0xFF);
+        glColor3f(colors[count - 1][0], colors[count - 1][1], colors[count - 1][2]);
+        drawRect(-1.0f, -1.2f, 1.0f, 1.2f);
+    }
+    glDisable(GL_STENCIL_TEST);
+}
+
+// INVERT through write mask 0x0F on two overlapping squares, then EQUAL 0x0F: magenta squares, empty overlap.
+// Without the write mask the value would be 0xFF and nothing would show
+void drawStencilInvert(int column, int row) {
+    clearCellStencil(column, row);
+    glEnable(GL_STENCIL_TEST);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glStencilMask(0x0F);
+    glStencilFunc(GL_ALWAYS, 0, 0xFF);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_INVERT);
+    drawRect(-0.8f, -0.2f, 0.3f, 0.9f);
+    drawRect(-0.3f, -0.9f, 0.8f, 0.2f);
+    glStencilMask(0xFF);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+
+    glStencilFunc(GL_EQUAL, 0x0F, 0xFF);
+    glColor3f(0.9f, 0.2f, 0.9f);
+    drawRect(-1.0f, -1.2f, 1.0f, 1.2f);
+    glDisable(GL_STENCIL_TEST);
+}
+
+// glClear with a scissor box 20 px inside the cell: red box with a background-colored border
+void drawScissorClear(int column, int row) {
+    scissorCell(column, row, 20);
+    glClearColor(0.9f, 0.1f, 0.1f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
+    glDisable(GL_SCISSOR_TEST);
+}
+
+// Red left/blue right half, then a green-only clear to white 20 px inside the cell:
+// red/blue frame around yellow (left) and cyan (right)
+void drawColorMaskClear(int column, int row) {
+    glColor3f(1.0f, 0.0f, 0.0f); drawRect(-1.0f, -1.2f, 0.0f, 1.2f);
+    glColor3f(0.0f, 0.0f, 1.0f); drawRect(0.0f, -1.2f, 1.0f, 1.2f);
+
+    scissorCell(column, row, 20);
+    glColorMask(GL_FALSE, GL_TRUE, GL_FALSE, GL_FALSE);
+    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_SCISSOR_TEST);
+}
+
+// Depth-only clear keeps stencil: stencil disc, green quad in front, depth cleared, stripes behind with
+// EQUAL 1 -> stripes in the disc over green. Uncleared depth or lost stencil: only green
+void drawDepthClearKeepsStencil(int column, int row) {
+    writeStencilDisc();
+    glDisable(GL_STENCIL_TEST);
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glColor3f(0.2f, 0.7f, 0.3f);
+    drawRect(-1.0f, -1.2f, 1.0f, 1.2f, 0.5f);
+
+    scissorCell(column, row, 0);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+
+    glEnable(GL_STENCIL_TEST);
+    glStencilFunc(GL_EQUAL, 1, 0xFF);
+    drawStripes(-0.5f);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_DEPTH_TEST);
+}
+
+// Stencil-only clear keeps depth: small green square in front, stencil cleared to 0, red quad behind with
+// EQUAL 0 -> red around the green square. Lost depth: all red; uncleared stencil: only green
+void drawStencilClearKeepsDepth(int column, int row) {
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glColor3f(0.2f, 0.7f, 0.3f);
+    drawRect(-0.4f, -0.4f, 0.4f, 0.4f, 0.5f);
+
+    clearCellStencil(column, row);
+
+    glEnable(GL_STENCIL_TEST);
+    glStencilFunc(GL_EQUAL, 0, 0xFF);
+    glColor3f(0.9f, 0.1f, 0.1f);
+    drawRect(-1.0f, -1.2f, 1.0f, 1.2f, -0.5f);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_DEPTH_TEST);
+}
+
+void printPage(int page) {
+    consoleClear();
+    std::printf("c3dgl fragment test, page %i/2\n\n", page + 1);
+    if (page == 0) {
+        std::printf("Expected on the top screen,\n"
+                    "left to right, top row (alpha test):\n"
+                    "- GREATER 0.5: white RIGHT half\n"
+                    "  of the gray outline\n"
+                    "- LESS 0.5: white LEFT half\n"
+                    "- cutout: hard orange disc on\n"
+                    "  blue/white stripes\n"
+                    "- cutout + depth: orange disc,\n"
+                    "  green all around it\n"
+                    "bottom row (texture env):\n"
+                    "- MODULATE: green/black checker;\n"
+                    "  soft green disc (alpha tex)\n"
+                    "- REPLACE: white/black checker;\n"
+                    "  soft orange disc\n"
+                    "- DECAL: orange disc fading\n"
+                    "  into an opaque green square\n"
+                    "- BLEND: blue/yellow checker;\n"
+                    "  ADD: white/dark red checker\n");
+    } else {
+        std::printf("Expected on the top screen,\n"
+                    "left to right, top row (stencil):\n"
+                    "- EQUAL: stripes INSIDE a disc\n"
+                    "- clear value: stripes OUTSIDE\n"
+                    "  the disc\n"
+                    "- INCR: 3 discs, blue/green/yellow\n"
+                    "  for 1/2/3 overlaps\n"
+                    "- INVERT + write mask: 2 magenta\n"
+                    "  squares, overlap empty\n"
+                    "bottom row (glClear):\n"
+                    "- scissor: red box, dark border\n"
+                    "- color mask: yellow | cyan in a\n"
+                    "  red | blue frame\n"
+                    "- depth only: stripes in a disc\n"
+                    "  on green\n"
+                    "- stencil only: green square in\n"
+                    "  a red cell\n");
+    }
+    std::printf("\nA: next page   START: exit\n");
+}
+
 } // namespace
 
 int main() {
@@ -230,45 +450,47 @@ int main() {
         return 1;
     }
 
-    std::printf("c3dgl fragment test\n\n"
-                "Expected on the top screen,\n"
-                "left to right, top row (alpha test):\n"
-                "- GREATER 0.5: white RIGHT half\n"
-                "  of the gray outline\n"
-                "- LESS 0.5: white LEFT half\n"
-                "- cutout: hard orange disc on\n"
-                "  blue/white stripes\n"
-                "- cutout + depth: orange disc,\n"
-                "  green all around it\n"
-                "bottom row (texture env):\n"
-                "- MODULATE: green/black checker;\n"
-                "  soft green disc (alpha tex)\n"
-                "- REPLACE: white/black checker;\n"
-                "  soft orange disc\n"
-                "- DECAL: orange disc fading\n"
-                "  into an opaque green square\n"
-                "- BLEND: blue/yellow checker;\n"
-                "  ADD: white/dark red checker\n\n"
-                "START: exit\n");
-
     const Textures textures = {createSprite(), createAlphaDisc(), createChecker(GL_RGB), createChecker(GL_LUMINANCE)};
     const GLuint sprite = textures.sprite;
     glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
 
+    int page = 0;
+    printPage(page);
+
     while (aptMainLoop()) {
         hidScanInput();
-        if (hidKeysDown() & KEY_START) break;
+        const u32 keys = hidKeysDown();
+        if (keys & KEY_START) break;
+        if (keys & KEY_A) {
+            page = 1 - page;
+            printPage(page);
+        }
 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        if (page == 0) {
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        beginCell(0, 0); drawAlphaGradient(GL_GREATER);
-        beginCell(1, 0); drawAlphaGradient(GL_LESS);
-        beginCell(2, 0); drawCutout(sprite);
-        beginCell(3, 0); drawCutoutDepth(sprite);
-        beginCell(0, 1); drawModulate(textures);
-        beginCell(1, 1); drawReplace(textures);
-        beginCell(2, 1); drawDecal(textures);
-        beginCell(3, 1); drawBlendAdd(textures);
+            beginCell(0, 0); drawAlphaGradient(GL_GREATER);
+            beginCell(1, 0); drawAlphaGradient(GL_LESS);
+            beginCell(2, 0); drawCutout(sprite);
+            beginCell(3, 0); drawCutoutDepth(sprite);
+            beginCell(0, 1); drawModulate(textures);
+            beginCell(1, 1); drawReplace(textures);
+            beginCell(2, 1); drawDecal(textures);
+            beginCell(3, 1); drawBlendAdd(textures);
+        } else {
+            // Memory fill path: no scissor, full masks, depth + stencil together
+            glClearStencil(3);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+            beginCell(0, 0); drawStencilInside();
+            beginCell(1, 0); drawStencilClearValue();
+            beginCell(2, 0); drawStencilCount(2, 0);
+            beginCell(3, 0); drawStencilInvert(3, 0);
+            beginCell(0, 1); drawScissorClear(0, 1);
+            beginCell(1, 1); drawColorMaskClear(1, 1);
+            beginCell(2, 1); drawDepthClearKeepsStencil(2, 1);
+            beginCell(3, 1); drawStencilClearKeepsDepth(3, 1);
+        }
 
         c3dglSwapBuffers();
     }

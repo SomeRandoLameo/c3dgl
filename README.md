@@ -76,7 +76,7 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 
 - `cube`: 3D, depth test, culling, textures (NPOT and PNG), scissor, sub-viewports
 - `primitives`: every primitive mode, one cell each, with culling on to catch wrong winding
-- `fragment`: per-fragment operations (alpha test, texture environment)
+- `fragment`: per-fragment operations (alpha test, texture environment, stencil, `glClear`); A switches pages
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
 c3dgl itself does not.
@@ -99,8 +99,9 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - Textures of any size up to 1024x1024: RGBA8, RGB8, luminance/alpha, luminance, alpha, RGB565, RGBA5551, RGBA4;
   `glTexSubImage2D`, `glGetTexImage`, nearest/linear filtering, repeat/clamp/mirror wrapping
 - Texture environment (`glTexEnv`): `GL_MODULATE`, `GL_REPLACE`, `GL_DECAL`, `GL_BLEND`, `GL_ADD`, `GL_TEXTURE_ENV_COLOR`
-- Blending (`glBlendFunc`), alpha test (`glAlphaFunc`), depth test/function/mask, color mask, face culling, scissor,
-  viewport, line width, point size
+- Blending (`glBlendFunc`), alpha test (`glAlphaFunc`), stencil (`glStencilFunc`/`Op`/`Mask`), depth
+  test/function/mask, color mask, face culling, scissor, viewport, line width, point size
+- `glClear` of color, depth and stencil, honoring scissor and write masks
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
@@ -108,7 +109,7 @@ The full list of functions is `include/GL/gl.h`.
 ## Not supported
 
 Lighting, fog, mipmaps (only level 0 is used), `glReadPixels`, `glPolygonMode` other than `GL_FILL`, round points
-(`GL_POINT_SMOOTH`) and stereoscopic 3D. `glClear` ignores scissor and color mask. `GL_REPEAT` on non-power-of-two
+(`GL_POINT_SMOOTH`) and stereoscopic 3D. `GL_REPEAT` on non-power-of-two
 textures samples the padding.
 
 ## How it works
@@ -118,7 +119,10 @@ textures samples the padding.
   setters, so code that binds and unbinds a texture around every quad still ends up in one draw call.
 - The PICA200 vertex shader (`shaders/c3dgl.v.pica`) applies `post * projection * modelview`, where `post`
   rotates to the 3DS screen orientation and maps depth to PICA's [-1, 0] range.
-- `GL_LINES` has no PICA equivalent: lines are transformed on the CPU and expanded to screen-aligned quads.
+- Strips, fans, quads and polygons are split into triangles on the CPU. Lines and points have no PICA
+  equivalent: they are transformed on the CPU and expanded to screen-aligned quads.
+- Depth and stencil share one D24S8 buffer. `glClear` uses a memory fill when it can; clearing only depth or
+  only stencil (once stencil is in use), or clearing with a scissor box or color mask, draws a full-screen quad.
 - Textures are padded to power-of-two sizes and Morton-swizzled on upload; the shader scales the UVs.
 - Textures deleted during a frame are freed after the GPU finished that frame.
 - One render target per screen; switching flushes the batch and changes the target within the same frame.

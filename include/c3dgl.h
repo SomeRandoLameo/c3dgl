@@ -20,7 +20,8 @@
 //   - Matrix stacks (modelview, projection), glOrtho/glFrustum/glTranslate/glRotate/glScale/glMultMatrix
 //   - Textures: RGBA8, RGB8, LA8, L8, A8, RGB565, RGBA5551, RGBA4; any size up to 1024x1024
 //   - Texture environment: GL_MODULATE, GL_REPLACE, GL_DECAL, GL_BLEND, GL_ADD
-//   - Blending, alpha test, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
+//   - Blending, alpha test, stencil, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
+//   - glClear of color/depth/stencil honors scissor and write masks
 //
 // Not supported: lighting, fog, mipmaps, glReadPixels, glPolygonMode other than GL_FILL. Points are always square (no GL_POINT_SMOOTH).
 //
