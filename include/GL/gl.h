@@ -146,16 +146,10 @@ typedef void            GLvoid;
 #define GL_POLYGON_OFFSET_POINT             0x2A01
 #define GL_POLYGON_OFFSET_LINE              0x2A02
 #define GL_POLYGON_OFFSET_FILL              0x8037
-
-// Capabilities that are accepted and reported by glIsEnabled, but have no effect (enabling the
-// non-cosmetic ones logs a warning)
-#define GL_POINT_SMOOTH                     0x0B10
-#define GL_POLYGON_SMOOTH                   0x0B41
 #define GL_LIGHTING                         0x0B50
 #define GL_COLOR_MATERIAL                   0x0B57
-#define GL_FOG                              0x0B60
 #define GL_NORMALIZE                        0x0BA1
-#define GL_DITHER                           0x0BD0
+#define GL_RESCALE_NORMAL                   0x803A      // ES, GL 1.2
 #define GL_LIGHT0                           0x4000
 #define GL_LIGHT1                           0x4001
 #define GL_LIGHT2                           0x4002
@@ -164,6 +158,35 @@ typedef void            GLvoid;
 #define GL_LIGHT5                           0x4005
 #define GL_LIGHT6                           0x4006
 #define GL_LIGHT7                           0x4007
+
+// Capabilities that are accepted and reported by glIsEnabled, but have no effect (enabling the
+// non-cosmetic ones logs a warning)
+#define GL_POINT_SMOOTH                     0x0B10
+#define GL_POLYGON_SMOOTH                   0x0B41
+#define GL_FOG                              0x0B60
+#define GL_DITHER                           0x0BD0
+
+// Lighting (glLight, glLightModel, glMaterial, glColorMaterial)
+#define GL_AMBIENT                          0x1200
+#define GL_DIFFUSE                          0x1201
+#define GL_SPECULAR                         0x1202
+#define GL_POSITION                         0x1203
+#define GL_SPOT_DIRECTION                   0x1204
+#define GL_SPOT_EXPONENT                    0x1205
+#define GL_SPOT_CUTOFF                      0x1206
+#define GL_CONSTANT_ATTENUATION             0x1207
+#define GL_LINEAR_ATTENUATION               0x1208
+#define GL_QUADRATIC_ATTENUATION            0x1209
+#define GL_EMISSION                         0x1600
+#define GL_SHININESS                        0x1601
+#define GL_AMBIENT_AND_DIFFUSE              0x1602
+#define GL_COLOR_INDEXES                    0x1603      // Color index mode: stored only
+#define GL_LIGHT_MODEL_LOCAL_VIEWER         0x0B51
+#define GL_LIGHT_MODEL_TWO_SIDE             0x0B52
+#define GL_LIGHT_MODEL_AMBIENT              0x0B53
+#define GL_COLOR_MATERIAL_FACE              0x0B55
+#define GL_COLOR_MATERIAL_PARAMETER         0x0B56
+#define GL_MAX_LIGHTS                       0x0D31
 
 // Client arrays
 #define GL_VERTEX_ARRAY                     0x8074
@@ -542,7 +565,7 @@ void glEnd(void);
 void glVertex3f(GLfloat x, GLfloat y, GLfloat z);
 void glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w);    // Divided by w, which must not be 0
 void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q); // r is ignored (2D textures only)
-void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz);            // Stored only, there is no lighting yet
+void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz);
 void glColor4f(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
 void glColor4ub(GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha);
 void glRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2);
@@ -740,7 +763,27 @@ void glPopAttrib(void);
 void glPushClientAttrib(GLbitfield mask);
 void glPopClientAttrib(void);
 
-// Evaluators (GL): order up to 30; evaluated normals are computed but not used yet (no lighting)
+// Lighting: 8 lights, computed per vertex like GL 1.1 (two-sided, local viewer, spot lights, attenuation).
+// i/iv: colors are mapped like glColor (most positive integer = 1.0), positions and directions are not
+void glLightf(GLenum light, GLenum pname, GLfloat param);
+void glLightfv(GLenum light, GLenum pname, const GLfloat *params);
+void glLighti(GLenum light, GLenum pname, GLint param);
+void glLightiv(GLenum light, GLenum pname, const GLint *params);
+void glLightModelf(GLenum pname, GLfloat param);
+void glLightModelfv(GLenum pname, const GLfloat *params);
+void glLightModeli(GLenum pname, GLint param);
+void glLightModeliv(GLenum pname, const GLint *params);
+void glMaterialf(GLenum face, GLenum pname, GLfloat param);
+void glMaterialfv(GLenum face, GLenum pname, const GLfloat *params);
+void glMateriali(GLenum face, GLenum pname, GLint param);
+void glMaterialiv(GLenum face, GLenum pname, const GLint *params);
+void glColorMaterial(GLenum face, GLenum mode);
+void glGetLightfv(GLenum light, GLenum pname, GLfloat *params);
+void glGetLightiv(GLenum light, GLenum pname, GLint *params);
+void glGetMaterialfv(GLenum face, GLenum pname, GLfloat *params);
+void glGetMaterialiv(GLenum face, GLenum pname, GLint *params);
+
+// Evaluators (GL): order up to 30
 void glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat *points);
 void glMap1d(GLenum target, GLdouble u1, GLdouble u2, GLint stride, GLint order, const GLdouble *points);
 void glMap2f(GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLint uorder,
@@ -805,6 +848,14 @@ void glTexParameterx(GLenum target, GLenum pname, GLfixed param);
 void glTexParameterxv(GLenum target, GLenum pname, const GLfixed *params);
 void glGetTexParameterxv(GLenum target, GLenum pname, GLfixed *params);
 void glTranslatex(GLfixed x, GLfixed y, GLfixed z);
+void glLightx(GLenum light, GLenum pname, GLfixed param);
+void glLightxv(GLenum light, GLenum pname, const GLfixed *params);
+void glLightModelx(GLenum pname, GLfixed param);
+void glLightModelxv(GLenum pname, const GLfixed *params);
+void glMaterialx(GLenum face, GLenum pname, GLfixed param);
+void glMaterialxv(GLenum face, GLenum pname, const GLfixed *params);
+void glGetLightxv(GLenum light, GLenum pname, GLfixed *params);
+void glGetMaterialxv(GLenum face, GLenum pname, GLfixed *params);
 
 #ifdef __cplusplus
 }

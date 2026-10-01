@@ -26,7 +26,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glDrawArrays`, `glDrawElements` (ubyte/ushort indices; uint (GL))
 * [x] All array types and sizes: `GL_BYTE`, `GL_SHORT`, `GL_FIXED` (ES), `GL_INT`, `GL_DOUBLE` (GL), `GL_FLOAT`; unsigned color types
 * [x] Size 4 texcoord arrays with per-vertex q, size 4 vertex arrays (divided by w)
-* [x] `glNormalPointer`, `GL_NORMAL_ARRAY` (normals read; not used until lighting)
+* [x] `glNormalPointer`, `GL_NORMAL_ARRAY`
 * [x] `glArrayElement`, `glInterleavedArrays` (GL)
 * [x] `glGetPointerv`, array state queries, validation errors
 * [ ] `glPointSizePointerOES`, `GL_POINT_SIZE_ARRAY_OES` (ES, required extension)
@@ -55,16 +55,21 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `x` entry points of the implemented features: `glAlphaFuncx`, `glClearColorx`, `glClearDepthx`, `glColor4x`,
   `glDepthRangex`, `glFrustumx`, `glGetFixedv`, `glLineWidthx`, `glLoadMatrixx`, `glMultMatrixx`, `glNormal3x`,
   `glOrthox`, `glPointSizex`, `glPolygonOffsetx`, `glRotatex`, `glScalex`, `glTexEnvx(v)`, `glTexParameterx(v)`, `glTranslatex`
-* [ ] `x` entry points that come with their features: `glClipPlanex`, `glFogx(v)`, `glLightx(v)`, `glLightModelx(v)`,
-  `glMaterialx(v)`, `glMultiTexCoord4x`, `glPointParameterx(v)`, `glSampleCoveragex`, `glGet*xv`
+* [x] `glLightx(v)`, `glLightModelx(v)`, `glMaterialx(v)`, `glGetLightxv`, `glGetMaterialxv`, `glMultiTexCoord4x`
+* [ ] `x` entry points that come with their features: `glClipPlanex`, `glFogx(v)`, `glPointParameterx(v)`,
+  `glSampleCoveragex`, `glGetClipPlanex`
 
 ## Lighting
 
-* [ ] `glLight*`, `glLightModel*`, `glMaterial*`, `glGetLight*`, `glGetMaterial*`
-* [ ] Actual lighting calculation (8 lights, two-sided, local viewer)
-* [ ] `glColorMaterial` (GL), `GL_COLOR_MATERIAL` (both)
-* [ ] `GL_NORMALIZE`, `GL_RESCALE_NORMAL` (ES)
-* [~] `glNormal*` — stored for queries only
+* [x] `glLight*`, `glLightModel*`, `glMaterial*` (`f`/`fv`/`i`/`iv`/`x`/`xv`), `glGetLight*`, `glGetMaterial*`
+* [x] Lighting calculation per vertex on the CPU (GL 1.1 formula): 8 lights, directional/positional, attenuation,
+  spot lights, specular, two-sided (back color picked per polygon facing), local viewer
+* [x] `glColorMaterial` (GL), `GL_COLOR_MATERIAL` (both; also with color arrays and evaluated colors)
+* [x] `GL_NORMALIZE`, `GL_RESCALE_NORMAL`
+* [x] Normals from `glNormal*`, normal arrays and evaluators (`GL_MAP*_NORMAL`, `GL_AUTO_NORMAL`)
+* [x] Lighting state in `glPushAttrib` (`GL_LIGHTING_BIT`, `GL_ENABLE_BIT`, `GL_TRANSFORM_BIT`)
+* [~] Performance: CPU lighting halves the frame rate of the lighting example (~17k lit vertices per frame, 20 -> 10
+  FPS in Azahar); a vertex shader path for the common case (filled, smooth) would fix it
 
 ## Fog
 
@@ -156,7 +161,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [ ] Display lists: `glNewList`, `glEndList`, `glCallList(s)`, `glGenLists`, `glDeleteLists`, `glIsList`, `glListBase`
 * [x] Attribute stacks: `glPushAttrib`/`glPopAttrib`, `glPushClientAttrib`/`glPopClientAttrib` (16 deep, all groups of the
   implemented state; groups of missing features fill in with them)
-* [ ] Evaluators: `glMap1/2`, `glMapGrid*`, `glEvalCoord*`, `glEvalMesh*`, `glEvalPoint*` (stubs), `glGetMap*`, `GL_AUTO_NORMAL`
+* [x] Evaluators: `glMap1/2`, `glMapGrid*`, `glEvalCoord*`, `glEvalMesh*`, `glEvalPoint*`, `glGetMap*`, `GL_AUTO_NORMAL`
 * [ ] Feedback and selection: `glRenderMode`, `glFeedbackBuffer`, `glSelectBuffer`, `glInitNames`, `glPushName`, `glPopName`, `glLoadName`, `glPassThrough`
 * [ ] Accumulation buffer: `glAccum`, `glClearAccum`
 * [ ] `glDrawBuffer`, `glReadBuffer`
@@ -167,7 +172,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glGetBooleanv`, `glGetIntegerv`, `glGetFloatv`, `glGetDoublev` (GL) for the implemented state
 * [x] `glGetError`, `glGetString`, `glIsEnabled`, `glIsTexture`
 * [x] `glGetFixedv` (ES), `glGetPointerv`, `glGetBufferParameteriv` (ES)
-* [ ] `glGetLight*`, `glGetMaterial*`, `glGetClipPlane*`
+* [x] `glGetLight*`, `glGetMaterial*`, lighting state in `glGet*`
+* [ ] `glGetClipPlane*`
 * [ ] `GL_EXTENSIONS` lists nothing yet (ES 1.1 requires the point sprite / point size array / paletted texture names)
 * [~] `glHint` — accepted, hints have no effect (allowed by the spec)
 
@@ -180,7 +186,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 ## GLU (`c3dgl::glu`, Mesa GLU 9.0.3)
 
 * [x] Matrices, `gluProject`/`gluUnProject`, `gluScaleImage`, quadrics, tessellator, NURBS in `GLU_NURBS_TESSELLATOR` mode
-* [ ] NURBS rendering through GL (needs evaluators)
+* [x] NURBS rendering through GL (`GLU_NURBS_RENDERER`, evaluators)
 * [ ] `gluBuild1DMipmaps` (needs 1D textures); `gluBuild3DMipmaps` fails by design (GL 1.2)
 
 ## c3dgl Platform
@@ -201,9 +207,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 # Main Remaining Work
 
 ```text
-[ ] Lighting                          [ ] Display lists (GL)
-[ ] Fog                               [ ] Texture copies, glReadPixels
-[ ] Compressed / paletted textures    [ ] Evaluators (GL)
+[ ] Fog                               [ ] Display lists (GL)
+[ ] Compressed / paletted textures    [ ] Texture copies, glReadPixels
 [ ] Clip planes                       [ ] Feedback / selection (GL)
 [ ] Smooth points/lines               [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
 [ ] Point parameters + sprites (ES)   [ ] Accumulation buffer (GL)
@@ -223,4 +228,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] GLU (Mesa)                       [x] ES fixed-point API (implemented features)
 [x] VBOs (ES)                         [x] Multitexturing + GL_COMBINE (ES)
 [x] Mipmapping (+ GL_GENERATE_MIPMAP) [x] Attribute stacks (GL)
+[x] Lighting (CPU, per vertex)        [x] Evaluators (GL)
 ```

@@ -90,6 +90,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
   page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps
 - `fragment`: per-fragment operations (alpha test, texture environment, stencil, `glClear`); A switches pages
+- `lighting`: directional, point and spot lights, specular, several lights, color material, two-sided lighting,
+  flat shading with `GL_NORMALIZE`/`GL_RESCALE_NORMAL`; self-checks of the lighting API on the bottom screen
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
 c3dgl itself does not.
@@ -134,14 +136,16 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - Pixel store modes (alignment, row length, skip rows/pixels, byte swapping), texture borders, proxy textures,
   `glGetTexLevelParameter`
 - GLU: the complete Mesa GLU 9.0.3 (`c3dgl::glu`, `<GL/glu.h>`), see [GLU](#glu)
-- Lighting, fog, dithering and smoothing can be enabled and queried but have no effect yet
+- Lighting: 8 lights (directional, positional with attenuation, spot), materials per face, `glColorMaterial`,
+  two-sided lighting, local viewer, `GL_NORMALIZE`, `GL_RESCALE_NORMAL`; `glGetLight`, `glGetMaterial`
+- Fog, dithering and smoothing can be enabled and queried but have no effect yet
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
 
 ## Not supported
 
-Lighting, fog, display lists, `glReadPixels`, round points (`GL_POINT_SMOOTH`) and stereoscopic 3D. Mipmap levels
+Fog, display lists, `glReadPixels`, round points (`GL_POINT_SMOOTH`) and stereoscopic 3D. Mipmap levels
 below 8x8 are accepted but not sampled (PICA stops at 8x8).
 `GL_REPEAT` on non-power-of-two textures samples the padding.
 
@@ -154,6 +158,9 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
   rotates to the 3DS screen orientation and maps depth to PICA's [-1, 0] range.
 - Strips, fans, quads and polygons are split into triangles on the CPU. Lines and points have no PICA
   equivalent: they are transformed on the CPU and expanded to screen-aligned quads.
+- Lighting is computed per vertex on the CPU when the vertex is submitted (GL 1.1's formula), the lit color
+  replaces the vertex color. Flat shading, lines and points therefore need nothing extra; two-sided lighting computes
+  a back color too, and each polygon takes the one of the side it shows. It costs CPU time per lit vertex.
 - Assembling primitives on the CPU also gives flat shading (the provoking vertex's color on every vertex),
   `glPolygonMode` (outlines and vertices per polygon, culled on the CPU) and the slope part of `glPolygonOffset`
   (computed per polygon, passed as a per-vertex depth bias that the vertex shader adds).

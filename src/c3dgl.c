@@ -12,6 +12,9 @@
 //     (provoking vertex color), glPolygonMode (outlines/vertices of each polygon, culled on the CPU) and the
 //     slope part of glPolygonOffset (per-vertex depth bias that the vertex shader adds).
 //   - Lines and points have no PICA equivalent: they are transformed on the CPU and expanded to quads in NDC.
+//   - Lighting is computed per vertex on the CPU when the vertex is submitted (exact GL 1.1 formula); the lit color
+//     replaces the vertex color, so flat shading, lines and points need nothing special. Two-sided lighting also
+//     computes the back color, emitPolygon() picks one per polygon from its facing.
 //   - Textures are padded to power-of-two sizes and Morton-swizzled. The shader applies the texture matrix
 //     combined with the scale back from the padded size; a projective texture matrix uses PICA's projection mode.
 //   - One render target per screen, sharing the vertex buffer and GL state; c3dglSetScreen() flushes the
@@ -20,7 +23,7 @@
 //   - Depth and stencil share one D24S8 buffer that a memory fill can only clear as a whole. glClear uses the
 //     fill when that is equivalent, otherwise it draws a full-screen quad (scissor, masks, depth or stencil only).
 //
-// Known limitations: no mipmaps, no glReadPixels, REPEAT wrap on non-power-of-two textures samples the padding.
+// Known limitations: no glReadPixels, REPEAT wrap on non-power-of-two textures samples the padding.
 #include "GL/gl.h"
 #include "c3dgl.h"
 
@@ -44,6 +47,7 @@
 #define C3DGL_TEXTURE_UNITS     3           // PICA texture units 0..2 (unit 3 is procedural only)
 #define C3DGL_ATTRIB_STACK      16          // glPushAttrib / glPushClientAttrib depth (GL minimum)
 #define C3DGL_MAX_EVAL_ORDER    30          // Evaluator order (GL minimum 8)
+#define C3DGL_MAX_LIGHTS        8
 #define C3DGL_MAX_TEXTURE_SIZE  1024
 #define MAX_TEXTURE_LEVEL       10          // log2(C3DGL_MAX_TEXTURE_SIZE)
 
@@ -72,10 +76,40 @@ typedef struct {
     u8 color[4];
     float depthBias;            // Added to PICA NDC depth by the shader: polygon offset of filled polygons
     float texExtra[C3DGL_TEXTURE_UNITS - 1][3];     // Units 1, 2: s, t, q
+    u8 backColor[4];            // Lit color of back faces (two-sided lighting only); not sent to the GPU
 } Vertex;
 
 #define GPU_VERTEX_SIZE     offsetof(Vertex, texExtra)
 #define GPU_EXTRA_SIZE      sizeof(((Vertex *)0)->texExtra)
+
+typedef struct {
+    float ambient[4], diffuse[4], specular[4];
+    float position[4];          // Eye coordinates (transformed by the modelview of the glLight call)
+    float spotDirection[3];     // Eye coordinates
+    float spotExponent, spotCutoff;
+    float attenuation[3];       // Constant, linear, quadratic
+
+    // Derived by updateLight(), so that lightVertex() does not redo them per vertex
+    float unitPosition[3];      // Directional light: unit vector to the light
+    float halfVector[3];        // Directional light, no local viewer: unit half vector
+    float spotUnit[3];          // Unit spot direction
+    float spotCos;              // cos(spotCutoff)
+} Light;
+
+typedef struct {
+    float ambient[4], diffuse[4], specular[4], emission[4];
+    float shininess;
+    float colorIndexes[3];      // Color index mode, stored only
+} Material;
+
+// glLight, glLightModel, glMaterial and glColorMaterial state (GL_LIGHTING_BIT without the enables)
+typedef struct {
+    Light lights[C3DGL_MAX_LIGHTS];
+    Material material[2];       // Front, back
+    float modelAmbient[4];
+    bool localViewer, twoSide;
+    GLenum colorMaterialFace, colorMaterialMode;
+} LightingState;
 
 typedef struct {
     float m[16];                // Column-major, like OpenGL
@@ -223,7 +257,7 @@ static struct {
     GLenum error;                       // First error since the last glGetError()
     u32 ignoredCaps;                    // Capabilities accepted but not implemented, see ignoredCapBit()
     GLenum shadeModel;
-    float currentNormal[3];             // Only stored for glGet (no lighting)
+    float currentNormal[3];
     float currentTexR[C3DGL_TEXTURE_UNITS];     // r of the current texcoords, only for glGet
     bool texQUsed;                      // A texcoord with q != 1 was submitted: sticky projection mode
 
@@ -272,6 +306,15 @@ static struct {
     bool autoNormal;
     int grid1n, grid2un, grid2vn;       // glMapGrid
     float grid1u1, grid1u2, grid2u1, grid2u2, grid2v1, grid2v2;
+
+    // Lighting, see lightVertex()
+    LightingState lighting;
+    bool lightingEnabled, colorMaterial, normalize, rescaleNormal;
+    u8 lightEnabled;                    // Bit per light
+    float normalMatrix[9];              // Inverse transpose of the modelview's upper 3x3 (row-major), for normalSerial
+    float normalRescale;                // GL_RESCALE_NORMAL factor
+    u32 normalSerial;
+
     Texture textures[C3DGL_MAX_TEXTURES];
 
     // Textures deleted during a frame are freed once the GPU is done with that frame
@@ -960,11 +1003,13 @@ static void emitPoint(const Vertex *v, float zBias)
     emitExpandedQuad(v, v, p, p, 0.0f, ry, rx, 0.0f);
 }
 
-// Copy of v with the color of the provoking vertex pv (flat shading, NULL: smooth) and a depth bias
-static Vertex shadeVertex(const Vertex *v, const Vertex *pv, float depthBias)
+// Copy of v with the color of the provoking vertex pv (flat shading, NULL: smooth) and a depth bias.
+// back: take the back color (back-facing polygon with two-sided lighting)
+static Vertex shadeVertex(const Vertex *v, const Vertex *pv, float depthBias, bool back)
 {
     Vertex out = *v;
-    if (pv != NULL) memcpy(out.color, pv->color, sizeof(out.color));
+    const Vertex *src = (pv != NULL)? pv : v;
+    memcpy(out.color, back? src->backColor : src->color, sizeof(out.color));
     out.depthBias = depthBias;
     return out;
 }
@@ -974,7 +1019,7 @@ static Vertex shadeVertex(const Vertex *v, const Vertex *pv, float depthBias)
 
 static void emitShadedLine(const Vertex *a, const Vertex *b, const Vertex *pv)
 {
-    Vertex va = shadeVertex(a, pv, 0.0f), vb = shadeVertex(b, pv, 0.0f);
+    Vertex va = shadeVertex(a, pv, 0.0f, false), vb = shadeVertex(b, pv, 0.0f, false);
     emitLine(&va, &vb, 0.0f);
 }
 
@@ -1034,10 +1079,14 @@ static float polygonOffset(const Vertex *const *vs, int n)
 static void emitPolygon(const Vertex *const *vs, const bool *edges, int n, const Vertex *pv)
 {
     GLenum mode = GL_FILL;
-    if ((gl.polygonMode[0] != GL_FILL) || (gl.polygonMode[1] != GL_FILL))
+    bool polygonModes = (gl.polygonMode[0] != GL_FILL) || (gl.polygonMode[1] != GL_FILL);
+    bool twoSided = gl.lightingEnabled && gl.lighting.twoSide;
+    bool front = true;
+    if (polygonModes || twoSided) front = (polygonArea(vs, n) > 0.0f) == (gl.state.frontFace == GL_CCW);
+    bool back = twoSided && !front;
+    if (polygonModes)
     {
-        // Facing and culling on the CPU: outlines and vertices are drawn in NDC, the GPU cannot cull them
-        bool front = (polygonArea(vs, n) > 0.0f) == (gl.state.frontFace == GL_CCW);
+        // Culling on the CPU: outlines and vertices are drawn in NDC, the GPU cannot cull them
         if (gl.state.cull && ((gl.state.cullFace == GL_FRONT_AND_BACK) || ((gl.state.cullFace == GL_FRONT) == front))) return;
 
         mode = gl.polygonMode[front? 0 : 1];
@@ -1050,10 +1099,10 @@ static void emitPolygon(const Vertex *const *vs, const bool *edges, int n, const
 
     if (mode == GL_FILL)
     {
-        Vertex a = shadeVertex(vs[0], pv, windowOffset);
+        Vertex a = shadeVertex(vs[0], pv, windowOffset, back);
         for (int i = 1; i + 1 < n; i++)
         {
-            Vertex b = shadeVertex(vs[i], pv, windowOffset), c = shadeVertex(vs[i + 1], pv, windowOffset);
+            Vertex b = shadeVertex(vs[i], pv, windowOffset, back), c = shadeVertex(vs[i + 1], pv, windowOffset, back);
             emitTriangle(&a, &b, &c);
         }
     }
@@ -1063,10 +1112,10 @@ static void emitPolygon(const Vertex *const *vs, const bool *edges, int n, const
         for (int i = 0; i < n; i++)
         {
             if (!edges[i]) continue;
-            Vertex a = shadeVertex(vs[i], pv, 0.0f);
+            Vertex a = shadeVertex(vs[i], pv, 0.0f, back);
             if (mode == GL_LINE)
             {
-                Vertex b = shadeVertex(vs[(i + 1) % n], pv, 0.0f);
+                Vertex b = shadeVertex(vs[(i + 1) % n], pv, 0.0f, back);
                 emitLine(&a, &b, 2.0f*windowOffset);
             }
             else emitPoint(&a, 2.0f*windowOffset);
@@ -1224,6 +1273,227 @@ static void endPrimitive(void)
 }
 
 //----------------------------------------------------------------------------------
+// Lighting (GL 1.1 section 2.13): per vertex on the CPU, when the vertex is submitted
+//----------------------------------------------------------------------------------
+static u8 colorByte(float c)
+{
+    if (c <= 0.0f) return 0;
+    if (c >= 1.0f) return 255;
+    return (u8)(c*255.0f + 0.5f);
+}
+
+static void setColor4(float out[4], float r, float g, float b, float a)
+{
+    out[0] = r; out[1] = g; out[2] = b; out[3] = a;
+}
+
+static float dot3(const float a[3], const float b[3]) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+
+static void normalize3(float v[3])
+{
+    float len = sqrtf(dot3(v, v));
+    if (len > 0.0f) for (int i = 0; i < 3; i++) v[i] /= len;
+}
+
+// Recompute the derived values after a glLight change
+static void updateLight(Light *li)
+{
+    memcpy(li->unitPosition, li->position, sizeof(li->unitPosition));
+    normalize3(li->unitPosition);
+    for (int k = 0; k < 3; k++) li->halfVector[k] = li->unitPosition[k] + ((k == 2)? 1.0f : 0.0f);
+    normalize3(li->halfVector);
+    memcpy(li->spotUnit, li->spotDirection, sizeof(li->spotUnit));
+    normalize3(li->spotUnit);
+    li->spotCos = cosf(li->spotCutoff*(float)M_PI/180.0f);
+}
+
+// GL defaults (GL 1.1 table 6.9)
+static void initLighting(void)
+{
+    LightingState *l = &gl.lighting;
+    memset(l, 0, sizeof(*l));
+    for (int i = 0; i < C3DGL_MAX_LIGHTS; i++)
+    {
+        Light *li = &l->lights[i];
+        float c = (i == 0)? 1.0f : 0.0f;    // Only light 0 is white
+        setColor4(li->ambient, 0.0f, 0.0f, 0.0f, 1.0f);
+        setColor4(li->diffuse, c, c, c, 1.0f);
+        setColor4(li->specular, c, c, c, 1.0f);
+        li->position[2] = 1.0f;             // Directional, along +z
+        li->spotDirection[2] = -1.0f;
+        li->spotCutoff = 180.0f;
+        li->attenuation[0] = 1.0f;
+        updateLight(li);
+    }
+    for (int f = 0; f < 2; f++)
+    {
+        Material *m = &l->material[f];
+        setColor4(m->ambient, 0.2f, 0.2f, 0.2f, 1.0f);
+        setColor4(m->diffuse, 0.8f, 0.8f, 0.8f, 1.0f);
+        setColor4(m->specular, 0.0f, 0.0f, 0.0f, 1.0f);
+        setColor4(m->emission, 0.0f, 0.0f, 0.0f, 1.0f);
+        m->colorIndexes[1] = m->colorIndexes[2] = 1.0f;
+    }
+    setColor4(l->modelAmbient, 0.2f, 0.2f, 0.2f, 1.0f);
+    l->colorMaterialFace = GL_FRONT_AND_BACK;
+    l->colorMaterialMode = GL_AMBIENT_AND_DIFFUSE;
+}
+
+// GL_COLOR_MATERIAL: the tracked material properties take the color (and keep it, like in GL)
+static void applyColorMaterial(const u8 color[4])
+{
+    float c[4];
+    for (int i = 0; i < 4; i++) c[i] = color[i]/255.0f;
+
+    GLenum face = gl.lighting.colorMaterialFace, mode = gl.lighting.colorMaterialMode;
+    for (int f = 0; f < 2; f++)
+    {
+        if ((face != GL_FRONT_AND_BACK) && (face != (f? GL_BACK : GL_FRONT))) continue;
+        Material *m = &gl.lighting.material[f];
+        if ((mode == GL_AMBIENT) || (mode == GL_AMBIENT_AND_DIFFUSE)) memcpy(m->ambient, c, sizeof(c));
+        if ((mode == GL_DIFFUSE) || (mode == GL_AMBIENT_AND_DIFFUSE)) memcpy(m->diffuse, c, sizeof(c));
+        if (mode == GL_SPECULAR) memcpy(m->specular, c, sizeof(c));
+        if (mode == GL_EMISSION) memcpy(m->emission, c, sizeof(c));
+    }
+}
+
+// Normals go to eye space with the inverse transpose of the modelview's upper 3x3 (n' = n M^-1), which is the
+// cofactor matrix divided by the determinant. Also the GL_RESCALE_NORMAL factor: 1/length of M^-1's third row
+static void updateNormalMatrix(void)
+{
+    if (gl.normalSerial == gl.matrixSerial) return;
+    gl.normalSerial = gl.matrixSerial;
+
+    const float *m = gl.stack[0][gl.stackDepth[0]].m;
+    #define M(r, c) m[(c)*4 + (r)]
+    float cof[9] = {
+        M(1,1)*M(2,2) - M(1,2)*M(2,1), M(1,2)*M(2,0) - M(1,0)*M(2,2), M(1,0)*M(2,1) - M(1,1)*M(2,0),
+        M(0,2)*M(2,1) - M(0,1)*M(2,2), M(0,0)*M(2,2) - M(0,2)*M(2,0), M(0,1)*M(2,0) - M(0,0)*M(2,1),
+        M(0,1)*M(1,2) - M(0,2)*M(1,1), M(0,2)*M(1,0) - M(0,0)*M(1,2), M(0,0)*M(1,1) - M(0,1)*M(1,0),
+    };
+    float det = M(0,0)*cof[0] + M(0,1)*cof[1] + M(0,2)*cof[2];
+    #undef M
+
+    float inv = (det != 0.0f)? 1.0f/det : 0.0f;     // Singular: normals collapse to 0 (ambient and emission only)
+    for (int i = 0; i < 9; i++) gl.normalMatrix[i] = cof[i]*inv;
+    const float *n = gl.normalMatrix;
+    float len = sqrtf(n[2]*n[2] + n[5]*n[5] + n[8]*n[8]);
+    gl.normalRescale = (len > 0.0f)? 1.0f/len : 1.0f;
+}
+
+// Lit color of one side: eye = vertex in eye space, n = eye space normal of that side
+static void shadeFace(const Material *m, const float eye[3], const float n[3], u8 out[4])
+{
+    const LightingState *l = &gl.lighting;
+    float c[3];
+    for (int k = 0; k < 3; k++) c[k] = m->emission[k] + m->ambient[k]*l->modelAmbient[k];
+
+    for (int i = 0; i < C3DGL_MAX_LIGHTS; i++)
+    {
+        if (!(gl.lightEnabled & (1u << i))) continue;
+        const Light *li = &l->lights[i];
+
+        // vp: unit vector from the vertex to the light; distance attenuation for positional lights only
+        float vp[3], att = 1.0f;
+        if (li->position[3] != 0.0f)
+        {
+            for (int k = 0; k < 3; k++) vp[k] = li->position[k]/li->position[3] - eye[k];
+            float d2 = dot3(vp, vp), d = sqrtf(d2);
+            if (d > 0.0f) for (int k = 0; k < 3; k++) vp[k] /= d;
+            float denom = li->attenuation[0] + li->attenuation[1]*d + li->attenuation[2]*d2;
+            if (denom > 0.0f) att = 1.0f/denom;
+        }
+        else memcpy(vp, li->unitPosition, sizeof(vp));
+
+        if (li->spotCutoff != 180.0f)
+        {
+            // Outside the cone the light contributes nothing, not even ambient
+            float cosAngle = -dot3(vp, li->spotUnit);
+            if (cosAngle < li->spotCos) continue;
+            att *= powf(cosAngle, li->spotExponent);
+        }
+
+        float r[3];
+        for (int k = 0; k < 3; k++) r[k] = m->ambient[k]*li->ambient[k];
+
+        float ndotl = dot3(n, vp);
+        if (ndotl > 0.0f)
+        {
+            for (int k = 0; k < 3; k++) r[k] += ndotl*m->diffuse[k]*li->diffuse[k];
+
+            float spec[3];
+            for (int k = 0; k < 3; k++) spec[k] = m->specular[k]*li->specular[k];
+            if ((spec[0] != 0.0f) || (spec[1] != 0.0f) || (spec[2] != 0.0f))
+            {
+                // Half vector between vp and the direction to the eye ((0, 0, 1) without local viewer)
+                float h[3], toEye[3] = { 0.0f, 0.0f, 1.0f };
+                if (!l->localViewer && (li->position[3] == 0.0f)) memcpy(h, li->halfVector, sizeof(h));
+                else
+                {
+                    if (l->localViewer)
+                    {
+                        for (int k = 0; k < 3; k++) toEye[k] = -eye[k];
+                        normalize3(toEye);
+                    }
+                    for (int k = 0; k < 3; k++) h[k] = vp[k] + toEye[k];
+                    normalize3(h);
+                }
+                float ndoth = dot3(n, h);
+                if (ndoth > 0.0f)
+                {
+                    float f = powf(ndoth, m->shininess);
+                    for (int k = 0; k < 3; k++) r[k] += f*spec[k];
+                }
+            }
+        }
+
+        for (int k = 0; k < 3; k++) c[k] += att*r[k];
+    }
+
+    for (int k = 0; k < 3; k++) out[k] = colorByte(c[k]);
+    out[3] = colorByte(m->diffuse[3]);
+}
+
+// Replace v's color by the lit color, also the back color with two-sided lighting. normal: in object space
+static void lightVertex(Vertex *v, const float normal[3])
+{
+    if (gl.colorMaterial) applyColorMaterial(v->color);
+    updateNormalMatrix();
+
+    // The eye space position is only needed for positional lights and the local viewer
+    bool needEye = gl.lighting.localViewer;
+    for (int i = 0; i < C3DGL_MAX_LIGHTS; i++)
+        if ((gl.lightEnabled & (1u << i)) && (gl.lighting.lights[i].position[3] != 0.0f)) needEye = true;
+    float eye[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    if (needEye)
+    {
+        mat4Transform(&gl.stack[0][gl.stackDepth[0]], v->pos, eye);
+        if ((eye[3] != 1.0f) && (eye[3] != 0.0f)) for (int k = 0; k < 3; k++) eye[k] /= eye[3];
+    }
+
+    // Not normalized unless asked for, like GL (a scaling modelview changes the brightness)
+    const float *nm = gl.normalMatrix;
+    float n[3];
+    for (int k = 0; k < 3; k++) n[k] = nm[k*3]*normal[0] + nm[k*3 + 1]*normal[1] + nm[k*3 + 2]*normal[2];
+    if (gl.normalize) normalize3(n);
+    else if (gl.rescaleNormal) for (int k = 0; k < 3; k++) n[k] *= gl.normalRescale;
+
+    shadeFace(&gl.lighting.material[0], eye, n, v->color);
+    if (gl.lighting.twoSide)
+    {
+        float back[3] = { -n[0], -n[1], -n[2] };
+        shadeFace(&gl.lighting.material[1], eye, back, v->backColor);
+    }
+}
+
+// Every vertex goes through here: lighting, then primitive assembly
+static void submitLitVertex(Vertex *v, const float normal[3], bool edge)
+{
+    if (gl.lightingEnabled) lightVertex(v, normal);
+    submitVertex(v, edge);
+}
+
+//----------------------------------------------------------------------------------
 // Platform API (c3dgl.h)
 //----------------------------------------------------------------------------------
 bool c3dglInit(void)
@@ -1323,6 +1593,7 @@ bool c3dglInit(void)
     gl.currentEdge = true;
     gl.shadeModel = GL_SMOOTH;
     gl.currentNormal[2] = 1.0f;
+    initLighting();
     gl.ignoredCaps = 1u << 0;     // GL_DITHER is enabled by default
     memset(gl.current.color, 255, 4);
     gl.current.tex[2] = 1.0f;
@@ -1415,9 +1686,7 @@ void c3dglSwapBuffers(void)
 // Capabilities that programs commonly toggle but c3dgl does not implement: stored for glIsEnabled,
 // enabling the ones that change the picture warns once
 static const GLenum ignoredCaps[] = {
-    GL_DITHER, GL_LINE_SMOOTH, GL_POINT_SMOOTH, GL_POLYGON_SMOOTH, GL_LIGHTING, GL_COLOR_MATERIAL, GL_FOG,
-    GL_NORMALIZE, GL_LIGHT0, GL_LIGHT1, GL_LIGHT2, GL_LIGHT3, GL_LIGHT4, GL_LIGHT5,
-    GL_LIGHT6, GL_LIGHT7,
+    GL_DITHER, GL_LINE_SMOOTH, GL_POINT_SMOOTH, GL_POLYGON_SMOOTH, GL_FOG,
 };
 
 static int ignoredCapBit(GLenum cap)
@@ -1451,6 +1720,18 @@ static void setCapability(GLenum cap, bool enable)
             break;
         case GL_CULL_FACE: gl.state.cull = enable; break;
         case GL_SCISSOR_TEST: gl.state.scissor = enable; break;
+        case GL_LIGHTING: gl.lightingEnabled = enable; break;
+        case GL_LIGHT0: case GL_LIGHT1: case GL_LIGHT2: case GL_LIGHT3:
+        case GL_LIGHT4: case GL_LIGHT5: case GL_LIGHT6: case GL_LIGHT7:
+            if (enable) gl.lightEnabled |= 1u << (cap - GL_LIGHT0);
+            else gl.lightEnabled &= ~(1u << (cap - GL_LIGHT0));
+            break;
+        case GL_COLOR_MATERIAL:
+            gl.colorMaterial = enable;
+            if (enable) applyColorMaterial(gl.current.color);     // The material follows the current color from now on
+            break;
+        case GL_NORMALIZE: gl.normalize = enable; break;
+        case GL_RESCALE_NORMAL: gl.rescaleNormal = enable; break;
         case GL_AUTO_NORMAL: gl.autoNormal = enable; break;
         case GL_MAP1_COLOR_4: case GL_MAP1_INDEX: case GL_MAP1_NORMAL: case GL_MAP1_TEXTURE_COORD_1:
         case GL_MAP1_TEXTURE_COORD_2: case GL_MAP1_TEXTURE_COORD_3: case GL_MAP1_TEXTURE_COORD_4:
@@ -1505,6 +1786,13 @@ GLboolean glIsEnabled(GLenum cap)
         case GL_STENCIL_TEST: return gl.state.stencilTest;
         case GL_CULL_FACE: return gl.state.cull;
         case GL_SCISSOR_TEST: return gl.state.scissor;
+        case GL_LIGHTING: return gl.lightingEnabled;
+        case GL_LIGHT0: case GL_LIGHT1: case GL_LIGHT2: case GL_LIGHT3:
+        case GL_LIGHT4: case GL_LIGHT5: case GL_LIGHT6: case GL_LIGHT7:
+            return (gl.lightEnabled >> (cap - GL_LIGHT0)) & 1;
+        case GL_COLOR_MATERIAL: return gl.colorMaterial;
+        case GL_NORMALIZE: return gl.normalize;
+        case GL_RESCALE_NORMAL: return gl.rescaleNormal;
         case GL_AUTO_NORMAL: return gl.autoNormal;
         case GL_MAP1_COLOR_4: case GL_MAP1_INDEX: case GL_MAP1_NORMAL: case GL_MAP1_TEXTURE_COORD_1:
         case GL_MAP1_TEXTURE_COORD_2: case GL_MAP1_TEXTURE_COORD_3: case GL_MAP1_TEXTURE_COORD_4:
@@ -1680,6 +1968,12 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_CULL_FACE_MODE: v[0] = gl.state.cullFace; return 1;
         case GL_FRONT_FACE: v[0] = gl.state.frontFace; return 1;
         case GL_SHADE_MODEL: v[0] = gl.shadeModel; return 1;
+        case GL_MAX_LIGHTS: v[0] = C3DGL_MAX_LIGHTS; return 1;
+        case GL_LIGHT_MODEL_AMBIENT: for (int i = 0; i < 4; i++) v[i] = gl.lighting.modelAmbient[i]; *normalized = true; return 4;
+        case GL_LIGHT_MODEL_LOCAL_VIEWER: v[0] = gl.lighting.localViewer; return 1;
+        case GL_LIGHT_MODEL_TWO_SIDE: v[0] = gl.lighting.twoSide; return 1;
+        case GL_COLOR_MATERIAL_FACE: v[0] = gl.lighting.colorMaterialFace; return 1;
+        case GL_COLOR_MATERIAL_PARAMETER: v[0] = gl.lighting.colorMaterialMode; return 1;
 
         case GL_LINE_WIDTH: v[0] = gl.lineWidth; return 1;
         case GL_POINT_SIZE: v[0] = gl.pointSize; return 1;
@@ -1713,7 +2007,9 @@ static int getState(GLenum pname, double v[16], bool *normalized)
                 (pname == GL_ALPHA_TEST) || (pname == GL_STENCIL_TEST) || (pname == GL_CULL_FACE) || (pname == GL_SCISSOR_TEST) ||
                 (pname == GL_VERTEX_ARRAY) || (pname == GL_TEXTURE_COORD_ARRAY) || (pname == GL_COLOR_ARRAY) || (pname == GL_NORMAL_ARRAY) ||
                 (pname == GL_EDGE_FLAG_ARRAY) || (pname == GL_POLYGON_OFFSET_FILL) || (pname == GL_POLYGON_OFFSET_LINE) ||
-                (pname == GL_POLYGON_OFFSET_POINT) || (pname == GL_AUTO_NORMAL) ||
+                (pname == GL_POLYGON_OFFSET_POINT) || (pname == GL_AUTO_NORMAL) || (pname == GL_LIGHTING) ||
+                ((pname >= GL_LIGHT0) && (pname <= GL_LIGHT7)) || (pname == GL_COLOR_MATERIAL) ||
+                (pname == GL_NORMALIZE) || (pname == GL_RESCALE_NORMAL) ||
                 ((pname >= GL_MAP1_COLOR_4) && (pname <= GL_MAP1_VERTEX_4)) || ((pname >= GL_MAP2_COLOR_4) && (pname <= GL_MAP2_VERTEX_4)))
             {
                 v[0] = glIsEnabled(pname);
@@ -1741,12 +2037,20 @@ void glGetFloatv(GLenum pname, GLfloat *params)
     for (int i = 0; i < n; i++) params[i] = (GLfloat)v[i];
 }
 
+// Integer query of a color/depth: [-1, 1] -> [-INT_MAX, INT_MAX], clamped (light colors may exceed 1)
+static GLint normalizedToInt(double v)
+{
+    if (v >= 1.0) return 2147483647;
+    if (v <= -1.0) return -2147483647;
+    return (GLint)(v*2147483647.0);
+}
+
 void glGetIntegerv(GLenum pname, GLint *params)
 {
     double v[16];
     bool normalized;
     int n = getState(pname, v, &normalized);
-    for (int i = 0; i < n; i++) params[i] = normalized? (GLint)(v[i]*2147483647.0) : (GLint)lround(v[i]);
+    for (int i = 0; i < n; i++) params[i] = normalized? normalizedToInt(v[i]) : (GLint)lround(v[i]);
 }
 
 void glGetBooleanv(GLenum pname, GLboolean *params)
@@ -1784,13 +2088,6 @@ void glScissor(GLint x, GLint y, GLsizei width, GLsizei height)
     gl.state.scissorBox[1] = y;
     gl.state.scissorBox[2] = width;
     gl.state.scissorBox[3] = height;
-}
-
-static u8 colorByte(float c)
-{
-    if (c <= 0.0f) return 0;
-    if (c >= 1.0f) return 255;
-    return (u8)(c*255.0f + 0.5f);
 }
 
 void glClearColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha)
@@ -2098,7 +2395,7 @@ void glVertex3f(GLfloat x, GLfloat y, GLfloat z)
     v.pos[0] = x;
     v.pos[1] = y;
     v.pos[2] = z;
-    submitVertex(&v, gl.currentEdge);
+    submitLitVertex(&v, gl.currentNormal, gl.currentEdge);
 }
 
 // Vertices are stored with w = 1: homogeneous positions are divided (exact unless w <= 0)
@@ -2141,6 +2438,7 @@ void glColor4ub(GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha)
     gl.current.color[1] = green;
     gl.current.color[2] = blue;
     gl.current.color[3] = alpha;
+    if (gl.colorMaterial) applyColorMaterial(gl.current.color);
 }
 
 void glColor4f(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
@@ -2260,6 +2558,285 @@ void glRecti(GLint x1, GLint y1, GLint x2, GLint y2) { glRectf((float)x1, (float
 void glRectiv(const GLint *v1, const GLint *v2) { glRectf((float)v1[0], (float)v1[1], (float)v2[0], (float)v2[1]); }
 void glRects(GLshort x1, GLshort y1, GLshort x2, GLshort y2) { glRectf(x1, y1, x2, y2); }
 void glRectsv(const GLshort *v1, const GLshort *v2) { glRectf(v1[0], v1[1], v2[0], v2[1]); }
+
+//----------------------------------------------------------------------------------
+// OpenGL: lighting parameters (glLight, glLightModel, glMaterial, glColorMaterial)
+//----------------------------------------------------------------------------------
+static bool isColorParam(GLenum pname)
+{
+    return (pname == GL_AMBIENT) || (pname == GL_DIFFUSE) || (pname == GL_SPECULAR) || (pname == GL_EMISSION) ||
+           (pname == GL_AMBIENT_AND_DIFFUSE) || (pname == GL_LIGHT_MODEL_AMBIENT);
+}
+
+// Integer parameters: colors are mapped like glColor*i (most positive integer = 1.0), everything else converted
+static void intParams(GLenum pname, const GLint *in, int count, float *out)
+{
+    bool color = isColorParam(pname);
+    for (int i = 0; i < count; i++) out[i] = color? (float)((2.0*in[i] + 1.0)/4294967295.0) : (float)in[i];
+}
+
+static Light *lightFor(GLenum light)
+{
+    if ((light < GL_LIGHT0) || (light >= GL_LIGHT0 + C3DGL_MAX_LIGHTS)) { setError(GL_INVALID_ENUM); return NULL; }
+    return &gl.lighting.lights[light - GL_LIGHT0];
+}
+
+// Values of a glLight parameter, 0: not a glLight parameter
+static int lightParamCount(GLenum pname)
+{
+    switch (pname)
+    {
+        case GL_AMBIENT: case GL_DIFFUSE: case GL_SPECULAR: case GL_POSITION: return 4;
+        case GL_SPOT_DIRECTION: return 3;
+        case GL_SPOT_EXPONENT: case GL_SPOT_CUTOFF:
+        case GL_CONSTANT_ATTENUATION: case GL_LINEAR_ATTENUATION: case GL_QUADRATIC_ATTENUATION: return 1;
+        default: return 0;
+    }
+}
+
+// Position and spot direction are stored in eye coordinates, transformed by the current modelview
+static void setLight(GLenum light, GLenum pname, const float *p)
+{
+    Light *li = lightFor(light);
+    if (li == NULL) return;
+
+    const float *m = gl.stack[0][gl.stackDepth[0]].m;
+    switch (pname)
+    {
+        case GL_AMBIENT: memcpy(li->ambient, p, sizeof(li->ambient)); break;
+        case GL_DIFFUSE: memcpy(li->diffuse, p, sizeof(li->diffuse)); break;
+        case GL_SPECULAR: memcpy(li->specular, p, sizeof(li->specular)); break;
+        case GL_POSITION:
+            for (int r = 0; r < 4; r++) li->position[r] = m[r]*p[0] + m[4 + r]*p[1] + m[8 + r]*p[2] + m[12 + r]*p[3];
+            break;
+        case GL_SPOT_DIRECTION:
+            for (int r = 0; r < 3; r++) li->spotDirection[r] = m[r]*p[0] + m[4 + r]*p[1] + m[8 + r]*p[2];
+            break;
+        case GL_SPOT_EXPONENT:
+            if ((p[0] < 0.0f) || (p[0] > 128.0f)) { setError(GL_INVALID_VALUE); return; }
+            li->spotExponent = p[0];
+            break;
+        case GL_SPOT_CUTOFF:
+            if (((p[0] < 0.0f) || (p[0] > 90.0f)) && (p[0] != 180.0f)) { setError(GL_INVALID_VALUE); return; }
+            li->spotCutoff = p[0];
+            break;
+        case GL_CONSTANT_ATTENUATION: case GL_LINEAR_ATTENUATION: case GL_QUADRATIC_ATTENUATION:
+            if (p[0] < 0.0f) { setError(GL_INVALID_VALUE); return; }
+            li->attenuation[pname - GL_CONSTANT_ATTENUATION] = p[0];
+            break;
+        default: setError(GL_INVALID_ENUM); return;
+    }
+    updateLight(li);
+}
+
+void glLightfv(GLenum light, GLenum pname, const GLfloat *params) { setLight(light, pname, params); }
+
+void glLightf(GLenum light, GLenum pname, GLfloat param)
+{
+    if (lightParamCount(pname) != 1) { setError(GL_INVALID_ENUM); return; }
+    setLight(light, pname, &param);
+}
+
+void glLightiv(GLenum light, GLenum pname, const GLint *params)
+{
+    int n = lightParamCount(pname);
+    if (n == 0) { setError(GL_INVALID_ENUM); return; }
+    float f[4];
+    intParams(pname, params, n, f);
+    setLight(light, pname, f);
+}
+
+void glLighti(GLenum light, GLenum pname, GLint param)
+{
+    if (lightParamCount(pname) != 1) { setError(GL_INVALID_ENUM); return; }
+    glLightiv(light, pname, &param);
+}
+
+static int lightModelParamCount(GLenum pname)
+{
+    if (pname == GL_LIGHT_MODEL_AMBIENT) return 4;
+    return ((pname == GL_LIGHT_MODEL_LOCAL_VIEWER) || (pname == GL_LIGHT_MODEL_TWO_SIDE))? 1 : 0;
+}
+
+static void setLightModel(GLenum pname, const float *p)
+{
+    switch (pname)
+    {
+        case GL_LIGHT_MODEL_AMBIENT: memcpy(gl.lighting.modelAmbient, p, sizeof(gl.lighting.modelAmbient)); break;
+        case GL_LIGHT_MODEL_LOCAL_VIEWER: gl.lighting.localViewer = (p[0] != 0.0f); break;
+        case GL_LIGHT_MODEL_TWO_SIDE: gl.lighting.twoSide = (p[0] != 0.0f); break;
+        default: setError(GL_INVALID_ENUM); break;
+    }
+}
+
+void glLightModelfv(GLenum pname, const GLfloat *params) { setLightModel(pname, params); }
+
+void glLightModelf(GLenum pname, GLfloat param)
+{
+    if (lightModelParamCount(pname) != 1) { setError(GL_INVALID_ENUM); return; }
+    setLightModel(pname, &param);
+}
+
+void glLightModeliv(GLenum pname, const GLint *params)
+{
+    int n = lightModelParamCount(pname);
+    if (n == 0) { setError(GL_INVALID_ENUM); return; }
+    float f[4];
+    intParams(pname, params, n, f);
+    setLightModel(pname, f);
+}
+
+void glLightModeli(GLenum pname, GLint param)
+{
+    if (lightModelParamCount(pname) != 1) { setError(GL_INVALID_ENUM); return; }
+    glLightModeliv(pname, &param);
+}
+
+static int materialParamCount(GLenum pname)
+{
+    switch (pname)
+    {
+        case GL_AMBIENT: case GL_DIFFUSE: case GL_SPECULAR: case GL_EMISSION: case GL_AMBIENT_AND_DIFFUSE: return 4;
+        case GL_COLOR_INDEXES: return 3;
+        case GL_SHININESS: return 1;
+        default: return 0;
+    }
+}
+
+static bool faceValid(GLenum face) { return (face == GL_FRONT) || (face == GL_BACK) || (face == GL_FRONT_AND_BACK); }
+
+// Also allowed between glBegin and glEnd: the next vertices are lit with the new material
+static void setMaterial(GLenum face, GLenum pname, const float *p)
+{
+    if (!faceValid(face) || (materialParamCount(pname) == 0)) { setError(GL_INVALID_ENUM); return; }
+    if ((pname == GL_SHININESS) && ((p[0] < 0.0f) || (p[0] > 128.0f))) { setError(GL_INVALID_VALUE); return; }
+
+    for (int f = 0; f < 2; f++)
+    {
+        if ((face != GL_FRONT_AND_BACK) && (face != (f? GL_BACK : GL_FRONT))) continue;
+        Material *m = &gl.lighting.material[f];
+        switch (pname)
+        {
+            case GL_AMBIENT: memcpy(m->ambient, p, sizeof(m->ambient)); break;
+            case GL_DIFFUSE: memcpy(m->diffuse, p, sizeof(m->diffuse)); break;
+            case GL_AMBIENT_AND_DIFFUSE:
+                memcpy(m->ambient, p, sizeof(m->ambient));
+                memcpy(m->diffuse, p, sizeof(m->diffuse));
+                break;
+            case GL_SPECULAR: memcpy(m->specular, p, sizeof(m->specular)); break;
+            case GL_EMISSION: memcpy(m->emission, p, sizeof(m->emission)); break;
+            case GL_SHININESS: m->shininess = p[0]; break;
+            default: memcpy(m->colorIndexes, p, sizeof(m->colorIndexes)); break;    // GL_COLOR_INDEXES
+        }
+    }
+}
+
+void glMaterialfv(GLenum face, GLenum pname, const GLfloat *params) { setMaterial(face, pname, params); }
+
+void glMaterialf(GLenum face, GLenum pname, GLfloat param)
+{
+    if (pname != GL_SHININESS) { setError(GL_INVALID_ENUM); return; }
+    setMaterial(face, pname, &param);
+}
+
+void glMaterialiv(GLenum face, GLenum pname, const GLint *params)
+{
+    int n = materialParamCount(pname);
+    if (n == 0) { setError(GL_INVALID_ENUM); return; }
+    float f[4];
+    intParams(pname, params, n, f);
+    setMaterial(face, pname, f);
+}
+
+void glMateriali(GLenum face, GLenum pname, GLint param)
+{
+    if (pname != GL_SHININESS) { setError(GL_INVALID_ENUM); return; }
+    glMaterialiv(face, pname, &param);
+}
+
+void glColorMaterial(GLenum face, GLenum mode)
+{
+    bool modeValid = (mode == GL_EMISSION) || (mode == GL_AMBIENT) || (mode == GL_DIFFUSE) || (mode == GL_SPECULAR) ||
+                     (mode == GL_AMBIENT_AND_DIFFUSE);
+    if (!faceValid(face) || !modeValid) { setError(GL_INVALID_ENUM); return; }
+    gl.lighting.colorMaterialFace = face;
+    gl.lighting.colorMaterialMode = mode;
+    if (gl.colorMaterial) applyColorMaterial(gl.current.color);
+}
+
+// glGetLight: fills v and returns the number of values (0: error). *color: the values are colors
+static int getLight(GLenum light, GLenum pname, float v[4], bool *color)
+{
+    const Light *li = lightFor(light);
+    if (li == NULL) return 0;
+
+    *color = isColorParam(pname);
+    switch (pname)
+    {
+        case GL_AMBIENT: memcpy(v, li->ambient, sizeof(li->ambient)); return 4;
+        case GL_DIFFUSE: memcpy(v, li->diffuse, sizeof(li->diffuse)); return 4;
+        case GL_SPECULAR: memcpy(v, li->specular, sizeof(li->specular)); return 4;
+        case GL_POSITION: memcpy(v, li->position, sizeof(li->position)); return 4;
+        case GL_SPOT_DIRECTION: memcpy(v, li->spotDirection, sizeof(li->spotDirection)); return 3;
+        case GL_SPOT_EXPONENT: v[0] = li->spotExponent; return 1;
+        case GL_SPOT_CUTOFF: v[0] = li->spotCutoff; return 1;
+        case GL_CONSTANT_ATTENUATION: case GL_LINEAR_ATTENUATION: case GL_QUADRATIC_ATTENUATION:
+            v[0] = li->attenuation[pname - GL_CONSTANT_ATTENUATION];
+            return 1;
+        default: setError(GL_INVALID_ENUM); return 0;
+    }
+}
+
+// glGetMaterial: face is GL_FRONT or GL_BACK
+static int getMaterial(GLenum face, GLenum pname, float v[4], bool *color)
+{
+    if ((face != GL_FRONT) && (face != GL_BACK)) { setError(GL_INVALID_ENUM); return 0; }
+
+    const Material *m = &gl.lighting.material[(face == GL_BACK)? 1 : 0];
+    *color = isColorParam(pname);
+    switch (pname)
+    {
+        case GL_AMBIENT: memcpy(v, m->ambient, sizeof(m->ambient)); return 4;
+        case GL_DIFFUSE: memcpy(v, m->diffuse, sizeof(m->diffuse)); return 4;
+        case GL_SPECULAR: memcpy(v, m->specular, sizeof(m->specular)); return 4;
+        case GL_EMISSION: memcpy(v, m->emission, sizeof(m->emission)); return 4;
+        case GL_SHININESS: v[0] = m->shininess; return 1;
+        case GL_COLOR_INDEXES: memcpy(v, m->colorIndexes, sizeof(m->colorIndexes)); return 3;
+        default: setError(GL_INVALID_ENUM); return 0;
+    }
+}
+
+void glGetLightfv(GLenum light, GLenum pname, GLfloat *params)
+{
+    float v[4];
+    bool color;
+    int n = getLight(light, pname, v, &color);
+    for (int i = 0; i < n; i++) params[i] = v[i];
+}
+
+void glGetLightiv(GLenum light, GLenum pname, GLint *params)
+{
+    float v[4];
+    bool color;
+    int n = getLight(light, pname, v, &color);
+    for (int i = 0; i < n; i++) params[i] = color? normalizedToInt(v[i]) : (GLint)lroundf(v[i]);
+}
+
+void glGetMaterialfv(GLenum face, GLenum pname, GLfloat *params)
+{
+    float v[4];
+    bool color;
+    int n = getMaterial(face, pname, v, &color);
+    for (int i = 0; i < n; i++) params[i] = v[i];
+}
+
+void glGetMaterialiv(GLenum face, GLenum pname, GLint *params)
+{
+    float v[4];
+    bool color;
+    int n = getMaterial(face, pname, v, &color);
+    for (int i = 0; i < n; i++) params[i] = color? normalizedToInt(v[i]) : (GLint)lroundf(v[i]);
+}
 
 //----------------------------------------------------------------------------------
 // OpenGL: client-side vertex arrays
@@ -2447,7 +3024,7 @@ static void submitArrayVertex(int index)
         for (int i = 0; i < 3; i++) p[i] /= p[3];
     }
     memcpy(v.pos, p, sizeof(v.pos));
-    submitVertex(&v, edge);
+    submitLitVertex(&v, gl.currentNormal, edge);
 }
 
 // Before drawing from arrays: a vertex array is needed, size 4 texcoords may need projection mode
@@ -3573,10 +4150,9 @@ static int texcoordMap(const struct EvalMap *maps)
     return -1;
 }
 
-// Build and submit the vertex for evaluated values. normal: evaluated normal (kept for lighting, unused so far)
+// Build and submit the vertex for evaluated values. normal: evaluated normal, NULL: the current normal
 static void submitEvaluated(const float *pos, int posSize, const float *color, const float *tex, int texSize, const float *normal)
 {
-    (void)normal;
     Vertex v = gl.current;      // Values without a map come from the current state
     if (color != NULL) for (int c = 0; c < 4; c++) v.color[c] = colorByte(color[c]);
     if (tex != NULL)
@@ -3590,7 +4166,7 @@ static void submitEvaluated(const float *pos, int posSize, const float *color, c
     float w = (posSize == 4)? pos[3] : 1.0f;
     if (w == 0.0f) { WARN_ONCE("Evaluator: w = 0 (point at infinity) not supported\n"); return; }
     for (int c = 0; c < 3; c++) v.pos[c] = pos[c]/w;
-    submitVertex(&v, gl.currentEdge);
+    submitLitVertex(&v, (normal != NULL)? normal : gl.currentNormal, gl.currentEdge);
 }
 
 void glEvalCoord1f(GLfloat u)
@@ -3799,7 +4375,7 @@ void glGetMapiv(GLenum target, GLenum query, GLint *v)
 // OpenGL: attribute stacks (glPushAttrib, glPushClientAttrib)
 //
 // A push saves a snapshot of everything; a pop restores only the groups of the pushed mask (GL 1.1 tables
-// 6.x). Groups of features that do not exist yet (stipple, pixel transfer, evaluators, lists, accumulation)
+// 6.x). Groups of features that do not exist yet (stipple, pixel transfer, lists, accumulation)
 // save nothing so far. When a feature moves out of ignoredCaps, its state has to be added here.
 //----------------------------------------------------------------------------------
 typedef struct {
@@ -3828,6 +4404,9 @@ typedef struct {
     bool map1Enabled[9], map2Enabled[9], autoNormal;
     int grid1n, grid2un, grid2vn;
     float grid[6];              // grid1u1, grid1u2, grid2u1, grid2u2, grid2v1, grid2v2
+    LightingState lighting;
+    bool lightingEnabled, colorMaterial, normalize, rescaleNormal;
+    u8 lightEnabled;
 } AttribState;
 
 typedef struct {
@@ -3899,6 +4478,12 @@ void glPushAttrib(GLbitfield mask)
     a->grid2vn = gl.grid2vn;
     float grid[6] = { gl.grid1u1, gl.grid1u2, gl.grid2u1, gl.grid2u2, gl.grid2v1, gl.grid2v2 };
     memcpy(a->grid, grid, sizeof(grid));
+    a->lighting = gl.lighting;
+    a->lightingEnabled = gl.lightingEnabled;
+    a->lightEnabled = gl.lightEnabled;
+    a->colorMaterial = gl.colorMaterial;
+    a->normalize = gl.normalize;
+    a->rescaleNormal = gl.rescaleNormal;
 }
 
 void glPopAttrib(void)
@@ -3944,8 +4529,10 @@ void glPopAttrib(void)
     if (mask & GL_LIGHTING_BIT)
     {
         gl.shadeModel = a->shadeModel;
-        caps |= capBits((const GLenum[]){ GL_LIGHTING, GL_COLOR_MATERIAL, GL_LIGHT0, GL_LIGHT1, GL_LIGHT2, GL_LIGHT3,
-                                          GL_LIGHT4, GL_LIGHT5, GL_LIGHT6, GL_LIGHT7 }, 10);
+        gl.lighting = a->lighting;
+        gl.lightingEnabled = a->lightingEnabled;
+        gl.lightEnabled = a->lightEnabled;
+        gl.colorMaterial = a->colorMaterial;
     }
     if (mask & GL_FOG_BIT) caps |= capBits((const GLenum[]){ GL_FOG }, 1);
     if (mask & GL_DEPTH_BUFFER_BIT)
@@ -3976,7 +4563,8 @@ void glPopAttrib(void)
     if (mask & GL_TRANSFORM_BIT)
     {
         gl.matrixMode = a->matrixMode;
-        caps |= capBits((const GLenum[]){ GL_NORMALIZE }, 1);
+        gl.normalize = a->normalize;
+        gl.rescaleNormal = a->rescaleNormal;
     }
     if (mask & GL_ENABLE_BIT)
     {
@@ -3990,6 +4578,11 @@ void glPopAttrib(void)
         gl.offsetLine = a->offsetLine;
         gl.offsetPoint = a->offsetPoint;
         memcpy(gl.texture2D, a->texture2D, sizeof(gl.texture2D));
+        gl.lightingEnabled = a->lightingEnabled;
+        gl.lightEnabled = a->lightEnabled;
+        gl.colorMaterial = a->colorMaterial;
+        gl.normalize = a->normalize;
+        gl.rescaleNormal = a->rescaleNormal;
         caps = 0xFFFFFFFFu;     // All stored-only capabilities
     }
     if (mask & GL_COLOR_BUFFER_BIT)
@@ -4219,6 +4812,53 @@ void glGetTexParameterxv(GLenum target, GLenum pname, GLfixed *params)
     float v[4];
     int n = getTexParameter(target, pname, v);
     for (int i = 0; i < n; i++) params[i] = (GLfixed)v[i];     // All values are enums or booleans
+}
+
+void glLightx(GLenum light, GLenum pname, GLfixed param) { glLightf(light, pname, fixedToFloat(param)); }
+void glLightModelx(GLenum pname, GLfixed param) { glLightModelf(pname, fixedToFloat(param)); }
+void glMaterialx(GLenum face, GLenum pname, GLfixed param) { glMaterialf(face, pname, fixedToFloat(param)); }
+
+void glLightxv(GLenum light, GLenum pname, const GLfixed *params)
+{
+    int n = lightParamCount(pname);
+    if (n == 0) { setError(GL_INVALID_ENUM); return; }
+    float f[4];
+    for (int i = 0; i < n; i++) f[i] = fixedToFloat(params[i]);
+    setLight(light, pname, f);
+}
+
+void glLightModelxv(GLenum pname, const GLfixed *params)
+{
+    int n = lightModelParamCount(pname);
+    if (n == 0) { setError(GL_INVALID_ENUM); return; }
+    float f[4];
+    for (int i = 0; i < n; i++) f[i] = fixedToFloat(params[i]);
+    setLightModel(pname, f);
+}
+
+void glMaterialxv(GLenum face, GLenum pname, const GLfixed *params)
+{
+    int n = materialParamCount(pname);
+    if (n == 0) { setError(GL_INVALID_ENUM); return; }
+    float f[4];
+    for (int i = 0; i < n; i++) f[i] = fixedToFloat(params[i]);
+    setMaterial(face, pname, f);
+}
+
+void glGetLightxv(GLenum light, GLenum pname, GLfixed *params)
+{
+    float v[4];
+    bool color;
+    int n = getLight(light, pname, v, &color);
+    for (int i = 0; i < n; i++) params[i] = floatToFixed(v[i]);
+}
+
+void glGetMaterialxv(GLenum face, GLenum pname, GLfixed *params)
+{
+    float v[4];
+    bool color;
+    int n = getMaterial(face, pname, v, &color);
+    for (int i = 0; i < n; i++) params[i] = floatToFixed(v[i]);
 }
 
 void glGetFixedv(GLenum pname, GLfixed *params)
