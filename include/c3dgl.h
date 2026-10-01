@@ -15,13 +15,14 @@
 //     gfxExit();
 //
 // Supported:
-//   - glBegin/glEnd and glDrawArrays/glDrawElements (client arrays) with GL_TRIANGLES, GL_QUADS, GL_LINES
+//   - glBegin/glEnd and glDrawArrays/glDrawElements (client arrays) with all primitives
+//     (points, lines, line strips/loops, triangles, triangle strips/fans, quads, quad strips, convex polygons)
 //   - Matrix stacks (modelview, projection), glOrtho/glFrustum/glTranslate/glRotate/glScale/glMultMatrix
 //   - Textures: RGBA8, RGB8, LA8, L8, A8, RGB565, RGBA5551, RGBA4; any size up to 1024x1024
-//   - Blending, depth test/mask, color mask, face culling, scissor, viewport, line width
+//   - Blending, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
 //
 // Not supported: lighting, fog, texture environment modes (always vertex color * texture),
-// mipmaps, glReadPixels, GL_POINTS/strips/fans/polygons, glPolygonMode other than GL_FILL.
+// mipmaps, glReadPixels, glPolygonMode other than GL_FILL. Points are always square (no GL_POINT_SMOOTH).
 //
 // Screens: rendering goes to the top screen (400x240) by default. c3dglSetScreen() switches to the
 // bottom screen (320x240) and back, also within a frame; both are presented by c3dglSwapBuffers().

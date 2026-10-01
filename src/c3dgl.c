@@ -8,7 +8,8 @@
 //     lazily at draw time instead of flushing inside the gl* setters.
 //   - Vertices stay in object space, the vertex shader applies post * projection * modelview.
 //     `post` maps OpenGL clip space to PICA clip space: 90 degree screen rotation + depth range [-1, 0].
-//   - GL_LINES has no PICA equivalent: lines are transformed on the CPU and expanded to quads in NDC.
+//   - Strips, fans, quads and polygons are split into triangles on the CPU.
+//   - Lines and points have no PICA equivalent: they are transformed on the CPU and expanded to quads in NDC.
 //   - Textures are padded to power-of-two sizes and Morton-swizzled; the shader scales UVs back.
 //   - One render target per screen, sharing the vertex buffer and GL state; c3dglSetScreen() flushes the
 //     batch and switches the target (C3D_FrameDrawOn), citro3d presents every target drawn on in the frame.
@@ -81,7 +82,7 @@ typedef struct {
 // Everything that decides how a range of vertices is rendered; see prepareDraw()
 typedef struct {
     GLuint texture;             // 0: untextured
-    bool clipSpace;             // Vertices are already in NDC (expanded lines)
+    bool clipSpace;             // Vertices are already in NDC (expanded lines and points)
     u32 matrixSerial;           // Matrix version (0 for clipSpace)
     bool blend;
     GLenum blendSrc, blendDst;
@@ -147,8 +148,9 @@ static struct {
     bool inBegin;
     GLenum primitive;
     Vertex current;                     // Current texcoord and color
-    Vertex prim[4];
-    int primCount;
+    Vertex prim[4];                     // Vertices kept for the primitive being assembled, see submitVertex()
+    int primCount;                      // Vertices in prim
+    int primTotal;                      // Vertices submitted since glBegin/glDraw*
 
     ClientArray arrays[ARRAY_COUNT];
     Texture textures[C3DGL_MAX_TEXTURES];
@@ -518,10 +520,25 @@ static void lerpVertex(Vertex *out, const Vertex *a, const Vertex *b, float t)
     for (int i = 0; i < 4; i++) out->color[i] = (u8)(a->color[i] + ((float)b->color[i] - a->color[i])*t);
 }
 
+#define CLIP_W_MIN  1e-5f       // Lines and points are clipped against w > CLIP_W_MIN before the divide
+
+// Quad around the NDC positions a and b, widened by (nx, ny) perpendicular and (ex, ey) along a -> b
+static void emitExpandedQuad(const Vertex *a, const Vertex *b, const float pa[3], const float pb[3],
+                             float nx, float ny, float ex, float ey)
+{
+    Vertex q[4] = { *a, *a, *b, *b };
+    q[0].pos[0] = pa[0] - ex - nx; q[0].pos[1] = pa[1] - ey - ny; q[0].pos[2] = pa[2];
+    q[1].pos[0] = pa[0] - ex + nx; q[1].pos[1] = pa[1] - ey + ny; q[1].pos[2] = pa[2];
+    q[2].pos[0] = pb[0] + ex + nx; q[2].pos[1] = pb[1] + ey + ny; q[2].pos[2] = pb[2];
+    q[3].pos[0] = pb[0] + ex - nx; q[3].pos[1] = pb[1] + ey - ny; q[3].pos[2] = pb[2];
+
+    emitTriangle(&q[0], &q[1], &q[2]);
+    emitTriangle(&q[0], &q[2], &q[3]);
+}
+
 // Expand a line to a screen-aligned quad in NDC (batch must be in clipSpace mode)
 static void emitLine(const Vertex *a, const Vertex *b)
 {
-    const float wMin = 1e-5f;
     const Mat4 *pmv = projectionModelview();
 
     float ca[4], cb[4];
@@ -529,82 +546,145 @@ static void emitLine(const Vertex *a, const Vertex *b)
     mat4Transform(pmv, b->pos, cb);
 
     // Clip against w > 0 before the perspective divide
-    if ((ca[3] < wMin) && (cb[3] < wMin)) return;
+    if ((ca[3] < CLIP_W_MIN) && (cb[3] < CLIP_W_MIN)) return;
 
     Vertex va = *a, vb = *b;
-    if (ca[3] < wMin)
+    if (ca[3] < CLIP_W_MIN)
     {
-        float t = (wMin - ca[3])/(cb[3] - ca[3]);
+        float t = (CLIP_W_MIN - ca[3])/(cb[3] - ca[3]);
         for (int i = 0; i < 4; i++) ca[i] += (cb[i] - ca[i])*t;
         lerpVertex(&va, a, b, t);
     }
-    else if (cb[3] < wMin)
+    else if (cb[3] < CLIP_W_MIN)
     {
-        float t = (wMin - cb[3])/(ca[3] - cb[3]);
+        float t = (CLIP_W_MIN - cb[3])/(ca[3] - cb[3]);
         for (int i = 0; i < 4; i++) cb[i] += (ca[i] - cb[i])*t;
         lerpVertex(&vb, b, a, t);
     }
 
-    float ax = ca[0]/ca[3], ay = ca[1]/ca[3], az = ca[2]/ca[3];
-    float bx = cb[0]/cb[3], by = cb[1]/cb[3], bz = cb[2]/cb[3];
+    float pa[3] = { ca[0]/ca[3], ca[1]/ca[3], ca[2]/ca[3] };
+    float pb[3] = { cb[0]/cb[3], cb[1]/cb[3], cb[2]/cb[3] };
 
     // Direction in pixels, then half line width back to NDC (perpendicular and along the line for square caps)
     float halfW = 0.5f*(float)gl.state.viewport[2], halfH = 0.5f*(float)gl.state.viewport[3];
-    float dx = (bx - ax)*halfW, dy = (by - ay)*halfH;
+    float dx = (pb[0] - pa[0])*halfW, dy = (pb[1] - pa[1])*halfH;
     float len = sqrtf(dx*dx + dy*dy);
     if (len < 1e-6f) { dx = 1.0f; dy = 0.0f; }
     else { dx /= len; dy /= len; }
 
     float r = 0.5f*gl.lineWidth;
-    float nx = -dy*r/halfW, ny = dx*r/halfH;     // Perpendicular offset
-    float ex = dx*r/halfW, ey = dy*r/halfH;      // Cap offset
+    emitExpandedQuad(&va, &vb, pa, pb, -dy*r/halfW, dx*r/halfH, dx*r/halfW, dy*r/halfH);
+}
 
-    Vertex q[4] = { va, va, vb, vb };
-    q[0].pos[0] = ax - ex - nx; q[0].pos[1] = ay - ey - ny; q[0].pos[2] = az;
-    q[1].pos[0] = ax - ex + nx; q[1].pos[1] = ay - ey + ny; q[1].pos[2] = az;
-    q[2].pos[0] = bx + ex + nx; q[2].pos[1] = by + ey + ny; q[2].pos[2] = bz;
-    q[3].pos[0] = bx + ex - nx; q[3].pos[1] = by + ey - ny; q[3].pos[2] = bz;
+// Expand a point to a screen-aligned square of glPointSize pixels in NDC (batch must be in clipSpace mode)
+static void emitPoint(const Vertex *v)
+{
+    float c[4];
+    mat4Transform(projectionModelview(), v->pos, c);
+    if (c[3] < CLIP_W_MIN) return;
 
-    emitTriangle(&q[0], &q[1], &q[2]);
-    emitTriangle(&q[0], &q[2], &q[3]);
+    float p[3] = { c[0]/c[3], c[1]/c[3], c[2]/c[3] };
+    float r = 0.5f*gl.pointSize;
+    float rx = 2.0f*r/(float)gl.state.viewport[2], ry = 2.0f*r/(float)gl.state.viewport[3];
+
+    // Zero-length "line" from p to p: the cap offset gives the width, the perpendicular offset the height
+    emitExpandedQuad(v, v, p, p, 0.0f, ry, rx, 0.0f);
+}
+
+static bool primitiveInClipSpace(GLenum mode)
+{
+    return (mode == GL_POINTS) || (mode == GL_LINES) || (mode == GL_LINE_STRIP) || (mode == GL_LINE_LOOP);
 }
 
 static bool beginPrimitive(GLenum mode)
 {
-    if ((mode != GL_TRIANGLES) && (mode != GL_QUADS) && (mode != GL_LINES))
+    if (mode > GL_POLYGON)
     {
         WARN_ONCE("Primitive 0x%x not supported\n", mode);
         return false;
     }
 
-    prepareDraw(mode == GL_LINES);
+    prepareDraw(primitiveInClipSpace(mode));
     gl.primitive = mode;
     gl.primCount = 0;
+    gl.primTotal = 0;
     return true;
 }
 
+// Assemble the primitive from the submitted vertices. prim[] holds what the mode still needs:
+//   strips:              the last two vertices (quad strip: up to four)
+//   fans, polygons, line loops/strips: the first and the last vertex
 static void submitVertex(const Vertex *v)
 {
-    gl.prim[gl.primCount++] = *v;
+    Vertex *p = gl.prim;
+    int n = gl.primTotal++;
 
     switch (gl.primitive)
     {
+        case GL_POINTS:
+            emitPoint(v);
+            break;
+        case GL_LINES:
+            p[gl.primCount++] = *v;
+            if (gl.primCount == 2) { emitLine(&p[0], &p[1]); gl.primCount = 0; }
+            break;
+        case GL_LINE_STRIP:
+        case GL_LINE_LOOP:
+            if (n == 0) p[0] = *v;
+            else emitLine(&p[1], v);
+            p[1] = *v;
+            break;
         case GL_TRIANGLES:
-            if (gl.primCount == 3) { emitTriangle(&gl.prim[0], &gl.prim[1], &gl.prim[2]); gl.primCount = 0; }
+            p[gl.primCount++] = *v;
+            if (gl.primCount == 3) { emitTriangle(&p[0], &p[1], &p[2]); gl.primCount = 0; }
+            break;
+        case GL_TRIANGLE_STRIP:
+            // Every other triangle is flipped to keep the winding of the first one
+            if (n >= 2)
+            {
+                if (n & 1) emitTriangle(&p[1], &p[0], v);
+                else emitTriangle(&p[0], &p[1], v);
+            }
+            p[0] = p[1];
+            p[1] = *v;
+            break;
+        case GL_TRIANGLE_FAN:
+        case GL_POLYGON:    // Convex, so a fan
+            if (n == 0) p[0] = *v;
+            else if (n >= 2) emitTriangle(&p[0], &p[1], v);
+            p[1] = *v;
             break;
         case GL_QUADS:
+            p[gl.primCount++] = *v;
             if (gl.primCount == 4)
             {
-                emitTriangle(&gl.prim[0], &gl.prim[1], &gl.prim[2]);
-                emitTriangle(&gl.prim[0], &gl.prim[2], &gl.prim[3]);
+                emitTriangle(&p[0], &p[1], &p[2]);
+                emitTriangle(&p[0], &p[2], &p[3]);
                 gl.primCount = 0;
             }
             break;
-        case GL_LINES:
-            if (gl.primCount == 2) { emitLine(&gl.prim[0], &gl.prim[1]); gl.primCount = 0; }
+        case GL_QUAD_STRIP:
+            // Quad i is v[2i], v[2i+1], v[2i+3], v[2i+2]
+            p[gl.primCount++] = *v;
+            if (gl.primCount == 4)
+            {
+                emitTriangle(&p[0], &p[1], &p[3]);
+                emitTriangle(&p[0], &p[3], &p[2]);
+                p[0] = p[2];
+                p[1] = p[3];
+                gl.primCount = 2;
+            }
             break;
-        default: gl.primCount = 0; break;
+        default: break;
     }
+}
+
+// glEnd or the end of a glDraw* call: close line loops, drop incomplete primitives
+static void endPrimitive(void)
+{
+    if ((gl.primitive == GL_LINE_LOOP) && (gl.primTotal >= 2)) emitLine(&gl.prim[1], &gl.prim[0]);
+    gl.primCount = 0;
+    gl.primTotal = 0;
 }
 
 //----------------------------------------------------------------------------------
@@ -997,8 +1077,8 @@ void glBegin(GLenum mode)
 
 void glEnd(void)
 {
+    if (gl.inBegin) endPrimitive();
     gl.inBegin = false;
-    gl.primCount = 0;
 }
 
 void glVertex3f(GLfloat x, GLfloat y, GLfloat z)
@@ -1109,7 +1189,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
     if (!arraysReady() || !beginPrimitive(mode)) return;
 
     for (int i = 0; i < count; i++) submitArrayVertex(first + i);
-    gl.primCount = 0;
+    endPrimitive();
 }
 
 void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices)
@@ -1124,7 +1204,7 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indic
         else index = ((const GLubyte *)indices)[i];
         submitArrayVertex(index);
     }
-    gl.primCount = 0;
+    endPrimitive();
 }
 
 //----------------------------------------------------------------------------------

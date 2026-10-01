@@ -67,21 +67,24 @@ add_subdirectory(third_party/c3dgl)
 target_link_libraries(my_app PRIVATE c3dgl::c3dgl)
 ```
 
-## Building the example
+## Building the examples
 
 ```sh
 cmake -S . -B build          # picks up $DEVKITPRO/cmake/3DS.cmake
-cmake --build build          # -> build/examples/cube/c3dgl_cube.3dsx
+cmake --build build          # -> build/examples/cube/c3dgl_cube.3dsx, build/examples/primitives/c3dgl_primitives.3dsx
 ```
 
-The example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
+- `cube`: 3D, depth test, culling, textures (NPOT and PNG), scissor, sub-viewports
+- `primitives`: every primitive mode, one cell each, with culling on to catch wrong winding
+
+The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
 c3dgl itself does not.
 
-Run the `.3dsx` in an emulator or send it to a 3DS with `3dslink`. The bottom screen describes the
+Run a `.3dsx` in an emulator or send it to a 3DS with `3dslink`. The bottom screen describes the
 expected picture. Examples are built by default only when c3dgl is the top-level project
 (`-DC3DGL_BUILD_EXAMPLES=ON/OFF`).
 
-`cmake -P scripts/dev.cmake run [app.3dsx]` builds and launches the example in the first emulator it
+`cmake -P scripts/dev.cmake run [app.3dsx]` builds and launches an example (default: cube) in the first emulator it
 finds (Azahar, Lime3DS, Mandarine, Citra; override with `C3DGL_EMULATOR=/path/to/emu`); `build` and
 `launch` do one step each. It works on macOS, Linux and Windows. On Windows it builds through
 devkitPro's msys2 (`C:/devkitPro/msys2`, or set `C3DGL_MSYS2`), which needs `pacman -S cmake` there,
@@ -89,11 +92,13 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 
 ## Supported
 
-- `glBegin`/`glEnd` and client arrays (`glDrawArrays`, `glDrawElements`) with `GL_TRIANGLES`, `GL_QUADS`, `GL_LINES`
+- `glBegin`/`glEnd` and client arrays (`glDrawArrays`, `glDrawElements`) with every primitive: points, lines,
+  line strips/loops, triangles, triangle strips/fans, quads, quad strips and convex polygons
 - Modelview/projection matrix stacks, `glOrtho`, `glFrustum`, `glTranslatef`, `glRotatef`, `glScalef`, `glMultMatrixf`
 - Textures of any size up to 1024x1024: RGBA8, RGB8, luminance/alpha, luminance, alpha, RGB565, RGBA5551, RGBA4;
   `glTexSubImage2D`, `glGetTexImage`, nearest/linear filtering, repeat/clamp/mirror wrapping
-- Blending (`glBlendFunc`), depth test/function/mask, color mask, face culling, scissor, viewport, line width
+- Blending (`glBlendFunc`), depth test/function/mask, color mask, face culling, scissor, viewport, line width,
+  point size
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
