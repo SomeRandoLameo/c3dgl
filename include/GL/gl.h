@@ -85,6 +85,7 @@ typedef void            GLvoid;
 #define GL_LINE_SMOOTH                      0x0B20
 #define GL_CULL_FACE                        0x0B44
 #define GL_DEPTH_TEST                       0x0B71
+#define GL_ALPHA_TEST                       0x0BC0
 #define GL_BLEND                            0x0BE2
 #define GL_SCISSOR_TEST                     0x0C11
 #define GL_TEXTURE_2D                       0x0DE1
@@ -175,6 +176,7 @@ void glClear(GLbitfield mask);
 void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
 void glDepthMask(GLboolean flag);
 void glDepthFunc(GLenum func);
+void glAlphaFunc(GLenum func, GLclampf ref);
 void glBlendFunc(GLenum sfactor, GLenum dfactor);
 void glCullFace(GLenum mode);
 void glFrontFace(GLenum mode);

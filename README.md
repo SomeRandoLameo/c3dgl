@@ -71,11 +71,12 @@ target_link_libraries(my_app PRIVATE c3dgl::c3dgl)
 
 ```sh
 cmake -S . -B build          # picks up $DEVKITPRO/cmake/3DS.cmake
-cmake --build build          # -> build/examples/cube/c3dgl_cube.3dsx, build/examples/primitives/c3dgl_primitives.3dsx
+cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 ```
 
 - `cube`: 3D, depth test, culling, textures (NPOT and PNG), scissor, sub-viewports
 - `primitives`: every primitive mode, one cell each, with culling on to catch wrong winding
+- `fragment`: per-fragment operations (alpha test)
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
 c3dgl itself does not.
@@ -97,7 +98,7 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - Modelview/projection matrix stacks, `glOrtho`, `glFrustum`, `glTranslatef`, `glRotatef`, `glScalef`, `glMultMatrixf`
 - Textures of any size up to 1024x1024: RGBA8, RGB8, luminance/alpha, luminance, alpha, RGB565, RGBA5551, RGBA4;
   `glTexSubImage2D`, `glGetTexImage`, nearest/linear filtering, repeat/clamp/mirror wrapping
-- Blending (`glBlendFunc`), depth test/function/mask, color mask, face culling, scissor, viewport, line width,
+- Blending (`glBlendFunc`), alpha test (`glAlphaFunc`), depth test/function/mask, color mask, face culling, scissor, viewport, line width,
   point size
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 

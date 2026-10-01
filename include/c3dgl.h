@@ -19,7 +19,7 @@
 //     (points, lines, line strips/loops, triangles, triangle strips/fans, quads, quad strips, convex polygons)
 //   - Matrix stacks (modelview, projection), glOrtho/glFrustum/glTranslate/glRotate/glScale/glMultMatrix
 //   - Textures: RGBA8, RGB8, LA8, L8, A8, RGB565, RGBA5551, RGBA4; any size up to 1024x1024
-//   - Blending, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
+//   - Blending, alpha test, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
 //
 // Not supported: lighting, fog, texture environment modes (always vertex color * texture),
 // mipmaps, glReadPixels, glPolygonMode other than GL_FILL. Points are always square (no GL_POINT_SMOOTH).

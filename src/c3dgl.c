@@ -88,6 +88,9 @@ typedef struct {
     GLenum blendSrc, blendDst;
     bool depthTest, depthMask;
     GLenum depthFunc;
+    bool alphaTest;
+    GLenum alphaFunc;
+    u8 alphaRef;                // 0..255
     u8 colorMask;
     bool cull;
     GLenum cullFace, frontFace;
@@ -260,19 +263,31 @@ static GPU_BLENDFACTOR blendFactor(GLenum f)
     }
 }
 
+static GPU_TESTFUNC testFunc(GLenum f)
+{
+    switch (f)
+    {
+        case GL_NEVER: return GPU_NEVER;
+        case GL_LESS: return GPU_LESS;
+        case GL_EQUAL: return GPU_EQUAL;
+        case GL_LEQUAL: return GPU_LEQUAL;
+        case GL_GREATER: return GPU_GREATER;
+        case GL_NOTEQUAL: return GPU_NOTEQUAL;
+        case GL_GEQUAL: return GPU_GEQUAL;
+        default: return GPU_ALWAYS;
+    }
+}
+
 // PICA stores depth reversed (near = 1, far = 0, see C3D_DepthMap in c3dglInit), so comparisons flip
 static GPU_TESTFUNC depthFunc(GLenum f)
 {
     switch (f)
     {
-        case GL_NEVER: return GPU_NEVER;
         case GL_LESS: return GPU_GREATER;
-        case GL_EQUAL: return GPU_EQUAL;
         case GL_LEQUAL: return GPU_GEQUAL;
         case GL_GREATER: return GPU_LESS;
-        case GL_NOTEQUAL: return GPU_NOTEQUAL;
         case GL_GEQUAL: return GPU_LEQUAL;
-        default: return GPU_ALWAYS;
+        default: return testFunc(f);
     }
 }
 
@@ -432,6 +447,7 @@ static void applyState(const DrawState *s)
 
     GPU_WRITEMASK writeMask = (GPU_WRITEMASK)(s->colorMask | ((s->depthTest && s->depthMask)? GPU_WRITE_DEPTH : 0));
     C3D_DepthTest(s->depthTest, s->depthTest? depthFunc(s->depthFunc) : GPU_ALWAYS, writeMask);
+    C3D_AlphaTest(s->alphaTest, testFunc(s->alphaFunc), s->alphaRef);
 
     if (s->blend)
     {
@@ -745,6 +761,7 @@ bool c3dglInit(void)
     gl.state.blendDst = GL_ZERO;
     gl.state.depthFunc = GL_LESS;
     gl.state.depthMask = true;
+    gl.state.alphaFunc = GL_ALWAYS;
     gl.state.colorMask = GPU_WRITE_COLOR;
     gl.state.cullFace = GL_BACK;
     gl.state.frontFace = GL_CCW;
@@ -827,6 +844,7 @@ static void setCapability(GLenum cap, bool enable)
         case GL_TEXTURE_2D: gl.texture2D = enable; break;
         case GL_BLEND: gl.state.blend = enable; break;
         case GL_DEPTH_TEST: gl.state.depthTest = enable; break;
+        case GL_ALPHA_TEST: gl.state.alphaTest = enable; break;
         case GL_CULL_FACE: gl.state.cull = enable; break;
         case GL_SCISSOR_TEST: gl.state.scissor = enable; break;
         case GL_LINE_SMOOTH: break;
@@ -939,6 +957,12 @@ void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha
 
 void glDepthMask(GLboolean flag) { gl.state.depthMask = flag; }
 void glDepthFunc(GLenum func) { gl.state.depthFunc = func; }
+
+void glAlphaFunc(GLenum func, GLclampf ref)
+{
+    gl.state.alphaFunc = func;
+    gl.state.alphaRef = colorByte(ref);
+}
 
 void glBlendFunc(GLenum sfactor, GLenum dfactor)
 {
