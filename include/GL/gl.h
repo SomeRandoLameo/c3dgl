@@ -31,6 +31,15 @@ typedef void            GLvoid;
 #define GL_FALSE                            0
 #define GL_TRUE                             1
 
+// Errors
+#define GL_NO_ERROR                         0
+#define GL_INVALID_ENUM                     0x0500
+#define GL_INVALID_VALUE                    0x0501
+#define GL_INVALID_OPERATION                0x0502
+#define GL_STACK_OVERFLOW                   0x0503
+#define GL_STACK_UNDERFLOW                  0x0504
+#define GL_OUT_OF_MEMORY                    0x0505
+
 // Primitives
 #define GL_POINTS                           0x0000
 #define GL_LINES                            0x0001
@@ -99,17 +108,79 @@ typedef void            GLvoid;
 #define GL_SCISSOR_TEST                     0x0C11
 #define GL_TEXTURE_2D                       0x0DE1
 
+// Capabilities that are accepted and reported by glIsEnabled, but have no effect (enabling the
+// non-cosmetic ones logs a warning)
+#define GL_POINT_SMOOTH                     0x0B10
+#define GL_POLYGON_SMOOTH                   0x0B41
+#define GL_LIGHTING                         0x0B50
+#define GL_COLOR_MATERIAL                   0x0B57
+#define GL_FOG                              0x0B60
+#define GL_NORMALIZE                        0x0BA1
+#define GL_DITHER                           0x0BD0
+#define GL_POLYGON_OFFSET_FILL              0x8037
+#define GL_LIGHT0                           0x4000
+#define GL_LIGHT1                           0x4001
+#define GL_LIGHT2                           0x4002
+#define GL_LIGHT3                           0x4003
+#define GL_LIGHT4                           0x4004
+#define GL_LIGHT5                           0x4005
+#define GL_LIGHT6                           0x4006
+#define GL_LIGHT7                           0x4007
+
 // Client arrays
 #define GL_VERTEX_ARRAY                     0x8074
 #define GL_NORMAL_ARRAY                     0x8075
 #define GL_COLOR_ARRAY                      0x8076
 #define GL_TEXTURE_COORD_ARRAY              0x8078
 
-// Queries
-#define GL_LINE_WIDTH                       0x0B21
+// Queries (glGet*)
+#define GL_CURRENT_COLOR                    0x0B00
+#define GL_CURRENT_NORMAL                   0x0B02
+#define GL_CURRENT_TEXTURE_COORDS           0x0B03
 #define GL_POINT_SIZE                       0x0B11
+#define GL_LINE_WIDTH                       0x0B21
+#define GL_CULL_FACE_MODE                   0x0B45
+#define GL_FRONT_FACE                       0x0B46
+#define GL_SHADE_MODEL                      0x0B54
+#define GL_DEPTH_RANGE                      0x0B70
+#define GL_DEPTH_WRITEMASK                  0x0B72
+#define GL_DEPTH_CLEAR_VALUE                0x0B73
+#define GL_DEPTH_FUNC                       0x0B74
+#define GL_STENCIL_CLEAR_VALUE              0x0B91
+#define GL_STENCIL_FUNC                     0x0B92
+#define GL_STENCIL_VALUE_MASK               0x0B93
+#define GL_STENCIL_FAIL                     0x0B94
+#define GL_STENCIL_PASS_DEPTH_FAIL          0x0B95
+#define GL_STENCIL_PASS_DEPTH_PASS          0x0B96
+#define GL_STENCIL_REF                      0x0B97
+#define GL_STENCIL_WRITEMASK                0x0B98
+#define GL_MATRIX_MODE                      0x0BA0
+#define GL_VIEWPORT                         0x0BA2
+#define GL_MODELVIEW_STACK_DEPTH            0x0BA3
+#define GL_PROJECTION_STACK_DEPTH           0x0BA4
+#define GL_TEXTURE_STACK_DEPTH              0x0BA5
 #define GL_MODELVIEW_MATRIX                 0x0BA6
 #define GL_PROJECTION_MATRIX                0x0BA7
+#define GL_TEXTURE_MATRIX                   0x0BA8
+#define GL_ALPHA_TEST_FUNC                  0x0BC1
+#define GL_ALPHA_TEST_REF                   0x0BC2
+#define GL_BLEND_DST                        0x0BE0
+#define GL_BLEND_SRC                        0x0BE1
+#define GL_SCISSOR_BOX                      0x0C10
+#define GL_COLOR_CLEAR_VALUE                0x0C22
+#define GL_COLOR_WRITEMASK                  0x0C23
+#define GL_MAX_TEXTURE_SIZE                 0x0D33
+#define GL_MAX_MODELVIEW_STACK_DEPTH        0x0D36
+#define GL_MAX_PROJECTION_STACK_DEPTH       0x0D38
+#define GL_MAX_TEXTURE_STACK_DEPTH          0x0D39
+#define GL_MAX_VIEWPORT_DIMS                0x0D3A
+#define GL_RED_BITS                         0x0D52
+#define GL_GREEN_BITS                       0x0D53
+#define GL_BLUE_BITS                        0x0D54
+#define GL_ALPHA_BITS                       0x0D55
+#define GL_DEPTH_BITS                       0x0D56
+#define GL_STENCIL_BITS                     0x0D57
+#define GL_TEXTURE_BINDING_2D               0x8069
 #define GL_VENDOR                           0x1F00
 #define GL_RENDERER                         0x1F01
 #define GL_VERSION                          0x1F02
@@ -178,13 +249,20 @@ typedef void            GLvoid;
 // State
 void glEnable(GLenum cap);
 void glDisable(GLenum cap);
+GLboolean glIsEnabled(GLenum cap);
 void glEnableClientState(GLenum array);
 void glDisableClientState(GLenum array);
 void glHint(GLenum target, GLenum mode);
-void glShadeModel(GLenum mode);
+void glShadeModel(GLenum mode);         // GL_FLAT is accepted but colors are always interpolated
 void glPixelStorei(GLenum pname, GLint param);
+void glGetBooleanv(GLenum pname, GLboolean *params);
+void glGetIntegerv(GLenum pname, GLint *params);
 void glGetFloatv(GLenum pname, GLfloat *params);
+void glGetDoublev(GLenum pname, GLdouble *params);
 const GLubyte *glGetString(GLenum name);
+GLenum glGetError(void);
+void glFlush(void);                     // Drawing is submitted by c3dglSwapBuffers(); these only flush the batch
+void glFinish(void);
 
 void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 void glScissor(GLint x, GLint y, GLsizei width, GLsizei height);
@@ -211,24 +289,74 @@ void glMatrixMode(GLenum mode);
 void glPushMatrix(void);
 void glPopMatrix(void);
 void glLoadIdentity(void);
+void glLoadMatrixf(const GLfloat *m);
+void glLoadMatrixd(const GLdouble *m);
 void glMultMatrixf(const GLfloat *m);
+void glMultMatrixd(const GLdouble *m);
 void glTranslatef(GLfloat x, GLfloat y, GLfloat z);
+void glTranslated(GLdouble x, GLdouble y, GLdouble z);
 void glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z);
+void glRotated(GLdouble angle, GLdouble x, GLdouble y, GLdouble z);
 void glScalef(GLfloat x, GLfloat y, GLfloat z);
+void glScaled(GLdouble x, GLdouble y, GLdouble z);
 void glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar);
 void glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar);
 
 // Immediate mode
 void glBegin(GLenum mode);
 void glEnd(void);
-void glVertex2i(GLint x, GLint y);
 void glVertex2f(GLfloat x, GLfloat y);
+void glVertex2d(GLdouble x, GLdouble y);
+void glVertex2i(GLint x, GLint y);
+void glVertex2s(GLshort x, GLshort y);
+void glVertex2fv(const GLfloat *v);
+void glVertex2dv(const GLdouble *v);
+void glVertex2iv(const GLint *v);
+void glVertex2sv(const GLshort *v);
 void glVertex3f(GLfloat x, GLfloat y, GLfloat z);
+void glVertex3d(GLdouble x, GLdouble y, GLdouble z);
+void glVertex3i(GLint x, GLint y, GLint z);
+void glVertex3s(GLshort x, GLshort y, GLshort z);
+void glVertex3fv(const GLfloat *v);
+void glVertex3dv(const GLdouble *v);
+void glVertex3iv(const GLint *v);
+void glVertex3sv(const GLshort *v);
+void glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w);    // Divided by w, which must be > 0
+void glVertex4d(GLdouble x, GLdouble y, GLdouble z, GLdouble w);
+void glVertex4fv(const GLfloat *v);
+
+void glTexCoord1f(GLfloat s);
 void glTexCoord2f(GLfloat s, GLfloat t);
-void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz);
+void glTexCoord2d(GLdouble s, GLdouble t);
+void glTexCoord2i(GLint s, GLint t);
+void glTexCoord2s(GLshort s, GLshort t);
+void glTexCoord2fv(const GLfloat *v);
+void glTexCoord2dv(const GLdouble *v);
+
+void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz);    // Stored only, there is no lighting
+void glNormal3d(GLdouble nx, GLdouble ny, GLdouble nz);
+void glNormal3fv(const GLfloat *v);
+void glNormal3dv(const GLdouble *v);
+
 void glColor3f(GLfloat red, GLfloat green, GLfloat blue);
 void glColor4f(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+void glColor3d(GLdouble red, GLdouble green, GLdouble blue);
+void glColor4d(GLdouble red, GLdouble green, GLdouble blue, GLdouble alpha);
+void glColor3ub(GLubyte red, GLubyte green, GLubyte blue);
 void glColor4ub(GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha);
+void glColor3fv(const GLfloat *v);
+void glColor4fv(const GLfloat *v);
+void glColor3dv(const GLdouble *v);
+void glColor4dv(const GLdouble *v);
+void glColor3ubv(const GLubyte *v);
+void glColor4ubv(const GLubyte *v);
+
+void glRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2);
+void glRectd(GLdouble x1, GLdouble y1, GLdouble x2, GLdouble y2);
+void glRecti(GLint x1, GLint y1, GLint x2, GLint y2);
+void glRects(GLshort x1, GLshort y1, GLshort x2, GLshort y2);
+void glRectfv(const GLfloat *v1, const GLfloat *v2);
+void glRectiv(const GLint *v1, const GLint *v2);
 
 // Client-side vertex arrays
 void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer);
@@ -242,7 +370,11 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indic
 void glGenTextures(GLsizei n, GLuint *textures);
 void glDeleteTextures(GLsizei n, const GLuint *textures);
 void glBindTexture(GLenum target, GLuint texture);
+GLboolean glIsTexture(GLuint texture);
 void glTexParameteri(GLenum target, GLenum pname, GLint param);
+void glTexParameterf(GLenum target, GLenum pname, GLfloat param);
+void glTexParameteriv(GLenum target, GLenum pname, const GLint *params);
+void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params);
 void glTexEnvi(GLenum target, GLenum pname, GLint param);
 void glTexEnvf(GLenum target, GLenum pname, GLfloat param);
 void glTexEnviv(GLenum target, GLenum pname, const GLint *params);

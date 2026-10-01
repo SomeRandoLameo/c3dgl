@@ -76,6 +76,7 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 
 - `cube`: 3D, depth test, culling, textures (NPOT and PNG), scissor, sub-viewports
 - `primitives`: every primitive mode, one cell each, with culling on to catch wrong winding
+- `api` (C): self-check of queries, errors and entry point variants; green screen = all checks passed
 - `fragment`: per-fragment operations (alpha test, texture environment, stencil, `glClear`); A switches pages
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
@@ -102,15 +103,19 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - Blending (`glBlendFunc`), alpha test (`glAlphaFunc`), stencil (`glStencilFunc`/`Op`/`Mask`), depth
   test/function/mask, color mask, face culling, scissor, viewport, line width, point size
 - `glClear` of color, depth and stencil, honoring scissor and write masks
+- `glGetError`, `glGet{Boolean,Integer,Float,Double}v` for the common state, `glIsEnabled`, `glIsTexture`
+- The common variants of the immediate mode calls (`glVertex2/3/4{f,d,i,s}[v]`, `glColor3/4{f,d,ub}[v]`, ...),
+  `glRect*`, `glLoadMatrix*`, `glTranslated`/`glRotated`/`glScaled`
+- Lighting, fog, dithering, smoothing and polygon offset can be enabled and queried but have no effect yet
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
 
 ## Not supported
 
-Lighting, fog, mipmaps (only level 0 is used), `glReadPixels`, `glPolygonMode` other than `GL_FILL`, round points
-(`GL_POINT_SMOOTH`) and stereoscopic 3D. `GL_REPEAT` on non-power-of-two
-textures samples the padding.
+Lighting, fog, polygon offset, flat shading (`GL_FLAT`), display lists, mipmaps (only level 0 is used),
+`glReadPixels`, `glPolygonMode` other than `GL_FILL`, round points (`GL_POINT_SMOOTH`) and stereoscopic 3D.
+`GL_REPEAT` on non-power-of-two textures samples the padding.
 
 ## How it works
 

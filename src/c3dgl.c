@@ -148,6 +148,10 @@ static struct {
     float clearDepth;
     u8 clearStencil;
     bool stencilUsed;                   // GL_STENCIL_TEST was enabled once: glClear must preserve stencil values
+    GLenum error;                       // First error since the last glGetError()
+    u32 ignoredCaps;                    // Capabilities accepted but not implemented, see ignoredCapBit()
+    GLenum shadeModel;
+    float currentNormal[3];             // Only stored for glGet (no lighting)
 
     // Matrices
     int matrixMode;                     // 0: modelview, 1: projection, 2: texture
@@ -172,6 +176,12 @@ static struct {
     C3D_Tex *deferredDeletes;
     int deferredCount, deferredCapacity;
 } gl;
+
+// Record an error for glGetError(); like OpenGL, only the first one is kept until it is read
+static void setError(GLenum error)
+{
+    if (gl.error == GL_NO_ERROR) gl.error = error;
+}
 
 //----------------------------------------------------------------------------------
 // Matrix helpers
@@ -719,6 +729,7 @@ static bool beginPrimitive(GLenum mode)
     if (mode > GL_POLYGON)
     {
         WARN_ONCE("Primitive 0x%x not supported\n", mode);
+        setError(GL_INVALID_ENUM);
         return false;
     }
 
@@ -875,6 +886,9 @@ bool c3dglInit(void)
     gl.lineWidth = gl.pointSize = 1.0f;
     gl.clearColor = 0x000000FF;
     gl.clearDepth = 1.0f;
+    gl.shadeModel = GL_SMOOTH;
+    gl.currentNormal[2] = 1.0f;
+    gl.ignoredCaps = 1u << 0;     // GL_DITHER is enabled by default
     memset(gl.current.color, 255, 4);
 
     for (int i = 0; i < 3; i++) mat4Identity(&gl.stack[i][0]);
@@ -943,8 +957,33 @@ void c3dglSwapBuffers(void)
 //----------------------------------------------------------------------------------
 // OpenGL: state
 //----------------------------------------------------------------------------------
+// Capabilities that programs commonly toggle but c3dgl does not implement: stored for glIsEnabled,
+// enabling the ones that change the picture warns once
+static const GLenum ignoredCaps[] = {
+    GL_DITHER, GL_LINE_SMOOTH, GL_POINT_SMOOTH, GL_POLYGON_SMOOTH, GL_LIGHTING, GL_COLOR_MATERIAL, GL_FOG,
+    GL_NORMALIZE, GL_POLYGON_OFFSET_FILL, GL_LIGHT0, GL_LIGHT1, GL_LIGHT2, GL_LIGHT3, GL_LIGHT4, GL_LIGHT5,
+    GL_LIGHT6, GL_LIGHT7,
+};
+
+static int ignoredCapBit(GLenum cap)
+{
+    for (int i = 0; i < (int)(sizeof(ignoredCaps)/sizeof(ignoredCaps[0])); i++) if (ignoredCaps[i] == cap) return i;
+    return -1;
+}
+
 static void setCapability(GLenum cap, bool enable)
 {
+    int bit = ignoredCapBit(cap);
+    if (bit >= 0)
+    {
+        if (enable) gl.ignoredCaps |= 1u << bit;
+        else gl.ignoredCaps &= ~(1u << bit);
+
+        bool cosmetic = (cap == GL_DITHER) || (cap == GL_LINE_SMOOTH) || (cap == GL_POINT_SMOOTH) || (cap == GL_POLYGON_SMOOTH);
+        if (enable && !cosmetic) WARN_ONCE("glEnable: capability 0x%x not supported, ignored\n", cap);
+        return;
+    }
+
     switch (cap)
     {
         case GL_TEXTURE_2D: gl.texture2D = enable; break;
@@ -957,8 +996,10 @@ static void setCapability(GLenum cap, bool enable)
             break;
         case GL_CULL_FACE: gl.state.cull = enable; break;
         case GL_SCISSOR_TEST: gl.state.scissor = enable; break;
-        case GL_LINE_SMOOTH: break;
-        default: WARN_ONCE("glEnable/glDisable: capability 0x%x not supported\n", cap); break;
+        default:
+            WARN_ONCE("glEnable/glDisable: capability 0x%x not supported\n", cap);
+            setError(GL_INVALID_ENUM);
+            break;
     }
 }
 
@@ -972,32 +1013,184 @@ static void setClientState(GLenum array, bool enable)
         case GL_VERTEX_ARRAY: gl.arrays[ARRAY_VERTEX].enabled = enable; break;
         case GL_TEXTURE_COORD_ARRAY: gl.arrays[ARRAY_TEXCOORD].enabled = enable; break;
         case GL_COLOR_ARRAY: gl.arrays[ARRAY_COLOR].enabled = enable; break;
-        default: break;     // Normals are not used (no lighting)
+        case GL_NORMAL_ARRAY: break;    // Normals are not used (no lighting)
+        default: setError(GL_INVALID_ENUM); break;
     }
 }
 
 void glEnableClientState(GLenum array) { setClientState(array, true); }
 void glDisableClientState(GLenum array) { setClientState(array, false); }
 
+GLboolean glIsEnabled(GLenum cap)
+{
+    int bit = ignoredCapBit(cap);
+    if (bit >= 0) return (gl.ignoredCaps >> bit) & 1;
+
+    switch (cap)
+    {
+        case GL_TEXTURE_2D: return gl.texture2D;
+        case GL_BLEND: return gl.state.blend;
+        case GL_DEPTH_TEST: return gl.state.depthTest;
+        case GL_ALPHA_TEST: return gl.state.alphaTest;
+        case GL_STENCIL_TEST: return gl.state.stencilTest;
+        case GL_CULL_FACE: return gl.state.cull;
+        case GL_SCISSOR_TEST: return gl.state.scissor;
+        case GL_VERTEX_ARRAY: return gl.arrays[ARRAY_VERTEX].enabled;
+        case GL_TEXTURE_COORD_ARRAY: return gl.arrays[ARRAY_TEXCOORD].enabled;
+        case GL_COLOR_ARRAY: return gl.arrays[ARRAY_COLOR].enabled;
+        case GL_NORMAL_ARRAY: return GL_FALSE;
+        default: setError(GL_INVALID_ENUM); return GL_FALSE;
+    }
+}
+
+GLenum glGetError(void)
+{
+    GLenum error = gl.error;
+    gl.error = GL_NO_ERROR;
+    return error;
+}
+
+// Draws are submitted at c3dglSwapBuffers(); flushing the batch is all that can be done earlier
+void glFlush(void) { if (gl.frameActive) flush(); }
+void glFinish(void) { glFlush(); }
+
 void glHint(GLenum target, GLenum mode) { (void)target; (void)mode; }
-void glShadeModel(GLenum mode) { (void)mode; }
+
+void glShadeModel(GLenum mode)
+{
+    if ((mode != GL_SMOOTH) && (mode != GL_FLAT)) { setError(GL_INVALID_ENUM); return; }
+    if (mode == GL_FLAT) WARN_ONCE("glShadeModel: GL_FLAT not supported, colors are interpolated\n");
+    gl.shadeModel = mode;
+}
 
 void glPixelStorei(GLenum pname, GLint param)
 {
+    if ((param != 1) && (param != 2) && (param != 4) && (param != 8)) { setError(GL_INVALID_VALUE); return; }
+
     if (pname == GL_UNPACK_ALIGNMENT) gl.unpackAlignment = param;
     else if (pname == GL_PACK_ALIGNMENT) gl.packAlignment = param;
 }
 
-void glGetFloatv(GLenum pname, GLfloat *params)
+// State for glGet*: fills v and returns the number of values (0: unknown pname).
+// *normalized: the values are colors/depths in [0, 1], which integer queries scale to [0, INT_MAX]
+static int getState(GLenum pname, double v[16], bool *normalized)
 {
+    *normalized = false;
+
     switch (pname)
     {
-        case GL_MODELVIEW_MATRIX: memcpy(params, gl.stack[0][gl.stackDepth[0]].m, 16*sizeof(float)); break;
-        case GL_PROJECTION_MATRIX: memcpy(params, gl.stack[1][gl.stackDepth[1]].m, 16*sizeof(float)); break;
-        case GL_LINE_WIDTH: params[0] = gl.lineWidth; break;
-        case GL_POINT_SIZE: params[0] = gl.pointSize; break;
-        default: WARN_ONCE("glGetFloatv: 0x%x not supported\n", pname); break;
+        case GL_MODELVIEW_MATRIX:
+        case GL_PROJECTION_MATRIX:
+        case GL_TEXTURE_MATRIX:
+        {
+            int mode = pname - GL_MODELVIEW_MATRIX;
+            for (int i = 0; i < 16; i++) v[i] = gl.stack[mode][gl.stackDepth[mode]].m[i];
+            return 16;
+        }
+        case GL_MODELVIEW_STACK_DEPTH: v[0] = gl.stackDepth[0] + 1; return 1;
+        case GL_PROJECTION_STACK_DEPTH: v[0] = gl.stackDepth[1] + 1; return 1;
+        case GL_TEXTURE_STACK_DEPTH: v[0] = gl.stackDepth[2] + 1; return 1;
+        case GL_MAX_MODELVIEW_STACK_DEPTH:
+        case GL_MAX_PROJECTION_STACK_DEPTH:
+        case GL_MAX_TEXTURE_STACK_DEPTH: v[0] = C3DGL_MATRIX_STACK; return 1;
+        case GL_MATRIX_MODE: v[0] = GL_MODELVIEW + gl.matrixMode; return 1;
+
+        case GL_VIEWPORT: for (int i = 0; i < 4; i++) v[i] = gl.state.viewport[i]; return 4;
+        case GL_SCISSOR_BOX: for (int i = 0; i < 4; i++) v[i] = gl.state.scissorBox[i]; return 4;
+        case GL_MAX_VIEWPORT_DIMS: v[0] = C3DGL_TOP_SCREEN_WIDTH; v[1] = C3DGL_SCREEN_HEIGHT; return 2;
+        case GL_DEPTH_RANGE: v[0] = 0.0; v[1] = 1.0; *normalized = true; return 2;
+
+        case GL_CURRENT_COLOR: for (int i = 0; i < 4; i++) v[i] = gl.current.color[i]/255.0; *normalized = true; return 4;
+        case GL_CURRENT_TEXTURE_COORDS: v[0] = gl.current.uv[0]; v[1] = gl.current.uv[1]; v[2] = 0.0; v[3] = 1.0; return 4;
+        case GL_CURRENT_NORMAL: for (int i = 0; i < 3; i++) v[i] = gl.currentNormal[i]; return 3;
+
+        case GL_COLOR_CLEAR_VALUE:
+            for (int i = 0; i < 4; i++) v[i] = ((gl.clearColor >> (24 - 8*i)) & 0xFF)/255.0;
+            *normalized = true;
+            return 4;
+        case GL_DEPTH_CLEAR_VALUE: v[0] = gl.clearDepth; *normalized = true; return 1;
+        case GL_STENCIL_CLEAR_VALUE: v[0] = gl.clearStencil; return 1;
+
+        case GL_COLOR_WRITEMASK:
+            v[0] = (gl.state.colorMask & GPU_WRITE_RED) != 0;
+            v[1] = (gl.state.colorMask & GPU_WRITE_GREEN) != 0;
+            v[2] = (gl.state.colorMask & GPU_WRITE_BLUE) != 0;
+            v[3] = (gl.state.colorMask & GPU_WRITE_ALPHA) != 0;
+            return 4;
+        case GL_DEPTH_WRITEMASK: v[0] = gl.state.depthMask; return 1;
+        case GL_DEPTH_FUNC: v[0] = gl.state.depthFunc; return 1;
+        case GL_BLEND_SRC: v[0] = gl.state.blendSrc; return 1;
+        case GL_BLEND_DST: v[0] = gl.state.blendDst; return 1;
+        case GL_ALPHA_TEST_FUNC: v[0] = gl.state.alphaFunc; return 1;
+        case GL_ALPHA_TEST_REF: v[0] = gl.state.alphaRef/255.0; *normalized = true; return 1;
+        case GL_STENCIL_FUNC: v[0] = gl.state.stencilFunc; return 1;
+        case GL_STENCIL_REF: v[0] = gl.state.stencilRef; return 1;
+        case GL_STENCIL_VALUE_MASK: v[0] = gl.state.stencilFuncMask; return 1;
+        case GL_STENCIL_WRITEMASK: v[0] = gl.state.stencilWriteMask; return 1;
+        case GL_STENCIL_FAIL: v[0] = gl.state.stencilFail; return 1;
+        case GL_STENCIL_PASS_DEPTH_FAIL: v[0] = gl.state.stencilDepthFail; return 1;
+        case GL_STENCIL_PASS_DEPTH_PASS: v[0] = gl.state.stencilPass; return 1;
+        case GL_CULL_FACE_MODE: v[0] = gl.state.cullFace; return 1;
+        case GL_FRONT_FACE: v[0] = gl.state.frontFace; return 1;
+        case GL_SHADE_MODEL: v[0] = gl.shadeModel; return 1;
+
+        case GL_LINE_WIDTH: v[0] = gl.lineWidth; return 1;
+        case GL_POINT_SIZE: v[0] = gl.pointSize; return 1;
+        case GL_UNPACK_ALIGNMENT: v[0] = gl.unpackAlignment; return 1;
+        case GL_PACK_ALIGNMENT: v[0] = gl.packAlignment; return 1;
+        case GL_TEXTURE_BINDING_2D: v[0] = gl.boundTexture; return 1;
+        case GL_MAX_TEXTURE_SIZE: v[0] = C3DGL_MAX_TEXTURE_SIZE; return 1;
+
+        // Render target: RGBA8 color, D24S8 depth/stencil
+        case GL_RED_BITS: case GL_GREEN_BITS: case GL_BLUE_BITS: case GL_ALPHA_BITS: v[0] = 8; return 1;
+        case GL_DEPTH_BITS: v[0] = 24; return 1;
+        case GL_STENCIL_BITS: v[0] = 8; return 1;
+
+        default:
+            // Capabilities can be queried with glGet too
+            if ((ignoredCapBit(pname) >= 0) || (pname == GL_TEXTURE_2D) || (pname == GL_BLEND) || (pname == GL_DEPTH_TEST) ||
+                (pname == GL_ALPHA_TEST) || (pname == GL_STENCIL_TEST) || (pname == GL_CULL_FACE) || (pname == GL_SCISSOR_TEST) ||
+                (pname == GL_VERTEX_ARRAY) || (pname == GL_TEXTURE_COORD_ARRAY) || (pname == GL_COLOR_ARRAY) || (pname == GL_NORMAL_ARRAY))
+            {
+                v[0] = glIsEnabled(pname);
+                return 1;
+            }
+            WARN_ONCE("glGet: 0x%x not supported\n", pname);
+            setError(GL_INVALID_ENUM);
+            return 0;
     }
+}
+
+void glGetDoublev(GLenum pname, GLdouble *params)
+{
+    double v[16];
+    bool normalized;
+    int n = getState(pname, v, &normalized);
+    for (int i = 0; i < n; i++) params[i] = v[i];
+}
+
+void glGetFloatv(GLenum pname, GLfloat *params)
+{
+    double v[16];
+    bool normalized;
+    int n = getState(pname, v, &normalized);
+    for (int i = 0; i < n; i++) params[i] = (GLfloat)v[i];
+}
+
+void glGetIntegerv(GLenum pname, GLint *params)
+{
+    double v[16];
+    bool normalized;
+    int n = getState(pname, v, &normalized);
+    for (int i = 0; i < n; i++) params[i] = normalized? (GLint)(v[i]*2147483647.0) : (GLint)lround(v[i]);
+}
+
+void glGetBooleanv(GLenum pname, GLboolean *params)
+{
+    double v[16];
+    bool normalized;
+    int n = getState(pname, v, &normalized);
+    for (int i = 0; i < n; i++) params[i] = (v[i] != 0.0)? GL_TRUE : GL_FALSE;
 }
 
 const GLubyte *glGetString(GLenum name)
@@ -1013,6 +1206,7 @@ const GLubyte *glGetString(GLenum name)
 
 void glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
 {
+    if ((width < 0) || (height < 0)) { setError(GL_INVALID_VALUE); return; }
     gl.state.viewport[0] = x;
     gl.state.viewport[1] = y;
     gl.state.viewport[2] = width;
@@ -1021,6 +1215,7 @@ void glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
 
 void glScissor(GLint x, GLint y, GLsizei width, GLsizei height)
 {
+    if ((width < 0) || (height < 0)) { setError(GL_INVALID_VALUE); return; }
     gl.state.scissorBox[0] = x;
     gl.state.scissorBox[1] = y;
     gl.state.scissorBox[2] = width;
@@ -1174,14 +1369,14 @@ void glMatrixMode(GLenum mode)
         case GL_MODELVIEW: gl.matrixMode = 0; break;
         case GL_PROJECTION: gl.matrixMode = 1; break;
         case GL_TEXTURE: gl.matrixMode = 2; break;
-        default: break;
+        default: setError(GL_INVALID_ENUM); break;
     }
 }
 
 void glPushMatrix(void)
 {
     int *depth = &gl.stackDepth[gl.matrixMode];
-    if (*depth + 1 >= C3DGL_MATRIX_STACK) { WARN_ONCE("Matrix stack overflow\n"); return; }
+    if (*depth + 1 >= C3DGL_MATRIX_STACK) { WARN_ONCE("Matrix stack overflow\n"); setError(GL_STACK_OVERFLOW); return; }
 
     gl.stack[gl.matrixMode][*depth + 1] = gl.stack[gl.matrixMode][*depth];
     (*depth)++;
@@ -1190,7 +1385,7 @@ void glPushMatrix(void)
 void glPopMatrix(void)
 {
     int *depth = &gl.stackDepth[gl.matrixMode];
-    if (*depth == 0) { WARN_ONCE("Matrix stack underflow\n"); return; }
+    if (*depth == 0) { WARN_ONCE("Matrix stack underflow\n"); setError(GL_STACK_UNDERFLOW); return; }
 
     (*depth)--;
     matrixChanged();
@@ -1207,6 +1402,26 @@ void glMultMatrixf(const GLfloat *m)
     Mat4 mat;
     memcpy(mat.m, m, sizeof(mat.m));
     multCurrent(&mat);
+}
+
+void glMultMatrixd(const GLdouble *m)
+{
+    Mat4 mat;
+    for (int i = 0; i < 16; i++) mat.m[i] = (float)m[i];
+    multCurrent(&mat);
+}
+
+void glLoadMatrixf(const GLfloat *m)
+{
+    memcpy(currentMatrix()->m, m, 16*sizeof(float));
+    matrixChanged();
+}
+
+void glLoadMatrixd(const GLdouble *m)
+{
+    Mat4 *cur = currentMatrix();
+    for (int i = 0; i < 16; i++) cur->m[i] = (float)m[i];
+    matrixChanged();
 }
 
 void glTranslatef(GLfloat x, GLfloat y, GLfloat z)
@@ -1245,6 +1460,10 @@ void glScalef(GLfloat x, GLfloat y, GLfloat z)
     m.m[10] = z;
     multCurrent(&m);
 }
+
+void glTranslated(GLdouble x, GLdouble y, GLdouble z) { glTranslatef((float)x, (float)y, (float)z); }
+void glRotated(GLdouble angle, GLdouble x, GLdouble y, GLdouble z) { glRotatef((float)angle, (float)x, (float)y, (float)z); }
+void glScaled(GLdouble x, GLdouble y, GLdouble z) { glScalef((float)x, (float)y, (float)z); }
 
 void glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar)
 {
@@ -1307,7 +1526,12 @@ void glTexCoord2f(GLfloat s, GLfloat t)
     gl.current.uv[1] = t;
 }
 
-void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz) { (void)nx; (void)ny; (void)nz; }
+void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz)
+{
+    gl.currentNormal[0] = nx;
+    gl.currentNormal[1] = ny;
+    gl.currentNormal[2] = nz;
+}
 
 void glColor4ub(GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha)
 {
@@ -1323,6 +1547,67 @@ void glColor4f(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
 }
 
 void glColor3f(GLfloat red, GLfloat green, GLfloat blue) { glColor4f(red, green, blue, 1.0f); }
+
+// Variants of the calls above
+void glVertex2d(GLdouble x, GLdouble y) { glVertex3f((float)x, (float)y, 0.0f); }
+void glVertex2s(GLshort x, GLshort y) { glVertex3f(x, y, 0.0f); }
+void glVertex2fv(const GLfloat *v) { glVertex3f(v[0], v[1], 0.0f); }
+void glVertex2dv(const GLdouble *v) { glVertex3f((float)v[0], (float)v[1], 0.0f); }
+void glVertex2iv(const GLint *v) { glVertex3f((float)v[0], (float)v[1], 0.0f); }
+void glVertex2sv(const GLshort *v) { glVertex3f(v[0], v[1], 0.0f); }
+void glVertex3d(GLdouble x, GLdouble y, GLdouble z) { glVertex3f((float)x, (float)y, (float)z); }
+void glVertex3i(GLint x, GLint y, GLint z) { glVertex3f((float)x, (float)y, (float)z); }
+void glVertex3s(GLshort x, GLshort y, GLshort z) { glVertex3f(x, y, z); }
+void glVertex3fv(const GLfloat *v) { glVertex3f(v[0], v[1], v[2]); }
+void glVertex3dv(const GLdouble *v) { glVertex3f((float)v[0], (float)v[1], (float)v[2]); }
+void glVertex3iv(const GLint *v) { glVertex3f((float)v[0], (float)v[1], (float)v[2]); }
+void glVertex3sv(const GLshort *v) { glVertex3f(v[0], v[1], v[2]); }
+
+// Vertices are stored with w = 1: homogeneous positions are divided (exact unless w <= 0)
+void glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w)
+{
+    if (w == 0.0f) { WARN_ONCE("glVertex4: w = 0 (point at infinity) not supported\n"); return; }
+    glVertex3f(x/w, y/w, z/w);
+}
+void glVertex4fv(const GLfloat *v) { glVertex4f(v[0], v[1], v[2], v[3]); }
+void glVertex4d(GLdouble x, GLdouble y, GLdouble z, GLdouble w) { glVertex4f((float)x, (float)y, (float)z, (float)w); }
+
+void glTexCoord1f(GLfloat s) { glTexCoord2f(s, 0.0f); }
+void glTexCoord2d(GLdouble s, GLdouble t) { glTexCoord2f((float)s, (float)t); }
+void glTexCoord2i(GLint s, GLint t) { glTexCoord2f((float)s, (float)t); }
+void glTexCoord2s(GLshort s, GLshort t) { glTexCoord2f(s, t); }
+void glTexCoord2fv(const GLfloat *v) { glTexCoord2f(v[0], v[1]); }
+void glTexCoord2dv(const GLdouble *v) { glTexCoord2f((float)v[0], (float)v[1]); }
+
+void glNormal3d(GLdouble nx, GLdouble ny, GLdouble nz) { glNormal3f((float)nx, (float)ny, (float)nz); }
+void glNormal3fv(const GLfloat *v) { glNormal3f(v[0], v[1], v[2]); }
+void glNormal3dv(const GLdouble *v) { glNormal3f((float)v[0], (float)v[1], (float)v[2]); }
+
+void glColor3ub(GLubyte red, GLubyte green, GLubyte blue) { glColor4ub(red, green, blue, 255); }
+void glColor3ubv(const GLubyte *v) { glColor4ub(v[0], v[1], v[2], 255); }
+void glColor4ubv(const GLubyte *v) { glColor4ub(v[0], v[1], v[2], v[3]); }
+void glColor3fv(const GLfloat *v) { glColor4f(v[0], v[1], v[2], 1.0f); }
+void glColor4fv(const GLfloat *v) { glColor4f(v[0], v[1], v[2], v[3]); }
+void glColor3d(GLdouble red, GLdouble green, GLdouble blue) { glColor4f((float)red, (float)green, (float)blue, 1.0f); }
+void glColor4d(GLdouble red, GLdouble green, GLdouble blue, GLdouble alpha) { glColor4f((float)red, (float)green, (float)blue, (float)alpha); }
+void glColor3dv(const GLdouble *v) { glColor4f((float)v[0], (float)v[1], (float)v[2], 1.0f); }
+void glColor4dv(const GLdouble *v) { glColor4f((float)v[0], (float)v[1], (float)v[2], (float)v[3]); }
+
+// glRect: counter-clockwise quad from (x1, y1) to (x2, y2) at z = 0
+void glRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2)
+{
+    glBegin(GL_QUADS);
+    glVertex2f(x1, y1);
+    glVertex2f(x2, y1);
+    glVertex2f(x2, y2);
+    glVertex2f(x1, y2);
+    glEnd();
+}
+void glRectd(GLdouble x1, GLdouble y1, GLdouble x2, GLdouble y2) { glRectf((float)x1, (float)y1, (float)x2, (float)y2); }
+void glRecti(GLint x1, GLint y1, GLint x2, GLint y2) { glRectf((float)x1, (float)y1, (float)x2, (float)y2); }
+void glRects(GLshort x1, GLshort y1, GLshort x2, GLshort y2) { glRectf(x1, y1, x2, y2); }
+void glRectfv(const GLfloat *v1, const GLfloat *v2) { glRectf(v1[0], v1[1], v2[0], v2[1]); }
+void glRectiv(const GLint *v1, const GLint *v2) { glRectf((float)v1[0], (float)v1[1], (float)v2[0], (float)v2[1]); }
 
 //----------------------------------------------------------------------------------
 // OpenGL: client-side vertex arrays
@@ -1488,7 +1773,7 @@ void glGenTextures(GLsizei n, GLuint *textures)
     for (int i = 0; i < n; i++)
     {
         while ((id < C3DGL_MAX_TEXTURES) && gl.textures[id].used) id++;
-        if (id >= C3DGL_MAX_TEXTURES) { LOG("Out of texture ids\n"); textures[i] = 0; continue; }
+        if (id >= C3DGL_MAX_TEXTURES) { LOG("Out of texture ids\n"); setError(GL_OUT_OF_MEMORY); textures[i] = 0; continue; }
 
         Texture *t = &gl.textures[id];
         memset(t, 0, sizeof(*t));
@@ -1521,6 +1806,11 @@ void glDeleteTextures(GLsizei n, const GLuint *textures)
     }
 }
 
+GLboolean glIsTexture(GLuint texture)
+{
+    return (texture > 0) && (texture < C3DGL_MAX_TEXTURES) && gl.textures[texture].used;
+}
+
 void glBindTexture(GLenum target, GLuint texture)
 {
     if (target == GL_TEXTURE_2D) gl.boundTexture = texture;
@@ -1535,7 +1825,7 @@ void glTexEnvi(GLenum target, GLenum pname, GLint param)
         case GL_MODULATE: case GL_REPLACE: case GL_DECAL: case GL_BLEND: case GL_ADD:
             gl.state.texEnvMode = (GLenum)param;
             break;
-        default: WARN_ONCE("glTexEnv: mode 0x%x not supported\n", param); break;
+        default: WARN_ONCE("glTexEnv: mode 0x%x not supported\n", param); setError(GL_INVALID_ENUM); break;
     }
 }
 
@@ -1576,7 +1866,7 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param)
         case GL_TEXTURE_MAG_FILTER: t->magFilter = param; break;
         case GL_TEXTURE_WRAP_S: t->wrapS = param; break;
         case GL_TEXTURE_WRAP_T: t->wrapT = param; break;
-        default: return;
+        default: setError(GL_INVALID_ENUM); return;
     }
 
     if (t->loaded)
@@ -1585,6 +1875,10 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param)
         applyTextureParams(t);
     }
 }
+
+void glTexParameterf(GLenum target, GLenum pname, GLfloat param) { glTexParameteri(target, pname, (GLint)param); }
+void glTexParameteriv(GLenum target, GLenum pname, const GLint *params) { glTexParameteri(target, pname, params[0]); }
+void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params) { glTexParameteri(target, pname, (GLint)params[0]); }
 
 void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
                   GLint border, GLenum format, GLenum type, const GLvoid *pixels)
@@ -1595,12 +1889,13 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei widt
     if ((t == NULL) || (level != 0)) return;     // Mipmaps are not supported, only level 0 is used
 
     TexFormat f;
-    if (!texFormat(format, type, &f)) { LOG("glTexImage2D: format 0x%x/0x%x not supported\n", format, type); return; }
+    if (!texFormat(format, type, &f)) { LOG("glTexImage2D: format 0x%x/0x%x not supported\n", format, type); setError(GL_INVALID_ENUM); return; }
 
     int texWidth = nextPow2(width), texHeight = nextPow2(height);
     if ((texWidth > C3DGL_MAX_TEXTURE_SIZE) || (texHeight > C3DGL_MAX_TEXTURE_SIZE))
     {
         LOG("glTexImage2D: %ix%i exceeds the maximum of %i\n", width, height, C3DGL_MAX_TEXTURE_SIZE);
+        setError(GL_INVALID_VALUE);
         return;
     }
 
@@ -1615,6 +1910,7 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei widt
     if (!C3D_TexInit(&t->tex, texWidth, texHeight, f.format))
     {
         LOG("glTexImage2D: out of memory for %ix%i texture\n", texWidth, texHeight);
+        setError(GL_OUT_OF_MEMORY);
         return;
     }
 
@@ -1636,8 +1932,8 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
     if ((t == NULL) || !t->loaded || (level != 0) || (pixels == NULL)) return;
 
     TexFormat f;
-    if (!texFormat(format, type, &f) || (f.format != t->format.format)) { LOG("glTexSubImage2D: format mismatch\n"); return; }
-    if ((xoffset < 0) || (yoffset < 0) || (xoffset + width > t->width) || (yoffset + height > t->height)) return;
+    if (!texFormat(format, type, &f) || (f.format != t->format.format)) { LOG("glTexSubImage2D: format mismatch\n"); setError(GL_INVALID_OPERATION); return; }
+    if ((xoffset < 0) || (yoffset < 0) || (xoffset + width > t->width) || (yoffset + height > t->height)) { setError(GL_INVALID_VALUE); return; }
 
     textureModified(gl.boundTexture);
     transferPixels(t, xoffset, yoffset, width, height, (u8 *)pixels, gl.unpackAlignment, true);
@@ -1650,7 +1946,7 @@ void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoi
     if ((t == NULL) || !t->loaded || (level != 0)) return;
 
     TexFormat f;
-    if (!texFormat(format, type, &f) || (f.format != t->format.format)) { LOG("glGetTexImage: format mismatch\n"); return; }
+    if (!texFormat(format, type, &f) || (f.format != t->format.format)) { LOG("glGetTexImage: format mismatch\n"); setError(GL_INVALID_OPERATION); return; }
 
     transferPixels(t, 0, 0, t->width, t->height, (u8 *)pixels, gl.packAlignment, false);
 }
