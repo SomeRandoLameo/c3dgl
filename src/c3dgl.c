@@ -41,6 +41,7 @@
 #define C3DGL_MAX_VERTICES      (64*1024)   // Per frame, 24 bytes each
 #define C3DGL_MAX_TEXTURES      512         // Texture ids 1..C3DGL_MAX_TEXTURES-1
 #define C3DGL_MATRIX_STACK      32
+#define C3DGL_TEXTURE_UNITS     3           // PICA texture units 0..2 (unit 3 is procedural only)
 #define C3DGL_MAX_TEXTURE_SIZE  1024
 
 // Row order of texture memory: the first row in memory is the top of the texture (t = 1),
@@ -60,12 +61,18 @@
 //----------------------------------------------------------------------------------
 // Types
 //----------------------------------------------------------------------------------
+// Vertex as assembled on the CPU. The fields up to texExtra are vertex buffer 0 (always written); texExtra goes to
+// vertex buffer 1, written only while texture units 1/2 are in use
 typedef struct {
     float pos[3];
-    float tex[3];               // s, t, q (r is not kept: only 2D textures)
+    float tex[3];               // Unit 0: s, t, q (r is not kept: only 2D textures)
     u8 color[4];
     float depthBias;            // Added to PICA NDC depth by the shader: polygon offset of filled polygons
+    float texExtra[C3DGL_TEXTURE_UNITS - 1][3];     // Units 1, 2: s, t, q
 } Vertex;
+
+#define GPU_VERTEX_SIZE     offsetof(Vertex, texExtra)
+#define GPU_EXTRA_SIZE      sizeof(((Vertex *)0)->texExtra)
 
 typedef struct {
     float m[16];                // Column-major, like OpenGL
@@ -101,15 +108,27 @@ typedef struct {
     GLenum minFilter, magFilter, wrapS, wrapT;
 } Texture;
 
+// Texture environment of one unit (glTexEnv)
+typedef struct {
+    GLenum mode;                // GL_MODULATE, GL_REPLACE, GL_DECAL, GL_BLEND, GL_ADD, GL_COMBINE
+    u32 color;                  // GL_TEXTURE_ENV_COLOR, 0xAABBGGRR like the PICA
+    GLenum combineRgb, combineAlpha;
+    GLenum srcRgb[3], srcAlpha[3], operandRgb[3], operandAlpha[3];
+    u8 rgbScale, alphaScale;    // 1, 2, 4
+} TexEnvState;
+
+typedef struct {
+    GLuint texture;             // 0: unit not used (set in prepareDraw)
+    TexEnvState env;            // Zeroed for unused units, so they don't split batches
+} TexUnitState;
+
 // Everything that decides how a range of vertices is rendered; see prepareDraw()
 typedef struct {
-    GLuint texture;             // 0: untextured
-    GLenum texEnvMode;          // glTexEnv, only used when textured (0 otherwise)
-    u32 texEnvColor;            // GL_TEXTURE_ENV_COLOR, 0xAABBGGRR like the PICA
+    TexUnitState units[C3DGL_TEXTURE_UNITS];
     bool clipSpace;             // Vertices are already in NDC (expanded lines and points)
     u32 matrixSerial;           // Matrix version (0 for clipSpace)
     u32 texMatrixSerial;        // Texture matrix version (0 when untextured)
-    bool texQ;                  // Texcoords with q != 1 were used (projection mode), only when textured
+    bool texQ;                  // Unit 0 texcoords with q != 1 were used (projection mode), only when textured
     bool blend;
     GLenum blendSrc, blendDst;
     bool depthTest, depthMask;
@@ -147,7 +166,10 @@ typedef struct {
     GLenum usage;
 } Buffer;
 
-enum { ARRAY_VERTEX, ARRAY_TEXCOORD, ARRAY_COLOR, ARRAY_NORMAL, ARRAY_EDGEFLAG, ARRAY_COUNT };
+enum { ARRAY_VERTEX, ARRAY_TEXCOORD0, ARRAY_TEXCOORD1, ARRAY_TEXCOORD2, ARRAY_COLOR, ARRAY_NORMAL, ARRAY_EDGEFLAG, ARRAY_COUNT };
+
+// Texcoord array of the client active unit (glClientActiveTexture)
+#define ARRAY_TEXCOORD      (ARRAY_TEXCOORD0 + gl.clientActiveTexture)
 
 //----------------------------------------------------------------------------------
 // Global state
@@ -158,13 +180,14 @@ static struct {
     C3DGLscreen screen;                 // Screen drawn on, see c3dglSetScreen()
     DVLB_s *dvlb;
     shaderProgram_s program;
-    int uLocMvp, uLocTexMat;
+    int uLocMvp, uLocTexMat[C3DGL_TEXTURE_UNITS];
     Mat4 post;                          // OpenGL clip space -> PICA clip space (rotation, depth range)
 
     // Frame and vertex batching
     bool frameActive;
     bool drawnThisFrame;
-    Vertex *vbo;                        // Linear memory, rewritten every frame
+    u8 *vbo;                            // Vertex buffer 0, GPU_VERTEX_SIZE per vertex; linear memory, rewritten every frame
+    float (*vboExtra)[C3DGL_TEXTURE_UNITS - 1][3];  // Vertex buffer 1: texcoords of units 1, 2
     int vertexCount;
     int batchStart;                     // First vertex not yet submitted
     DrawState batch;                    // State applied to the GPU for the current batch
@@ -172,8 +195,9 @@ static struct {
 
     // GL state as set by the gl* calls
     DrawState state;
-    bool texture2D;
-    GLuint boundTexture;
+    bool texture2D[C3DGL_TEXTURE_UNITS];
+    GLuint boundTexture[C3DGL_TEXTURE_UNITS];
+    int activeTexture, clientActiveTexture;     // glActiveTexture, glClientActiveTexture: 0..2
     PixelStore unpack, pack;
     ProxyLevel proxy2D[11];             // Per level, 1024 >> 10 = 1
     float lineWidth, pointSize;
@@ -185,13 +209,13 @@ static struct {
     u32 ignoredCaps;                    // Capabilities accepted but not implemented, see ignoredCapBit()
     GLenum shadeModel;
     float currentNormal[3];             // Only stored for glGet (no lighting)
-    float currentTexR;                  // r of the current texcoord, only for glGet
+    float currentTexR[C3DGL_TEXTURE_UNITS];     // r of the current texcoords, only for glGet
     bool texQUsed;                      // A texcoord with q != 1 was submitted: sticky projection mode
 
     // Matrices
-    int matrixMode;                     // 0: modelview, 1: projection, 2: texture
-    Mat4 stack[3][C3DGL_MATRIX_STACK];
-    int stackDepth[3];
+    int matrixMode;                     // 0: modelview, 1: projection, 2: texture (of the active unit)
+    Mat4 stack[2 + C3DGL_TEXTURE_UNITS][C3DGL_MATRIX_STACK];    // Modelview, projection, texture per unit
+    int stackDepth[2 + C3DGL_TEXTURE_UNITS];
     u32 matrixSerial;                   // Incremented on every modelview/projection change
     u32 texMatrixSerial;                // Incremented on every texture matrix change
     Mat4 pmv;                           // projection * modelview, cached for pmvSerial
@@ -285,9 +309,15 @@ static void mat4FromC3D(const C3D_Mtx *m, Mat4 *out)
     }
 }
 
+// Index into gl.stack: 0 modelview, 1 projection, 2 + unit for the texture matrix of the active unit
+static int matrixStack(void)
+{
+    return (gl.matrixMode == 2)? 2 + gl.activeTexture : gl.matrixMode;
+}
+
 static Mat4 *currentMatrix(void)
 {
-    return &gl.stack[gl.matrixMode][gl.stackDepth[gl.matrixMode]];
+    return &gl.stack[matrixStack()][gl.stackDepth[matrixStack()]];
 }
 
 static void matrixChanged(void)
@@ -498,7 +528,9 @@ static void flush(void)
     int count = gl.vertexCount - gl.batchStart;
     if (count <= 0) return;
 
-    GSPGPU_FlushDataCache(&gl.vbo[gl.batchStart], count*sizeof(Vertex));
+    GSPGPU_FlushDataCache(gl.vbo + (size_t)gl.batchStart*GPU_VERTEX_SIZE, count*GPU_VERTEX_SIZE);
+    if (gl.batch.units[1].texture || gl.batch.units[2].texture)
+        GSPGPU_FlushDataCache(&gl.vboExtra[gl.batchStart], count*GPU_EXTRA_SIZE);
     C3D_DrawArrays(GPU_TRIANGLES, gl.batchStart, count);
 
     gl.batchStart = gl.vertexCount;
@@ -515,44 +547,105 @@ static void physicalRect(const GLint r[4], int *x, int *y, int *w, int *h)
     *h = r[2];
 }
 
-// Texture environment: GL 1.1 table 3.22. The result depends on the texture's base format: PICA samples
-// L as (L, L, L, 1), A as (0, 0, 0, A) and formats without alpha with A = 1, which matches GL's (Lt, Ct, At)
-// except where GL takes the fragment color/alpha instead (no color in A textures, REPLACE without alpha)
-static void setupTexEnv(C3D_TexEnv *env, GLenum mode, u32 color, GPU_TEXCOLOR format)
+// Texture environment of unit `unit` = TexEnv stage `unit`. GL's fragment color Cf of unit n is the result of
+// unit n - 1 (GL_PREVIOUS), the primary color for unit 0.
+//
+// Classic modes: GL 1.1 table 3.22. The result depends on the texture's base format: PICA samples L as (L, L, L, 1),
+// A as (0, 0, 0, A) and formats without alpha with A = 1, which matches GL's (Lt, Ct, At) except where GL takes
+// the fragment color/alpha instead (no color in A textures, REPLACE without alpha)
+static GPU_TEVSRC texSource(int unit) { return (GPU_TEVSRC)(GPU_TEXTURE0 + unit); }
+static GPU_TEVSRC previousSource(int unit) { return unit? GPU_PREVIOUS : GPU_PRIMARY_COLOR; }
+
+static GPU_TEVSRC combineSource(GLenum src, int unit)
 {
+    switch (src)
+    {
+        case GL_TEXTURE: return texSource(unit);
+        case GL_TEXTURE0: case GL_TEXTURE1: case GL_TEXTURE2: return texSource(src - GL_TEXTURE0);   // Crossbar
+        case GL_CONSTANT: return GPU_CONSTANT;
+        case GL_PRIMARY_COLOR: return GPU_PRIMARY_COLOR;
+        default: return previousSource(unit);     // GL_PREVIOUS
+    }
+}
+
+static GPU_COMBINEFUNC combineFunc(GLenum f)
+{
+    switch (f)
+    {
+        case GL_REPLACE: return GPU_REPLACE;
+        case GL_ADD: return GPU_ADD;
+        case GL_ADD_SIGNED: return GPU_ADD_SIGNED;
+        case GL_INTERPOLATE: return GPU_INTERPOLATE;
+        case GL_SUBTRACT: return GPU_SUBTRACT;
+        case GL_DOT3_RGB: return GPU_DOT3_RGB;
+        case GL_DOT3_RGBA: return GPU_DOT3_RGBA;
+        default: return GPU_MODULATE;
+    }
+}
+
+static GPU_TEVSCALE tevScale(u8 scale) { return (scale == 4)? GPU_TEVSCALE_4 : (scale == 2)? GPU_TEVSCALE_2 : GPU_TEVSCALE_1; }
+
+// GL_COMBINE: arguments and functions map 1:1 onto a PICA TexEnv stage
+static void setupCombine(C3D_TexEnv *env, int unit, const TexEnvState *e)
+{
+    GPU_TEVOP_RGB opRgb[3];
+    GPU_TEVOP_A opAlpha[3];
+    for (int i = 0; i < 3; i++)
+    {
+        opRgb[i] = (e->operandRgb[i] == GL_ONE_MINUS_SRC_COLOR)? GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR :
+                   (e->operandRgb[i] == GL_SRC_ALPHA)? GPU_TEVOP_RGB_SRC_ALPHA :
+                   (e->operandRgb[i] == GL_ONE_MINUS_SRC_ALPHA)? GPU_TEVOP_RGB_ONE_MINUS_SRC_ALPHA : GPU_TEVOP_RGB_SRC_COLOR;
+        opAlpha[i] = (e->operandAlpha[i] == GL_ONE_MINUS_SRC_ALPHA)? GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA : GPU_TEVOP_A_SRC_ALPHA;
+    }
+
+    C3D_TexEnvSrc(env, C3D_RGB, combineSource(e->srcRgb[0], unit), combineSource(e->srcRgb[1], unit), combineSource(e->srcRgb[2], unit));
+    C3D_TexEnvSrc(env, C3D_Alpha, combineSource(e->srcAlpha[0], unit), combineSource(e->srcAlpha[1], unit), combineSource(e->srcAlpha[2], unit));
+    C3D_TexEnvOpRgb(env, opRgb[0], opRgb[1], opRgb[2]);
+    C3D_TexEnvOpAlpha(env, opAlpha[0], opAlpha[1], opAlpha[2]);
+    C3D_TexEnvFunc(env, C3D_RGB, combineFunc(e->combineRgb));
+    C3D_TexEnvFunc(env, C3D_Alpha, combineFunc(e->combineAlpha));   // Ignored by PICA for DOT3_RGBA, like in GL
+    C3D_TexEnvScale(env, C3D_RGB, tevScale(e->rgbScale));
+    C3D_TexEnvScale(env, C3D_Alpha, tevScale(e->alphaScale));
+}
+
+static void setupTexEnv(C3D_TexEnv *env, int unit, const TexEnvState *e, GPU_TEXCOLOR format)
+{
+    C3D_TexEnvColor(env, e->color);
+    if (e->mode == GL_COMBINE) { setupCombine(env, unit, e); return; }
+
+    GLenum mode = e->mode;
+    GPU_TEVSRC tex = texSource(unit), prev = previousSource(unit);
     bool hasColor = (format != GPU_A8) && (format != GPU_A4);
     bool hasAlpha = (format == GPU_RGBA8) || (format == GPU_RGBA5551) || (format == GPU_RGBA4) ||
                     (format == GPU_LA8) || (format == GPU_LA4) || (format == GPU_A8) || (format == GPU_A4);
 
-    C3D_TexEnvColor(env, color);
-
-    // Color: Cf = primary color, Ct = texture, Cc = env color
+    // Color: Cf = previous color, Ct = texture, Cc = env color
     if (!hasColor)
     {
-        C3D_TexEnvSrc(env, C3D_RGB, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+        C3D_TexEnvSrc(env, C3D_RGB, prev, prev, prev);
         C3D_TexEnvFunc(env, C3D_RGB, GPU_REPLACE);
     }
     else switch (mode)
     {
         case GL_REPLACE:
-            C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+            C3D_TexEnvSrc(env, C3D_RGB, tex, prev, prev);
             C3D_TexEnvFunc(env, C3D_RGB, GPU_REPLACE);
             break;
         case GL_DECAL:      // Cf*(1 - At) + Ct*At
-            C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_TEXTURE0);
+            C3D_TexEnvSrc(env, C3D_RGB, tex, prev, tex);
             C3D_TexEnvOpRgb(env, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_ALPHA);
             C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
             break;
         case GL_BLEND:      // Cf*(1 - Ct) + Cc*Ct
-            C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, GPU_PRIMARY_COLOR, GPU_TEXTURE0);
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, prev, tex);
             C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
             break;
         case GL_ADD:
-            C3D_TexEnvSrc(env, C3D_RGB, GPU_PRIMARY_COLOR, GPU_TEXTURE0, GPU_PRIMARY_COLOR);
+            C3D_TexEnvSrc(env, C3D_RGB, prev, tex, prev);
             C3D_TexEnvFunc(env, C3D_RGB, GPU_ADD);
             break;
         default:            // GL_MODULATE
-            C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+            C3D_TexEnvSrc(env, C3D_RGB, tex, prev, prev);
             C3D_TexEnvFunc(env, C3D_RGB, GPU_MODULATE);
             break;
     }
@@ -560,19 +653,33 @@ static void setupTexEnv(C3D_TexEnv *env, GLenum mode, u32 color, GPU_TEXCOLOR fo
     // Alpha: REPLACE takes At, DECAL keeps Af, everything else is Af*At (At = 1 without alpha)
     if ((mode == GL_DECAL) || ((mode == GL_REPLACE) && !hasAlpha))
     {
-        C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+        C3D_TexEnvSrc(env, C3D_Alpha, prev, prev, prev);
         C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
     }
     else if (mode == GL_REPLACE)
     {
-        C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+        C3D_TexEnvSrc(env, C3D_Alpha, tex, prev, prev);
         C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
     }
     else
     {
-        C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+        C3D_TexEnvSrc(env, C3D_Alpha, tex, prev, prev);
         C3D_TexEnvFunc(env, C3D_Alpha, GPU_MODULATE);
     }
+}
+
+// Texture matrix of `unit` as shader uniform rows s, t, q; s and t scaled from the image to the padded texture size
+static void applyTextureMatrix(int unit, const Texture *t, bool *projective)
+{
+    const Mat4 *tm = &gl.stack[2 + unit][gl.stackDepth[2 + unit]];
+    float scale[2] = { (float)t->width/t->tex.width, (float)t->height/t->tex.height };
+    for (int row = 0; row < 2; row++)
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat[unit] + row, tm->m[row]*scale[row], tm->m[4 + row]*scale[row],
+                      tm->m[8 + row]*scale[row], tm->m[12 + row]*scale[row]);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat[unit] + 2, tm->m[3], tm->m[7], tm->m[11], tm->m[15]);
+
+    // q != 1 (r is always 0, so m[11] does not matter)
+    *projective = (tm->m[3] != 0.0f) || (tm->m[7] != 0.0f) || (tm->m[15] != 1.0f);
 }
 
 static void applyState(const DrawState *s)
@@ -615,32 +722,35 @@ static void applyState(const DrawState *s)
 
     C3D_CullFace(cullMode(s));
 
-    // Fragment stage: vertex color, combined with the texture according to glTexEnv
-    C3D_TexEnv *env = C3D_GetTexEnv(0);
-    C3D_TexEnvInit(env);
-    if (s->texture != 0)
+    // Fragment stage: TexEnv stage n combines texture unit n with the result of stage n - 1 (glTexEnv per unit)
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
     {
-        Texture *t = &gl.textures[s->texture];
+        C3D_TexEnv *env = C3D_GetTexEnv(unit);
+        C3D_TexEnvInit(env);
+        const TexUnitState *u = &s->units[unit];
+        if (u->texture == 0)
+        {
+            // Pass the previous color through (stage 0: the vertex color)
+            C3D_TexEnvSrc(env, C3D_Both, previousSource(unit), GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+            C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+            C3D_TexBind(unit, NULL);
+            continue;
+        }
 
-        // Texture matrix rows s, t, q; s and t scaled from the image to the padded texture size
-        const Mat4 *tm = &gl.stack[2][gl.stackDepth[2]];
-        float scale[2] = { (float)t->width/t->tex.width, (float)t->height/t->tex.height };
-        for (int row = 0; row < 2; row++)
-            C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat + row, tm->m[row]*scale[row], tm->m[4 + row]*scale[row],
-                          tm->m[8 + row]*scale[row], tm->m[12 + row]*scale[row]);
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat + 2, tm->m[3], tm->m[7], tm->m[11], tm->m[15]);
+        Texture *t = &gl.textures[u->texture];
+        bool projective;
+        applyTextureMatrix(unit, t, &projective);
 
-        // q != 1 (matrix or texcoords): let PICA divide s and t by q (r is always 0, so m[11] does not matter)
-        bool projective = (tm->m[3] != 0.0f) || (tm->m[7] != 0.0f) || (tm->m[15] != 1.0f) || s->texQ;
-        t->tex.param = (t->tex.param & ~GPU_TEXTURE_MODE(7)) | GPU_TEXTURE_MODE(projective? GPU_TEX_PROJECTION : GPU_TEX_2D);
+        // Unit 0 can let PICA divide s and t by q per pixel (projection mode); units 1/2 divide per vertex in the shader
+        if (unit == 0)
+        {
+            projective = projective || s->texQ;
+            t->tex.param = (t->tex.param & ~GPU_TEXTURE_MODE(7)) | GPU_TEXTURE_MODE(projective? GPU_TEX_PROJECTION : GPU_TEX_2D);
+        }
+        else t->tex.param = (t->tex.param & ~GPU_TEXTURE_MODE(7)) | GPU_TEXTURE_MODE(GPU_TEX_2D);
 
-        C3D_TexBind(0, &t->tex);
-        setupTexEnv(env, s->texEnvMode, s->texEnvColor, t->format.format);
-    }
-    else
-    {
-        C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
-        C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+        C3D_TexBind(unit, &t->tex);
+        setupTexEnv(env, unit, &u->env, t->format.format);
     }
 
     Mat4 mvp = gl.post;
@@ -676,16 +786,16 @@ static void prepareDraw(bool clipSpace)
     memcpy(&key, &gl.state, sizeof(DrawState));
     key.clipSpace = clipSpace;
     key.matrixSerial = clipSpace? 0 : gl.matrixSerial;
-    key.texture = (gl.texture2D && textureValid(gl.boundTexture))? gl.boundTexture : 0;
-    key.texMatrixSerial = gl.texMatrixSerial;
-    key.texQ = gl.texQUsed;
-    if (key.texture == 0)   // Unused, don't split batches over it
+    bool textured = false;
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
     {
-        key.texEnvMode = 0;
-        key.texEnvColor = 0;
-        key.texMatrixSerial = 0;
-        key.texQ = false;
+        TexUnitState *u = &key.units[unit];
+        u->texture = (gl.texture2D[unit] && textureValid(gl.boundTexture[unit]))? gl.boundTexture[unit] : 0;
+        if (u->texture == 0) memset(&u->env, 0, sizeof(u->env));      // Unused, don't split batches over it
+        textured = textured || (u->texture != 0);
     }
+    key.texMatrixSerial = textured? gl.texMatrixSerial : 0;
+    key.texQ = (key.units[0].texture != 0) && gl.texQUsed;
     if (!key.stencilTest)
     {
         key.stencilFunc = key.stencilFail = key.stencilDepthFail = key.stencilPass = 0;
@@ -710,16 +820,25 @@ static void emitTriangle(const Vertex *a, const Vertex *b, const Vertex *c)
 {
     if (!reserveVertices(3)) return;
 
-    Vertex *v = &gl.vbo[gl.vertexCount];
-    v[0] = *a;
-    v[1] = *b;
-    v[2] = *c;
+    // Vertex buffer 0 always; texcoords of units 1/2 only when the batch uses them (stale data is never sampled)
+    u8 *v = gl.vbo + (size_t)gl.vertexCount*GPU_VERTEX_SIZE;
+    memcpy(v, a, GPU_VERTEX_SIZE);
+    memcpy(v + GPU_VERTEX_SIZE, b, GPU_VERTEX_SIZE);
+    memcpy(v + 2*GPU_VERTEX_SIZE, c, GPU_VERTEX_SIZE);
+    if (gl.batch.units[1].texture || gl.batch.units[2].texture)
+    {
+        memcpy(gl.vboExtra[gl.vertexCount], a->texExtra, GPU_EXTRA_SIZE);
+        memcpy(gl.vboExtra[gl.vertexCount + 1], b->texExtra, GPU_EXTRA_SIZE);
+        memcpy(gl.vboExtra[gl.vertexCount + 2], c->texExtra, GPU_EXTRA_SIZE);
+    }
     gl.vertexCount += 3;
 }
 
 static void lerpVertex(Vertex *out, const Vertex *a, const Vertex *b, float t)
 {
     for (int i = 0; i < 3; i++) out->tex[i] = a->tex[i] + (b->tex[i] - a->tex[i])*t;
+    for (int u = 0; u < C3DGL_TEXTURE_UNITS - 1; u++)
+        for (int i = 0; i < 3; i++) out->texExtra[u][i] = a->texExtra[u][i] + (b->texExtra[u][i] - a->texExtra[u][i])*t;
     for (int i = 0; i < 4; i++) out->color[i] = (u8)(a->color[i] + ((float)b->color[i] - a->color[i])*t);
 }
 
@@ -1078,15 +1197,18 @@ bool c3dglInit(void)
     gl.screen = C3DGL_SCREEN_TOP;
     linkTarget();
 
-    gl.vbo = linearAlloc(C3DGL_MAX_VERTICES*sizeof(Vertex));
-    if (gl.vbo == NULL) { LOG("Failed to allocate vertex buffer\n"); c3dglClose(); return false; }
+    gl.vbo = linearAlloc(C3DGL_MAX_VERTICES*GPU_VERTEX_SIZE);
+    gl.vboExtra = linearAlloc(C3DGL_MAX_VERTICES*GPU_EXTRA_SIZE);
+    if ((gl.vbo == NULL) || (gl.vboExtra == NULL)) { LOG("Failed to allocate vertex buffer\n"); c3dglClose(); return false; }
 
     gl.dvlb = DVLB_ParseFile((u32 *)c3dgl_vsh_shbin, c3dgl_vsh_shbin_size);
     shaderProgramInit(&gl.program);
     shaderProgramSetVsh(&gl.program, &gl.dvlb->DVLE[0]);
     C3D_BindProgram(&gl.program);
     gl.uLocMvp = shaderInstanceGetUniformLocation(gl.program.vertexShader, "mvp");
-    gl.uLocTexMat = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texmat");
+    gl.uLocTexMat[0] = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texmat0");
+    gl.uLocTexMat[1] = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texmat1");
+    gl.uLocTexMat[2] = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texmat2");
 
     // Vertex layout: v0 = position (3 floats), v1 = texcoord s, t, q (3 floats), v2 = color (4 ubytes), v3 = depth bias (float)
     C3D_AttrInfo *attrInfo = C3D_GetAttrInfo();
@@ -1095,10 +1217,13 @@ bool c3dglInit(void)
     AttrInfo_AddLoader(attrInfo, 1, GPU_FLOAT, 3);
     AttrInfo_AddLoader(attrInfo, 2, GPU_UNSIGNED_BYTE, 4);
     AttrInfo_AddLoader(attrInfo, 3, GPU_FLOAT, 1);
+    AttrInfo_AddLoader(attrInfo, 4, GPU_FLOAT, 3);     // Buffer 1: texcoords of units 1 and 2
+    AttrInfo_AddLoader(attrInfo, 5, GPU_FLOAT, 3);
 
     C3D_BufInfo *bufInfo = C3D_GetBufInfo();
     BufInfo_Init(bufInfo);
-    BufInfo_Add(bufInfo, gl.vbo, sizeof(Vertex), 4, 0x3210);
+    BufInfo_Add(bufInfo, gl.vbo, GPU_VERTEX_SIZE, 4, 0x3210);
+    BufInfo_Add(bufInfo, gl.vboExtra, GPU_EXTRA_SIZE, 2, 0x54);
 
     // Stored depth = -z_clip: near = 1, far = 0 (see depthFunc())
     C3D_DepthMap(true, -1.0f, 0.0f);
@@ -1118,7 +1243,21 @@ bool c3dglInit(void)
     gl.state.depthFunc = GL_LESS;
     gl.state.depthMask = true;
     gl.state.alphaFunc = GL_ALWAYS;
-    gl.state.texEnvMode = GL_MODULATE;
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+    {
+        // OpenGL defaults (GL 1.3 / ES 1.1 table 6.18)
+        TexEnvState *e = &gl.state.units[unit].env;
+        e->mode = GL_MODULATE;
+        e->combineRgb = e->combineAlpha = GL_MODULATE;
+        e->srcRgb[0] = e->srcAlpha[0] = GL_TEXTURE;
+        e->srcRgb[1] = e->srcAlpha[1] = GL_PREVIOUS;
+        e->srcRgb[2] = e->srcAlpha[2] = GL_CONSTANT;
+        e->operandRgb[0] = e->operandRgb[1] = GL_SRC_COLOR;
+        e->operandRgb[2] = GL_SRC_ALPHA;
+        e->operandAlpha[0] = e->operandAlpha[1] = e->operandAlpha[2] = GL_SRC_ALPHA;
+        e->rgbScale = e->alphaScale = 1;
+    }
+    for (int unit = 1; unit < C3DGL_TEXTURE_UNITS; unit++) gl.current.texExtra[unit - 1][2] = 1.0f;    // q
     gl.state.stencilFunc = GL_ALWAYS;
     gl.state.stencilFuncMask = gl.state.stencilWriteMask = 0xFF;
     gl.state.stencilFail = gl.state.stencilDepthFail = gl.state.stencilPass = GL_KEEP;
@@ -1145,7 +1284,7 @@ bool c3dglInit(void)
         gl.arrays[i].type = (i == ARRAY_EDGEFLAG)? GL_UNSIGNED_BYTE : GL_FLOAT;
     }
 
-    for (int i = 0; i < 3; i++) mat4Identity(&gl.stack[i][0]);
+    for (int i = 0; i < 2 + C3DGL_TEXTURE_UNITS; i++) mat4Identity(&gl.stack[i][0]);
     gl.matrixSerial = gl.texMatrixSerial = 1;
 
     gl.ready = true;
@@ -1167,6 +1306,7 @@ void c3dglClose(void)
 
     if (gl.dvlb != NULL) { shaderProgramFree(&gl.program); DVLB_Free(gl.dvlb); }
     if (gl.vbo != NULL) linearFree(gl.vbo);
+    if (gl.vboExtra != NULL) linearFree(gl.vboExtra);
     for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) if (gl.targets[i] != NULL) C3D_RenderTargetDelete(gl.targets[i]);
     C3D_Fini();
 
@@ -1245,7 +1385,7 @@ static void setCapability(GLenum cap, bool enable)
 
     switch (cap)
     {
-        case GL_TEXTURE_2D: gl.texture2D = enable; break;
+        case GL_TEXTURE_2D: gl.texture2D[gl.activeTexture] = enable; break;
         case GL_BLEND: gl.state.blend = enable; break;
         case GL_DEPTH_TEST: gl.state.depthTest = enable; break;
         case GL_ALPHA_TEST: gl.state.alphaTest = enable; break;
@@ -1291,7 +1431,7 @@ GLboolean glIsEnabled(GLenum cap)
 
     switch (cap)
     {
-        case GL_TEXTURE_2D: return gl.texture2D;
+        case GL_TEXTURE_2D: return gl.texture2D[gl.activeTexture];
         case GL_BLEND: return gl.state.blend;
         case GL_DEPTH_TEST: return gl.state.depthTest;
         case GL_ALPHA_TEST: return gl.state.alphaTest;
@@ -1373,12 +1513,13 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_TEXTURE_MATRIX:
         {
             int mode = pname - GL_MODELVIEW_MATRIX;
+            if (mode == 2) mode += gl.activeTexture;
             for (int i = 0; i < 16; i++) v[i] = gl.stack[mode][gl.stackDepth[mode]].m[i];
             return 16;
         }
         case GL_MODELVIEW_STACK_DEPTH: v[0] = gl.stackDepth[0] + 1; return 1;
         case GL_PROJECTION_STACK_DEPTH: v[0] = gl.stackDepth[1] + 1; return 1;
-        case GL_TEXTURE_STACK_DEPTH: v[0] = gl.stackDepth[2] + 1; return 1;
+        case GL_TEXTURE_STACK_DEPTH: v[0] = gl.stackDepth[2 + gl.activeTexture] + 1; return 1;
         case GL_MAX_MODELVIEW_STACK_DEPTH:
         case GL_MAX_PROJECTION_STACK_DEPTH:
         case GL_MAX_TEXTURE_STACK_DEPTH: v[0] = C3DGL_MATRIX_STACK; return 1;
@@ -1394,7 +1535,15 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_EDGE_FLAG: v[0] = gl.currentEdge; return 1;
 
         case GL_CURRENT_COLOR: for (int i = 0; i < 4; i++) v[i] = gl.current.color[i]/255.0; *normalized = true; return 4;
-        case GL_CURRENT_TEXTURE_COORDS: v[0] = gl.current.tex[0]; v[1] = gl.current.tex[1]; v[2] = gl.currentTexR; v[3] = gl.current.tex[2]; return 4;
+        case GL_CURRENT_TEXTURE_COORDS:
+        {
+            const float *tc = (gl.activeTexture == 0)? gl.current.tex : gl.current.texExtra[gl.activeTexture - 1];
+            v[0] = tc[0]; v[1] = tc[1]; v[2] = gl.currentTexR[gl.activeTexture]; v[3] = tc[2];
+            return 4;
+        }
+        case GL_ACTIVE_TEXTURE: v[0] = GL_TEXTURE0 + gl.activeTexture; return 1;
+        case GL_CLIENT_ACTIVE_TEXTURE: v[0] = GL_TEXTURE0 + gl.clientActiveTexture; return 1;
+        case GL_MAX_TEXTURE_UNITS: v[0] = C3DGL_TEXTURE_UNITS; return 1;
 
         // Client arrays
         case GL_VERTEX_ARRAY_SIZE: v[0] = gl.arrays[ARRAY_VERTEX].size; return 1;
@@ -1466,7 +1615,7 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_PACK_LSB_FIRST: v[0] = gl.pack.lsbFirst; return 1;
         case GL_PACK_IMAGE_HEIGHT: v[0] = gl.pack.imageHeight; return 1;
         case GL_PACK_SKIP_IMAGES: v[0] = gl.pack.skipImages; return 1;
-        case GL_TEXTURE_BINDING_2D: v[0] = gl.boundTexture; return 1;
+        case GL_TEXTURE_BINDING_2D: v[0] = gl.boundTexture[gl.activeTexture]; return 1;
         case GL_MAX_TEXTURE_SIZE: v[0] = C3DGL_MAX_TEXTURE_SIZE; return 1;
 
         // Render target: RGBA8 color, D24S8 depth/stencil
@@ -1725,16 +1874,16 @@ void glMatrixMode(GLenum mode)
 
 void glPushMatrix(void)
 {
-    int *depth = &gl.stackDepth[gl.matrixMode];
+    int *depth = &gl.stackDepth[matrixStack()];
     if (*depth + 1 >= C3DGL_MATRIX_STACK) { WARN_ONCE("Matrix stack overflow\n"); setError(GL_STACK_OVERFLOW); return; }
 
-    gl.stack[gl.matrixMode][*depth + 1] = gl.stack[gl.matrixMode][*depth];
+    gl.stack[matrixStack()][*depth + 1] = gl.stack[matrixStack()][*depth];
     (*depth)++;
 }
 
 void glPopMatrix(void)
 {
-    int *depth = &gl.stackDepth[gl.matrixMode];
+    int *depth = &gl.stackDepth[matrixStack()];
     if (*depth == 0) { WARN_ONCE("Matrix stack underflow\n"); setError(GL_STACK_UNDERFLOW); return; }
 
     (*depth)--;
@@ -1887,7 +2036,7 @@ void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q)
     gl.current.tex[0] = s;
     gl.current.tex[1] = t;
     gl.current.tex[2] = q;
-    gl.currentTexR = r;
+    gl.currentTexR[0] = r;
     if (q != 1.0f) markTexQ();
 }
 
@@ -2167,13 +2316,15 @@ static void submitArrayVertex(int index)
     Vertex v = gl.current;
     bool edge = gl.currentEdge;
 
-    if (arrayActive(ARRAY_TEXCOORD))
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
     {
+        if (!arrayActive(ARRAY_TEXCOORD0 + unit)) continue;
         float t[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-        if (!readArray(&gl.arrays[ARRAY_TEXCOORD], index, t, false)) return;
-        v.tex[0] = t[0];
-        v.tex[1] = t[1];
-        v.tex[2] = t[3];
+        if (!readArray(&gl.arrays[ARRAY_TEXCOORD0 + unit], index, t, false)) return;
+        float *dst = (unit == 0)? v.tex : v.texExtra[unit - 1];
+        dst[0] = t[0];
+        dst[1] = t[1];
+        dst[2] = t[3];
     }
     if (arrayActive(ARRAY_COLOR))
     {
@@ -2196,9 +2347,8 @@ static void submitArrayVertex(int index)
 
     if (!arrayActive(ARRAY_VERTEX))
     {
-        gl.current.tex[0] = v.tex[0];
-        gl.current.tex[1] = v.tex[1];
-        gl.current.tex[2] = v.tex[2];
+        memcpy(gl.current.tex, v.tex, sizeof(v.tex));
+        memcpy(gl.current.texExtra, v.texExtra, sizeof(v.texExtra));
         memcpy(gl.current.color, v.color, 4);
         gl.currentEdge = edge;
         return;
@@ -2219,13 +2369,13 @@ static void submitArrayVertex(int index)
 static bool arraysReady(void)
 {
     if (!arrayActive(ARRAY_VERTEX)) return false;
-    if (arrayActive(ARRAY_TEXCOORD) && (gl.arrays[ARRAY_TEXCOORD].size == 4)) markTexQ();
+    if (arrayActive(ARRAY_TEXCOORD0) && (gl.arrays[ARRAY_TEXCOORD0].size == 4)) markTexQ();
     return true;
 }
 
 void glArrayElement(GLint i)
 {
-    if (arrayActive(ARRAY_TEXCOORD) && (gl.arrays[ARRAY_TEXCOORD].size == 4)) markTexQ();
+    if (arrayActive(ARRAY_TEXCOORD0) && (gl.arrays[ARRAY_TEXCOORD0].size == 4)) markTexQ();
     if (!gl.inBegin && arrayActive(ARRAY_VERTEX)) return;    // A vertex outside glBegin/glEnd is ignored
     submitArrayVertex(i);
 }
@@ -2510,15 +2660,18 @@ static void transferPixels(Texture *t, int x0, int y0, int w, int h, u8 *pixels,
 
 static Texture *boundTexture(GLenum target)
 {
-    if ((target != GL_TEXTURE_2D) || (gl.boundTexture == 0) || (gl.boundTexture >= C3DGL_MAX_TEXTURES)) return NULL;
-    return &gl.textures[gl.boundTexture];
+    GLuint id = gl.boundTexture[gl.activeTexture];
+    if ((target != GL_TEXTURE_2D) || (id == 0) || (id >= C3DGL_MAX_TEXTURES)) return NULL;
+    return &gl.textures[id];
 }
 
 // Texture about to change: submit pending vertices that use it and rebind it for the next draw
 // (C3D_TexBind() only keeps a pointer, changes are not picked up otherwise)
 static void textureModified(GLuint id)
 {
-    if (gl.batchValid && (gl.batch.texture == id))
+    bool used = false;
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) used = used || (gl.batch.units[unit].texture == id);
+    if (gl.batchValid && used)
     {
         flush();
         gl.batchValid = false;
@@ -2566,7 +2719,7 @@ void glDeleteTextures(GLsizei n, const GLuint *textures)
             else C3D_TexDelete(&t->tex);
         }
         memset(t, 0, sizeof(*t));
-        if (gl.boundTexture == id) gl.boundTexture = 0;
+        for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) if (gl.boundTexture[unit] == id) gl.boundTexture[unit] = 0;
     }
 }
 
@@ -2577,34 +2730,82 @@ GLboolean glIsTexture(GLuint texture)
 
 void glBindTexture(GLenum target, GLuint texture)
 {
-    if (target == GL_TEXTURE_2D) gl.boundTexture = texture;
+    if (target == GL_TEXTURE_2D) gl.boundTexture[gl.activeTexture] = texture;
 }
 
-void glTexEnvi(GLenum target, GLenum pname, GLint param)
+static bool combineFuncValid(GLenum f, bool alpha)
 {
-    if ((target != GL_TEXTURE_ENV) || (pname != GL_TEXTURE_ENV_MODE)) return;
-
-    switch (param)
+    switch (f)
     {
-        case GL_MODULATE: case GL_REPLACE: case GL_DECAL: case GL_BLEND: case GL_ADD:
-            gl.state.texEnvMode = (GLenum)param;
-            break;
-        default: WARN_ONCE("glTexEnv: mode 0x%x not supported\n", param); setError(GL_INVALID_ENUM); break;
+        case GL_REPLACE: case GL_MODULATE: case GL_ADD: case GL_ADD_SIGNED: case GL_INTERPOLATE: case GL_SUBTRACT: return true;
+        case GL_DOT3_RGB: case GL_DOT3_RGBA: return !alpha;
+        default: return false;
     }
 }
 
-void glTexEnvf(GLenum target, GLenum pname, GLfloat param) { glTexEnvi(target, pname, (GLint)param); }
+static bool combineSourceValid(GLenum src)
+{
+    return (src == GL_TEXTURE) || (src == GL_CONSTANT) || (src == GL_PRIMARY_COLOR) || (src == GL_PREVIOUS) ||
+           ((src >= GL_TEXTURE0) && (src < GL_TEXTURE0 + C3DGL_TEXTURE_UNITS));    // Crossbar (GL 1.4)
+}
+
+// glTexEnv of the active texture unit; float-valued parameters (scales) arrive as floats
+static void setTexEnv(GLenum target, GLenum pname, GLint value, GLfloat fvalue)
+{
+    if (target != GL_TEXTURE_ENV) { setError(GL_INVALID_ENUM); return; }
+    TexEnvState *e = &gl.state.units[gl.activeTexture].env;
+
+    switch (pname)
+    {
+        case GL_TEXTURE_ENV_MODE:
+            switch (value)
+            {
+                case GL_MODULATE: case GL_REPLACE: case GL_DECAL: case GL_BLEND: case GL_ADD: case GL_COMBINE:
+                    e->mode = (GLenum)value;
+                    break;
+                default: WARN_ONCE("glTexEnv: mode 0x%x not supported\n", value); setError(GL_INVALID_ENUM); break;
+            }
+            return;
+        case GL_COMBINE_RGB: case GL_COMBINE_ALPHA:
+            if (!combineFuncValid(value, pname == GL_COMBINE_ALPHA)) { setError(GL_INVALID_ENUM); return; }
+            if (pname == GL_COMBINE_RGB) e->combineRgb = value;
+            else e->combineAlpha = value;
+            return;
+        case GL_SRC0_RGB: case GL_SRC1_RGB: case GL_SRC2_RGB:
+        case GL_SRC0_ALPHA: case GL_SRC1_ALPHA: case GL_SRC2_ALPHA:
+            if (!combineSourceValid(value)) { setError(GL_INVALID_ENUM); return; }
+            if (pname <= GL_SRC2_RGB) e->srcRgb[pname - GL_SRC0_RGB] = value;
+            else e->srcAlpha[pname - GL_SRC0_ALPHA] = value;
+            return;
+        case GL_OPERAND0_RGB: case GL_OPERAND1_RGB: case GL_OPERAND2_RGB:
+            if ((value != GL_SRC_COLOR) && (value != GL_ONE_MINUS_SRC_COLOR) && (value != GL_SRC_ALPHA) &&
+                (value != GL_ONE_MINUS_SRC_ALPHA)) { setError(GL_INVALID_ENUM); return; }
+            e->operandRgb[pname - GL_OPERAND0_RGB] = value;
+            return;
+        case GL_OPERAND0_ALPHA: case GL_OPERAND1_ALPHA: case GL_OPERAND2_ALPHA:
+            if ((value != GL_SRC_ALPHA) && (value != GL_ONE_MINUS_SRC_ALPHA)) { setError(GL_INVALID_ENUM); return; }
+            e->operandAlpha[pname - GL_OPERAND0_ALPHA] = value;
+            return;
+        case GL_RGB_SCALE: case GL_ALPHA_SCALE:
+            if ((fvalue != 1.0f) && (fvalue != 2.0f) && (fvalue != 4.0f)) { setError(GL_INVALID_VALUE); return; }
+            if (pname == GL_RGB_SCALE) e->rgbScale = (u8)fvalue;
+            else e->alphaScale = (u8)fvalue;
+            return;
+        default: setError(GL_INVALID_ENUM); return;
+    }
+}
+
+void glTexEnvi(GLenum target, GLenum pname, GLint param) { setTexEnv(target, pname, param, (GLfloat)param); }
+void glTexEnvf(GLenum target, GLenum pname, GLfloat param) { setTexEnv(target, pname, (GLint)param, param); }
 
 void glTexEnvfv(GLenum target, GLenum pname, const GLfloat *params)
 {
-    if (target != GL_TEXTURE_ENV) return;
-
-    if (pname == GL_TEXTURE_ENV_COLOR)
+    if ((target == GL_TEXTURE_ENV) && (pname == GL_TEXTURE_ENV_COLOR))
     {
-        gl.state.texEnvColor = ((u32)colorByte(params[3]) << 24) | ((u32)colorByte(params[2]) << 16) |
-                               ((u32)colorByte(params[1]) << 8) | colorByte(params[0]);
+        gl.state.units[gl.activeTexture].env.color = ((u32)colorByte(params[3]) << 24) | ((u32)colorByte(params[2]) << 16) |
+                                                     ((u32)colorByte(params[1]) << 8) | colorByte(params[0]);
     }
-    else glTexEnvi(target, pname, (GLint)params[0]);
+    else glTexEnvf(target, pname, params[0]);
 }
 
 void glTexEnviv(GLenum target, GLenum pname, const GLint *params)
@@ -2618,6 +2819,101 @@ void glTexEnviv(GLenum target, GLenum pname, const GLint *params)
     }
     else glTexEnvi(target, pname, params[0]);
 }
+
+// glGetTexEnv: values of the active unit; returns the count, 0 on error
+static int getTexEnv(GLenum target, GLenum pname, float v[4])
+{
+    if (target != GL_TEXTURE_ENV) { setError(GL_INVALID_ENUM); return 0; }
+    const TexEnvState *e = &gl.state.units[gl.activeTexture].env;
+    switch (pname)
+    {
+        case GL_TEXTURE_ENV_MODE: v[0] = e->mode; return 1;
+        case GL_TEXTURE_ENV_COLOR: for (int i = 0; i < 4; i++) v[i] = ((e->color >> (8*i)) & 0xFF)/255.0f; return 4;
+        case GL_COMBINE_RGB: v[0] = e->combineRgb; return 1;
+        case GL_COMBINE_ALPHA: v[0] = e->combineAlpha; return 1;
+        case GL_SRC0_RGB: case GL_SRC1_RGB: case GL_SRC2_RGB: v[0] = e->srcRgb[pname - GL_SRC0_RGB]; return 1;
+        case GL_SRC0_ALPHA: case GL_SRC1_ALPHA: case GL_SRC2_ALPHA: v[0] = e->srcAlpha[pname - GL_SRC0_ALPHA]; return 1;
+        case GL_OPERAND0_RGB: case GL_OPERAND1_RGB: case GL_OPERAND2_RGB: v[0] = e->operandRgb[pname - GL_OPERAND0_RGB]; return 1;
+        case GL_OPERAND0_ALPHA: case GL_OPERAND1_ALPHA: case GL_OPERAND2_ALPHA: v[0] = e->operandAlpha[pname - GL_OPERAND0_ALPHA]; return 1;
+        case GL_RGB_SCALE: v[0] = e->rgbScale; return 1;
+        case GL_ALPHA_SCALE: v[0] = e->alphaScale; return 1;
+        default: setError(GL_INVALID_ENUM); return 0;
+    }
+}
+
+void glGetTexEnvfv(GLenum target, GLenum pname, GLfloat *params)
+{
+    float v[4];
+    int n = getTexEnv(target, pname, v);
+    for (int i = 0; i < n; i++) params[i] = v[i];
+}
+
+void glGetTexEnviv(GLenum target, GLenum pname, GLint *params)
+{
+    float v[4];
+    int n = getTexEnv(target, pname, v);
+    for (int i = 0; i < n; i++) params[i] = (pname == GL_TEXTURE_ENV_COLOR)? (GLint)(v[i]*2147483647.0f) : (GLint)v[i];
+}
+
+// Multitexturing (ES 1.1, GL 1.3)
+void glActiveTexture(GLenum texture)
+{
+    if ((texture < GL_TEXTURE0) || (texture >= GL_TEXTURE0 + C3DGL_TEXTURE_UNITS)) { setError(GL_INVALID_ENUM); return; }
+    gl.activeTexture = texture - GL_TEXTURE0;
+}
+
+void glClientActiveTexture(GLenum texture)
+{
+    if ((texture < GL_TEXTURE0) || (texture >= GL_TEXTURE0 + C3DGL_TEXTURE_UNITS)) { setError(GL_INVALID_ENUM); return; }
+    gl.clientActiveTexture = texture - GL_TEXTURE0;
+}
+
+void glMultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q)
+{
+    if ((target < GL_TEXTURE0) || (target >= GL_TEXTURE0 + C3DGL_TEXTURE_UNITS)) { setError(GL_INVALID_ENUM); return; }
+    int unit = target - GL_TEXTURE0;
+    if (unit == 0) { glTexCoord4f(s, t, r, q); return; }
+
+    // Units 1/2: q is divided out per vertex by the shader
+    float *tc = gl.current.texExtra[unit - 1];
+    tc[0] = s;
+    tc[1] = t;
+    tc[2] = q;
+    gl.currentTexR[unit] = r;
+}
+
+// All other variants of glMultiTexCoord (generated like the glTexCoord variants)
+void glMultiTexCoord1d(GLenum target, GLdouble s) { glMultiTexCoord4f(target, (float)s, 0.0f, 0.0f, 1.0f); }
+void glMultiTexCoord1dv(GLenum target, const GLdouble *v) { glMultiTexCoord4f(target, (float)v[0], 0.0f, 0.0f, 1.0f); }
+void glMultiTexCoord1f(GLenum target, GLfloat s) { glMultiTexCoord4f(target, s, 0.0f, 0.0f, 1.0f); }
+void glMultiTexCoord1fv(GLenum target, const GLfloat *v) { glMultiTexCoord4f(target, v[0], 0.0f, 0.0f, 1.0f); }
+void glMultiTexCoord1i(GLenum target, GLint s) { glMultiTexCoord4f(target, (float)s, 0.0f, 0.0f, 1.0f); }
+void glMultiTexCoord1iv(GLenum target, const GLint *v) { glMultiTexCoord4f(target, (float)v[0], 0.0f, 0.0f, 1.0f); }
+void glMultiTexCoord1s(GLenum target, GLshort s) { glMultiTexCoord4f(target, s, 0.0f, 0.0f, 1.0f); }
+void glMultiTexCoord1sv(GLenum target, const GLshort *v) { glMultiTexCoord4f(target, v[0], 0.0f, 0.0f, 1.0f); }
+void glMultiTexCoord2d(GLenum target, GLdouble s, GLdouble t) { glMultiTexCoord4f(target, (float)s, (float)t, 0.0f, 1.0f); }
+void glMultiTexCoord2dv(GLenum target, const GLdouble *v) { glMultiTexCoord4f(target, (float)v[0], (float)v[1], 0.0f, 1.0f); }
+void glMultiTexCoord2f(GLenum target, GLfloat s, GLfloat t) { glMultiTexCoord4f(target, s, t, 0.0f, 1.0f); }
+void glMultiTexCoord2fv(GLenum target, const GLfloat *v) { glMultiTexCoord4f(target, v[0], v[1], 0.0f, 1.0f); }
+void glMultiTexCoord2i(GLenum target, GLint s, GLint t) { glMultiTexCoord4f(target, (float)s, (float)t, 0.0f, 1.0f); }
+void glMultiTexCoord2iv(GLenum target, const GLint *v) { glMultiTexCoord4f(target, (float)v[0], (float)v[1], 0.0f, 1.0f); }
+void glMultiTexCoord2s(GLenum target, GLshort s, GLshort t) { glMultiTexCoord4f(target, s, t, 0.0f, 1.0f); }
+void glMultiTexCoord2sv(GLenum target, const GLshort *v) { glMultiTexCoord4f(target, v[0], v[1], 0.0f, 1.0f); }
+void glMultiTexCoord3d(GLenum target, GLdouble s, GLdouble t, GLdouble r) { glMultiTexCoord4f(target, (float)s, (float)t, (float)r, 1.0f); }
+void glMultiTexCoord3dv(GLenum target, const GLdouble *v) { glMultiTexCoord4f(target, (float)v[0], (float)v[1], (float)v[2], 1.0f); }
+void glMultiTexCoord3f(GLenum target, GLfloat s, GLfloat t, GLfloat r) { glMultiTexCoord4f(target, s, t, r, 1.0f); }
+void glMultiTexCoord3fv(GLenum target, const GLfloat *v) { glMultiTexCoord4f(target, v[0], v[1], v[2], 1.0f); }
+void glMultiTexCoord3i(GLenum target, GLint s, GLint t, GLint r) { glMultiTexCoord4f(target, (float)s, (float)t, (float)r, 1.0f); }
+void glMultiTexCoord3iv(GLenum target, const GLint *v) { glMultiTexCoord4f(target, (float)v[0], (float)v[1], (float)v[2], 1.0f); }
+void glMultiTexCoord3s(GLenum target, GLshort s, GLshort t, GLshort r) { glMultiTexCoord4f(target, s, t, r, 1.0f); }
+void glMultiTexCoord3sv(GLenum target, const GLshort *v) { glMultiTexCoord4f(target, v[0], v[1], v[2], 1.0f); }
+void glMultiTexCoord4d(GLenum target, GLdouble s, GLdouble t, GLdouble r, GLdouble q) { glMultiTexCoord4f(target, (float)s, (float)t, (float)r, (float)q); }
+void glMultiTexCoord4dv(GLenum target, const GLdouble *v) { glMultiTexCoord4f(target, (float)v[0], (float)v[1], (float)v[2], (float)v[3]); }
+void glMultiTexCoord4fv(GLenum target, const GLfloat *v) { glMultiTexCoord4f(target, v[0], v[1], v[2], v[3]); }
+void glMultiTexCoord4i(GLenum target, GLint s, GLint t, GLint r, GLint q) { glMultiTexCoord4f(target, (float)s, (float)t, (float)r, (float)q); }
+void glMultiTexCoord4iv(GLenum target, const GLint *v) { glMultiTexCoord4f(target, (float)v[0], (float)v[1], (float)v[2], (float)v[3]); }
+void glMultiTexCoord4s(GLenum target, GLshort s, GLshort t, GLshort r, GLshort q) { glMultiTexCoord4f(target, s, t, r, q); }
+void glMultiTexCoord4sv(GLenum target, const GLshort *v) { glMultiTexCoord4f(target, v[0], v[1], v[2], v[3]); }
 
 void glTexParameteri(GLenum target, GLenum pname, GLint param)
 {
@@ -2635,7 +2931,7 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param)
 
     if (t->loaded)
     {
-        textureModified(gl.boundTexture);
+        textureModified(gl.boundTexture[gl.activeTexture]);
         applyTextureParams(t);
     }
 }
@@ -2697,7 +2993,7 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei widt
     int imageWidth = width - 2*border, imageHeight = height - 2*border;
     int texWidth = nextPow2(imageWidth), texHeight = nextPow2(imageHeight);
 
-    textureModified(gl.boundTexture);
+    textureModified(gl.boundTexture[gl.activeTexture]);
     if (t->loaded)
     {
         if (gl.frameActive) deferTextureDelete(&t->tex);
@@ -2746,7 +3042,7 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
     if (!texFormat(format, type, &f) || (f.format != t->format.format)) { LOG("glTexSubImage2D: format mismatch\n"); setError(GL_INVALID_OPERATION); return; }
     if ((xoffset < 0) || (yoffset < 0) || (xoffset + width > t->width) || (yoffset + height > t->height)) { setError(GL_INVALID_VALUE); return; }
 
-    textureModified(gl.boundTexture);
+    textureModified(gl.boundTexture[gl.activeTexture]);
     transferPixels(t, xoffset, yoffset, width, height, (u8 *)pixels, &gl.unpack, true);
     C3D_TexFlush(&t->tex);
 }
@@ -2987,6 +3283,19 @@ void glTexEnvxv(GLenum target, GLenum pname, const GLfixed *params)
         glTexEnvfv(target, pname, color);
     }
     else glTexEnvx(target, pname, params[0]);
+}
+
+void glMultiTexCoord4x(GLenum target, GLfixed s, GLfixed t, GLfixed r, GLfixed q)
+{
+    glMultiTexCoord4f(target, fixedToFloat(s), fixedToFloat(t), fixedToFloat(r), fixedToFloat(q));
+}
+
+void glGetTexEnvxv(GLenum target, GLenum pname, GLfixed *params)
+{
+    float v[4];
+    int n = getTexEnv(target, pname, v);
+    bool isEnum = (pname != GL_TEXTURE_ENV_COLOR) && (pname != GL_RGB_SCALE) && (pname != GL_ALPHA_SCALE);
+    for (int i = 0; i < n; i++) params[i] = isEnum? (GLfixed)v[i] : floatToFixed(v[i]);
 }
 
 void glTexParameterx(GLenum target, GLenum pname, GLfixed param) { glTexParameteri(target, pname, fixedParamIsEnum(pname)? param : (GLint)fixedToFloat(param)); }

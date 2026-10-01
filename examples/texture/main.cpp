@@ -1,7 +1,8 @@
 // c3dgl example: texture features, one cell each on the top screen (4x2 grid, 100x120 px per cell).
 // All cells use an asymmetric "F" texture (white F on blue, red block in the texel corner s = 0, t = 0).
 // Page 1: texture matrix, the same square with texcoords 0..1 in every cell, only the GL_TEXTURE matrix differs.
-// Page 2: texture coordinates: per-vertex q, texcoord array types. A switches pages.
+// Page 2: texture coordinates: per-vertex q, texcoord array types.
+// Page 3: multitexturing (3 units) and GL_COMBINE. A switches pages.
 // The expected result is printed on the bottom screen.
 #include <3ds.h>
 #include <GL/gl.h>
@@ -160,9 +161,210 @@ void drawTexcoordPage(GLuint tex) {
     glDisable(GL_TEXTURE_2D);
 }
 
+// Page 3 ------------------------------------------------------------------------------------------------
+
+// 16x16 GL_LUMINANCE images
+GLuint createLuminance(GLubyte (*value)(int x, int y), GLint filter) {
+    GLubyte pixels[16][16];
+    for (int y = 0; y < 16; y++)
+        for (int x = 0; x < 16; x++) pixels[y][x] = value(x, y);
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 16, 16, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+    return id;
+}
+
+// "Normal map" of 4 vertical stripes, normals encoded as RGB: +z, 45 degrees toward +x, +x, 45 degrees toward -x
+GLuint createNormalStripes() {
+    static const GLubyte normals[4][3] = {{128, 128, 255}, {218, 128, 218}, {255, 128, 128}, {38, 128, 218}};
+    GLubyte pixels[8][8][3];
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++)
+            for (int c = 0; c < 3; c++) pixels[y][x][c] = normals[x / 2][c];
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 8, 8, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    return id;
+}
+
+struct MultiTextures {
+    GLuint f, checker, light, rampUp, rampRight, normals;
+};
+
+MultiTextures createMultiTextures(GLuint f) {
+    MultiTextures t{};
+    t.f = f;
+    t.checker = createLuminance([](int x, int y) -> GLubyte { return ((x / 2 + y / 2) % 2) ? 255 : 110; }, GL_NEAREST);
+    t.light = createLuminance([](int x, int y) -> GLubyte {
+        const float dx = x - 7.5f, dy = y - 7.5f;
+        const float v = 1.0f - (dx * dx + dy * dy) / 120.0f;
+        return static_cast<GLubyte>(v > 0.15f ? v * 255.0f : 0.15f * 255.0f);
+    }, GL_LINEAR);
+    t.rampUp = createLuminance([](int, int y) -> GLubyte { return static_cast<GLubyte>(40 + y * 14); }, GL_LINEAR);
+    t.rampRight = createLuminance([](int x, int) -> GLubyte { return static_cast<GLubyte>(40 + x * 14); }, GL_LINEAR);
+    t.normals = createNormalStripes();
+    return t;
+}
+
+// Bind `texture` to `unit` with mode `mode` (0: disable the unit)
+void setUnit(int unit, GLuint texture, GLenum mode) {
+    glActiveTexture(GL_TEXTURE0 + unit);
+    if (texture == 0) {
+        glDisable(GL_TEXTURE_2D);
+    } else {
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, mode);
+    }
+    glActiveTexture(GL_TEXTURE0);
+}
+
+void resetUnits() {
+    for (int unit = 0; unit < 3; unit++) {
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glDisable(GL_TEXTURE_2D);
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+        glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, 1.0f);
+        glMatrixMode(GL_TEXTURE);
+        glLoadIdentity();
+        glMatrixMode(GL_MODELVIEW);
+    }
+    glActiveTexture(GL_TEXTURE0);
+}
+
+// Square with the same texcoords 0..1 on all three units; `alphaRamp`: vertex alpha 0 left, 1 right
+void multiSquare(int column, int row, bool alphaRamp = false) {
+    glViewport(column * CELL_W, (ROWS - 1 - row) * CELL_H, CELL_W, CELL_H);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(-1.0, 1.0, -1.2, 1.2, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    static const float corners[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    glBegin(GL_QUADS);
+    for (const auto& c : corners) {
+        glColor4f(1, 1, 1, alphaRamp ? c[0] : 1.0f);
+        for (int unit = 0; unit < 3; unit++) glMultiTexCoord2f(GL_TEXTURE0 + unit, c[0], c[1]);
+        glVertex2f(-0.8f + 1.6f * c[0], -0.8f + 1.6f * c[1]);
+    }
+    glEnd();
+    glColor4f(1, 1, 1, 1);
+}
+
+void drawMultitexturePage(const MultiTextures& t) {
+    // 1: unit 0 F, unit 1 MODULATE with a round light map: F lit in the center, dark corners
+    resetUnits();
+    setUnit(0, t.f, GL_MODULATE);
+    setUnit(1, t.light, GL_MODULATE);
+    multiSquare(0, 0);
+
+    // 2: unit 1 ADD with the checker: F washed out, white where the checker is light
+    resetUnits();
+    setUnit(0, t.f, GL_MODULATE);
+    setUnit(1, t.checker, GL_ADD);
+    multiSquare(1, 0);
+
+    // 3: COMBINE INTERPOLATE on unit 1: F (previous) on the left to the checker (texture) on the right,
+    //    weighted by the vertex alpha
+    resetUnits();
+    setUnit(0, t.f, GL_MODULATE);
+    setUnit(1, t.checker, GL_COMBINE);
+    glActiveTexture(GL_TEXTURE1);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_INTERPOLATE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_TEXTURE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_PREVIOUS);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC2_RGB, GL_PRIMARY_COLOR);
+    glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_RGB, GL_SRC_ALPHA);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_CONSTANT);
+    glActiveTexture(GL_TEXTURE0);
+    multiSquare(2, 0, true);
+    glActiveTexture(GL_TEXTURE1);       // Back to the defaults for the next cells
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_TEXTURE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_PREVIOUS);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC2_RGB, GL_CONSTANT);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_TEXTURE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_MODULATE);
+    glActiveTexture(GL_TEXTURE0);
+
+    // 4: COMBINE DOT3_RGB of the normal stripes with a light along +z (constant (0.5, 0.5, 1)):
+    //    white, gray, black, gray stripes
+    resetUnits();
+    setUnit(0, t.normals, GL_COMBINE);
+    const GLfloat light[4] = {0.5f, 0.5f, 1.0f, 1.0f};
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, light);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_DOT3_RGB);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_TEXTURE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_CONSTANT);
+    multiSquare(3, 0);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_PREVIOUS);
+
+    // 5: COMBINE SUBTRACT 0.5 with RGB_SCALE 2: white F on dark blue, red block
+    resetUnits();
+    setUnit(0, t.f, GL_COMBINE);
+    const GLfloat half[4] = {0.5f, 0.5f, 0.5f, 1.0f};
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, half);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_SUBTRACT);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_CONSTANT);
+    glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, 2.0f);
+    multiSquare(0, 1);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_PREVIOUS);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+
+    // 6: three units: F x vertical ramp x horizontal ramp: dark bottom left, bright top right
+    resetUnits();
+    setUnit(0, t.f, GL_MODULATE);
+    setUnit(1, t.rampUp, GL_MODULATE);
+    setUnit(2, t.rampRight, GL_MODULATE);
+    multiSquare(1, 1);
+
+    // 7: unit 0 off, F only on unit 1, with unit 1's texture matrix flipping t: F upside down
+    resetUnits();
+    setUnit(1, t.f, GL_MODULATE);
+    glActiveTexture(GL_TEXTURE1);
+    glMatrixMode(GL_TEXTURE);
+    glTranslatef(0, 1, 0);
+    glScalef(1, -1, 1);
+    glMatrixMode(GL_MODELVIEW);
+    glActiveTexture(GL_TEXTURE0);
+    multiSquare(2, 1);
+
+    // 8: texcoord arrays per unit (glClientActiveTexture): F on unit 0 (0..1), checker on unit 1 (0..4)
+    resetUnits();
+    setUnit(0, t.f, GL_MODULATE);
+    setUnit(1, t.checker, GL_MODULATE);
+    glViewport(3 * CELL_W, 0, CELL_W, CELL_H);
+    static const GLfloat positions[8] = {-0.8f, -0.8f, 0.8f, -0.8f, 0.8f, 0.8f, -0.8f, 0.8f};
+    static const GLfloat tc0[8] = {0, 0, 1, 0, 1, 1, 0, 1};
+    static const GLfloat tc1[8] = {0, 0, 4, 0, 4, 4, 0, 4};
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glVertexPointer(2, GL_FLOAT, 0, positions);
+    glClientActiveTexture(GL_TEXTURE0);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glTexCoordPointer(2, GL_FLOAT, 0, tc0);
+    glClientActiveTexture(GL_TEXTURE1);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glTexCoordPointer(2, GL_FLOAT, 0, tc1);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glClientActiveTexture(GL_TEXTURE0);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    resetUnits();
+}
+
 void printPage(int page) {
     consoleClear();
-    std::printf("c3dgl texture test, page %i/2\n\n", page + 1);
+    std::printf("c3dgl texture test, page %i/3\n\n", page + 1);
     if (page == 0) {
         std::printf("Texture matrix. Expected on the\n"
                     "top screen, left to right, top row:\n"
@@ -184,6 +386,26 @@ void printPage(int page) {
                     "  to the right\n"
                     "- NPOT 12x12, scale -1 in t:\n"
                     "  F upside down\n");
+    } else if (page == 2) {
+        std::printf("Multitexturing. Expected,\n"
+                    "left to right, top row:\n"
+                    "- F x round light: F bright in\n"
+                    "  the center, dark corners\n"
+                    "- ADD checker: F washed out,\n"
+                    "  white checker squares\n"
+                    "- INTERPOLATE by vertex alpha:\n"
+                    "  F left, checker right\n"
+                    "- DOT3: white, gray, black,\n"
+                    "  gray vertical stripes\n"
+                    "bottom row:\n"
+                    "- SUBTRACT 0.5, scale 2: white F\n"
+                    "  on dark blue, red block\n"
+                    "- 3 units: F dark bottom left,\n"
+                    "  bright top right\n"
+                    "- unit 1 only, own texture\n"
+                    "  matrix: F upside down\n"
+                    "- array texcoords per unit:\n"
+                    "  F with a fine checker on it\n");
     } else {
         std::printf("Texture coordinates. Expected,\n"
                     "left to right, top row:\n"
@@ -223,6 +445,7 @@ int main() {
     }
 
     const GLuint texPot = createF(16), texNpot = createF(12);
+    const MultiTextures multi = createMultiTextures(texPot);
     glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
     float time = 0.0f;
     int page = 0;
@@ -233,11 +456,16 @@ int main() {
         const u32 keys = hidKeysDown();
         if (keys & KEY_START) break;
         if (keys & KEY_A) {
-            page = 1 - page;
+            page = (page + 1) % 3;
             printPage(page);
         }
 
         glClear(GL_COLOR_BUFFER_BIT);
+        if (page == 2) {
+            drawMultitexturePage(multi);
+            c3dglSwapBuffers();
+            continue;
+        }
         if (page == 1) {
             drawTexcoordPage(texPot);
             c3dglSwapBuffers();

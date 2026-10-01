@@ -19,7 +19,8 @@
 //     (points, lines, line strips/loops, triangles, triangle strips/fans, quads, quad strips, convex polygons)
 //   - Matrix stacks (modelview, projection, texture), glOrtho/glFrustum/glTranslate/glRotate/glScale/glMultMatrix
 //   - Textures: RGBA8, RGB8, LA8, L8, A8, RGB565, RGBA5551, RGBA4; any size up to 1024x1024
-//   - Texture environment: GL_MODULATE, GL_REPLACE, GL_DECAL, GL_BLEND, GL_ADD
+//   - Texture environment: GL_MODULATE, GL_REPLACE, GL_DECAL, GL_BLEND, GL_ADD, GL_COMBINE (incl. DOT3)
+//   - Multitexturing: 3 units (glActiveTexture, glClientActiveTexture, glMultiTexCoord)
 //   - Blending, alpha test, stencil, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
 //   - glClear of color/depth/stencil honors scissor and write masks
 //   - glGetError, glGet*v, glIsEnabled; common glVertex/glColor/glTexCoord/glRect/matrix variants

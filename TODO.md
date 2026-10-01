@@ -16,7 +16,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] All GL 1.1 variants of `glVertex*`, `glColor*`, `glTexCoord*` (incl. projective q), `glNormal*`; integer colors/normals normalized
 * [x] `glRect*` (GL)
 * [x] `glEdgeFlag*`, `glEdgeFlagPointer`, `GL_EDGE_FLAG_ARRAY` (GL)
-* [ ] `glMultiTexCoord*` (ES; with multitexturing)
+* [x] `glMultiTexCoord*` (all GL 1.3 variants, ES `glMultiTexCoord4f/4x`)
 * [ ] `glVertex4*` with w = 0 (points at infinity), `glIndex*` (GL, color index mode)
 
 ## Vertex Arrays
@@ -93,14 +93,16 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `GL_MODULATE`, `GL_REPLACE`, `GL_DECAL`, `GL_BLEND`, `GL_ADD`
 * [x] `GL_TEXTURE_ENV_COLOR`
 * [x] Alpha-only / luminance textures follow the GL format table
-* [ ] `glGetTexEnv*`
-* [ ] `GL_COMBINE` with sources, operands, `GL_RGB_SCALE`/`GL_ALPHA_SCALE`, `GL_DOT3_RGB(A)` (ES)
+* [x] `glGetTexEnv*` (`iv`, `fv`, `xv`)
+* [x] `GL_COMBINE` with all functions (incl. `GL_DOT3_RGB(A)`, `GL_SUBTRACT`), sources, operands,
+  `GL_RGB_SCALE`/`GL_ALPHA_SCALE`; also `GL_TEXTUREn` sources (crossbar, GL 1.4)
 * [ ] `GL_COORD_REPLACE_OES` (ES, with point sprites)
 
 ## Multitexturing (ES)
 
-* [ ] `glActiveTexture`, `glClientActiveTexture`, `glMultiTexCoord*`
-* [ ] Multiple texture units (PICA has 3 usable for 2D) and per-unit environments
+* [x] `glActiveTexture`, `glClientActiveTexture`, `glMultiTexCoord*`, `GL_MAX_TEXTURE_UNITS` = 3
+* [x] 3 texture units (PICA units 0-2) with per-unit binding, enable, environment, texture matrix, texcoords and arrays
+* [~] Projective texcoords on units 1/2 are divided per vertex (exact unless q varies across a primitive); unit 0 per pixel
 
 ## Mipmapping
 
@@ -161,7 +163,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glGetBooleanv`, `glGetIntegerv`, `glGetFloatv`, `glGetDoublev` (GL) for the implemented state
 * [x] `glGetError`, `glGetString`, `glIsEnabled`, `glIsTexture`
 * [x] `glGetFixedv` (ES), `glGetPointerv`, `glGetBufferParameteriv` (ES)
-* [ ] `glGetTexEnv*`, `glGetTexParameter*`, `glGetLight*`, `glGetMaterial*`, `glGetClipPlane*`
+* [ ] `glGetTexParameter*`, `glGetLight*`, `glGetMaterial*`, `glGetClipPlane*`
 * [ ] `GL_EXTENSIONS` lists nothing yet (ES 1.1 requires the point sprite / point size array / paletted texture names)
 * [~] `glHint` — accepted, hints have no effect (allowed by the spec)
 
@@ -198,11 +200,10 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [ ] Fog                               [ ] Attribute stacks (GL)
 [ ] Mipmapping (+ GL_GENERATE_MIPMAP) [ ] Evaluators (GL)
 [ ] Clip planes                       [ ] Feedback / selection (GL)
-[ ] Multitexturing + GL_COMBINE (ES)  [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
+[ ] Smooth points/lines               [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
 [ ] glReadPixels, texture copies      [ ] Accumulation buffer (GL)
 [ ] Point parameters + sprites (ES)   [ ] 1D textures, texgen (GL)
 [ ] Logic op, sample coverage         [ ] Stipple (GL)
-[ ] Smooth points/lines
 [ ] Compressed / paletted textures    [ ] Complete state queries
 ```
 
@@ -216,5 +217,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Texture environment               [x] Pixel store, proxy textures
 [x] Blending                          [x] Error handling, state queries
 [x] GLU (Mesa)                       [x] ES fixed-point API (implemented features)
-[x] VBOs (ES)
+[x] VBOs (ES)                         [x] Multitexturing + GL_COMBINE (ES)
 ```

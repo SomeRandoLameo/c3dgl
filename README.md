@@ -87,7 +87,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
   edge flags, polygon offset, depth range
 - `api` (C): self-check of queries, errors, entry point variants, array types, VBOs and the ES API; green screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
-- `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types)
+- `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
+  page 3: multitexturing and `GL_COMBINE`
 - `fragment`: per-fragment operations (alpha test, texture environment, stencil, `glClear`); A switches pages
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
@@ -116,7 +117,10 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
   `glTranslatef`, `glRotatef`, `glScalef`, `glMultMatrixf`
 - Textures of any size up to 1024x1024: RGBA8, RGB8, luminance/alpha, luminance, alpha, RGB565, RGBA5551, RGBA4;
   `glTexSubImage2D`, `glGetTexImage`, nearest/linear filtering, repeat/clamp/mirror wrapping
-- Texture environment (`glTexEnv`): `GL_MODULATE`, `GL_REPLACE`, `GL_DECAL`, `GL_BLEND`, `GL_ADD`, `GL_TEXTURE_ENV_COLOR`
+- Texture environment (`glTexEnv`): `GL_MODULATE`, `GL_REPLACE`, `GL_DECAL`, `GL_BLEND`, `GL_ADD`, `GL_TEXTURE_ENV_COLOR`,
+  and `GL_COMBINE` with all functions including `GL_DOT3_RGB(A)`
+- Multitexturing: 3 texture units (`glActiveTexture`, `glClientActiveTexture`, `glMultiTexCoord*`), each with its own
+  environment, texture matrix and texcoord array
 - Flat shading with GL's provoking vertices, `glPolygonMode` (fill/line/point per face, with edge flags),
   `glPolygonOffset` (including the slope factor) and `glDepthRange`
 - Blending (`glBlendFunc`), alpha test (`glAlphaFunc`), stencil (`glStencilFunc`/`Op`/`Mask`), depth
@@ -152,7 +156,9 @@ Lighting, fog, display lists, mipmaps (only level 0 is used), `glReadPixels`, ro
   (computed per polygon, passed as a per-vertex depth bias that the vertex shader adds).
 - Depth and stencil share one D24S8 buffer. `glClear` uses a memory fill when it can; clearing only depth or
   only stencil (once stencil is in use), or clearing with a scissor box or color mask, draws a full-screen quad.
-- Textures are padded to power-of-two sizes and Morton-swizzled on upload; the shader scales the UVs.
+- Textures are padded to power-of-two sizes and Morton-swizzled on upload; the shader applies the texture matrix
+  and scales the texcoords back. Texture unit n is TexEnv stage n; texcoords of units 1/2 are written to a second
+  vertex buffer only while those units are in use.
 - Textures deleted during a frame are freed after the GPU finished that frame.
 - One render target per screen; switching flushes the batch and changes the target within the same frame.
 

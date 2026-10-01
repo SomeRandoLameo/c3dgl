@@ -356,6 +356,14 @@ typedef void            GLvoid;
 #define GL_BGR                              0x80E0      // GL 1.2, defined for GLU
 #define GL_BGRA                             0x80E1
 
+// Multitexturing (ES 1.1, GL 1.3): units GL_TEXTURE0 + n
+#define GL_TEXTURE0                         0x84C0
+#define GL_TEXTURE1                         0x84C1
+#define GL_TEXTURE2                         0x84C2
+#define GL_ACTIVE_TEXTURE                   0x84E0
+#define GL_CLIENT_ACTIVE_TEXTURE            0x84E1
+#define GL_MAX_TEXTURE_UNITS                0x84E2
+
 // Texture environment
 #define GL_TEXTURE_ENV                      0x2300
 #define GL_TEXTURE_ENV_MODE                 0x2200
@@ -364,6 +372,39 @@ typedef void            GLvoid;
 #define GL_DECAL                            0x2101
 #define GL_REPLACE                          0x1E01
 #define GL_ADD                              0x0104
+
+// Texture combiners (GL_COMBINE: ES 1.1, GL 1.3)
+#define GL_COMBINE                          0x8570
+#define GL_COMBINE_RGB                      0x8571
+#define GL_COMBINE_ALPHA                    0x8572
+#define GL_RGB_SCALE                        0x8573
+#define GL_ADD_SIGNED                       0x8574
+#define GL_INTERPOLATE                      0x8575
+#define GL_CONSTANT                         0x8576
+#define GL_PRIMARY_COLOR                    0x8577
+#define GL_PREVIOUS                         0x8578
+#define GL_SUBTRACT                         0x84E7
+#define GL_DOT3_RGB                         0x86AE
+#define GL_DOT3_RGBA                        0x86AF
+#define GL_ALPHA_SCALE                      0x0D1C
+#define GL_SRC0_RGB                         0x8580
+#define GL_SRC1_RGB                         0x8581
+#define GL_SRC2_RGB                         0x8582
+#define GL_SRC0_ALPHA                       0x8588
+#define GL_SRC1_ALPHA                       0x8589
+#define GL_SRC2_ALPHA                       0x858A
+#define GL_SOURCE0_RGB                      GL_SRC0_RGB     // GL 1.3 names
+#define GL_SOURCE1_RGB                      GL_SRC1_RGB
+#define GL_SOURCE2_RGB                      GL_SRC2_RGB
+#define GL_SOURCE0_ALPHA                    GL_SRC0_ALPHA
+#define GL_SOURCE1_ALPHA                    GL_SRC1_ALPHA
+#define GL_SOURCE2_ALPHA                    GL_SRC2_ALPHA
+#define GL_OPERAND0_RGB                     0x8590
+#define GL_OPERAND1_RGB                     0x8591
+#define GL_OPERAND2_RGB                     0x8592
+#define GL_OPERAND0_ALPHA                   0x8598
+#define GL_OPERAND1_ALPHA                   0x8599
+#define GL_OPERAND2_ALPHA                   0x859A
 
 // Texture targets
 #define GL_TEXTURE_1D                       0x0DE0
@@ -629,6 +670,45 @@ void glTexEnvi(GLenum target, GLenum pname, GLint param);
 void glTexEnvf(GLenum target, GLenum pname, GLfloat param);
 void glTexEnviv(GLenum target, GLenum pname, const GLint *params);
 void glTexEnvfv(GLenum target, GLenum pname, const GLfloat *params);
+void glGetTexEnviv(GLenum target, GLenum pname, GLint *params);
+void glGetTexEnvfv(GLenum target, GLenum pname, GLfloat *params);
+
+// Multitexturing (ES 1.1, GL 1.3): 3 units. glTexEnv, glBindTexture, glEnable(GL_TEXTURE_2D), the texture
+// matrix and glGet affect the active unit; glTexCoordPointer and GL_TEXTURE_COORD_ARRAY the client active unit
+void glActiveTexture(GLenum texture);
+void glClientActiveTexture(GLenum texture);
+void glMultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q);
+void glMultiTexCoord1d(GLenum target, GLdouble s);
+void glMultiTexCoord1dv(GLenum target, const GLdouble *v);
+void glMultiTexCoord1f(GLenum target, GLfloat s);
+void glMultiTexCoord1fv(GLenum target, const GLfloat *v);
+void glMultiTexCoord1i(GLenum target, GLint s);
+void glMultiTexCoord1iv(GLenum target, const GLint *v);
+void glMultiTexCoord1s(GLenum target, GLshort s);
+void glMultiTexCoord1sv(GLenum target, const GLshort *v);
+void glMultiTexCoord2d(GLenum target, GLdouble s, GLdouble t);
+void glMultiTexCoord2dv(GLenum target, const GLdouble *v);
+void glMultiTexCoord2f(GLenum target, GLfloat s, GLfloat t);
+void glMultiTexCoord2fv(GLenum target, const GLfloat *v);
+void glMultiTexCoord2i(GLenum target, GLint s, GLint t);
+void glMultiTexCoord2iv(GLenum target, const GLint *v);
+void glMultiTexCoord2s(GLenum target, GLshort s, GLshort t);
+void glMultiTexCoord2sv(GLenum target, const GLshort *v);
+void glMultiTexCoord3d(GLenum target, GLdouble s, GLdouble t, GLdouble r);
+void glMultiTexCoord3dv(GLenum target, const GLdouble *v);
+void glMultiTexCoord3f(GLenum target, GLfloat s, GLfloat t, GLfloat r);
+void glMultiTexCoord3fv(GLenum target, const GLfloat *v);
+void glMultiTexCoord3i(GLenum target, GLint s, GLint t, GLint r);
+void glMultiTexCoord3iv(GLenum target, const GLint *v);
+void glMultiTexCoord3s(GLenum target, GLshort s, GLshort t, GLshort r);
+void glMultiTexCoord3sv(GLenum target, const GLshort *v);
+void glMultiTexCoord4d(GLenum target, GLdouble s, GLdouble t, GLdouble r, GLdouble q);
+void glMultiTexCoord4dv(GLenum target, const GLdouble *v);
+void glMultiTexCoord4fv(GLenum target, const GLfloat *v);
+void glMultiTexCoord4i(GLenum target, GLint s, GLint t, GLint r, GLint q);
+void glMultiTexCoord4iv(GLenum target, const GLint *v);
+void glMultiTexCoord4s(GLenum target, GLshort s, GLshort t, GLshort r, GLshort q);
+void glMultiTexCoord4sv(GLenum target, const GLshort *v);
 void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
                   GLint border, GLenum format, GLenum type, const GLvoid *pixels);
 void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
@@ -683,6 +763,8 @@ void glRotatex(GLfixed angle, GLfixed x, GLfixed y, GLfixed z);
 void glScalex(GLfixed x, GLfixed y, GLfixed z);
 void glTexEnvx(GLenum target, GLenum pname, GLfixed param);
 void glTexEnvxv(GLenum target, GLenum pname, const GLfixed *params);
+void glMultiTexCoord4x(GLenum target, GLfixed s, GLfixed t, GLfixed r, GLfixed q);
+void glGetTexEnvxv(GLenum target, GLenum pname, GLfixed *params);
 void glTexParameterx(GLenum target, GLenum pname, GLfixed param);
 void glTexParameterxv(GLenum target, GLenum pname, const GLfixed *params);
 void glTranslatex(GLfixed x, GLfixed y, GLfixed z);

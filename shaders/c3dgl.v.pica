@@ -1,13 +1,16 @@
 ; c3dgl vertex shader (PICA200): the whole fixed-function vertex stage of c3dgl.c
 ;   position: mvp * (x, y, z, 1)   (mvp already contains screen rotation and PICA depth range)
 ;             z += bias * w        (polygon offset of filled polygons, in PICA NDC units)
-;   texcoord: texmat * (s, t, 0, q) -> (s', t', q'), q is divided out by projection mode when used
-;             (texmat = texture matrix with NPOT padding scale, see c3dgl.c)
+;   texcoord n: texmatN * (s, t, 0, q) -> (s', t', q')   (texmatN = texture matrix of unit N with the NPOT
+;             padding scale, see c3dgl.c). Unit 0 passes q' on, PICA divides by it per pixel in projection mode;
+;             units 1 and 2 divide per vertex here (exact unless q varies across a primitive)
 ;   color:    ubyte RGBA -> 0..1
 
 ; Uniforms
 .fvec mvp[4]
-.fvec texmat[3]                 ; Rows s, t, q
+.fvec texmat0[3]                ; Rows s, t, q
+.fvec texmat1[3]
+.fvec texmat2[3]
 
 ; Constants
 .constf consts(1.0, 0.00392156862745, 0.0, 0.0)
@@ -19,13 +22,17 @@
 .out outpos position
 .out outtc0 texcoord0.st
 .out -      texcoord0w outtc0.p
+.out outtc1 texcoord1.st
+.out outtc2 texcoord2.st
 .out outclr color
 
-; Inputs
+; Inputs: buffer 0 (always), buffer 1 (texcoords of units 1 and 2)
 .alias inpos  v0
-.alias intc   v1
+.alias intc0  v1
 .alias inclr  v2
 .alias inbias v3
+.alias intc1  v4
+.alias intc2  v5
 
 .proc main
 	; r0 = (inpos.xyz, 1)
@@ -42,13 +49,31 @@
 	add r1.z, r1.z, r2.x
 	mov outpos, r1
 
-	; r2 = (s, t, 0, q)
-	mov r2.xy, intc.xy
+	; Unit 0: r2 = (s, t, 0, q)
+	mov r2.xy, intc0.xy
 	mov r2.z,  zero
-	mov r2.w,  intc.z
-	dp4 outtc0.x, texmat[0], r2
-	dp4 outtc0.y, texmat[1], r2
-	dp4 outtc0.z, texmat[2], r2
+	mov r2.w,  intc0.z
+	dp4 outtc0.x, texmat0[0], r2
+	dp4 outtc0.y, texmat0[1], r2
+	dp4 outtc0.z, texmat0[2], r2
+
+	; Unit 1
+	mov r2.xy, intc1.xy
+	mov r2.w,  intc1.z
+	dp4 r3.x, texmat1[0], r2
+	dp4 r3.y, texmat1[1], r2
+	dp4 r3.z, texmat1[2], r2
+	rcp r3.w, r3.z
+	mul outtc1, r3, r3.wwww
+
+	; Unit 2
+	mov r2.xy, intc2.xy
+	mov r2.w,  intc2.z
+	dp4 r3.x, texmat2[0], r2
+	dp4 r3.y, texmat2[1], r2
+	dp4 r3.z, texmat2[2], r2
+	rcp r3.w, r3.z
+	mul outtc2, r3, r3.wwww
 
 	mul outclr, inv255, inclr
 
