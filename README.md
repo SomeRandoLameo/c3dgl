@@ -72,7 +72,7 @@ target_link_libraries(my_app PRIVATE c3dgl::c3dgl)  # c3dgl::glu as well for <GL
 `c3dgl::glu` is [Mesa GLU](https://gitlab.freedesktop.org/mesa/glu) 9.0.3, vendored unmodified in `external/glu`
 (SGI Free Software License B 2.0, MIT style; see `external/glu/README.md`). Everything works except what needs GL
 features c3dgl does not have yet: NURBS rendering through evaluators (`GLU_NURBS_TESSELLATOR` mode works),
-`gluBuild1DMipmaps` (1D textures) and `gluBuild3DMipmaps` (GL 1.2). Mipmap levels above 0 are accepted but not used yet.
+`gluBuild1DMipmaps` (1D textures) and `gluBuild3DMipmaps` (GL 1.2).
 Turn it off with `-DC3DGL_BUILD_GLU=OFF`.
 
 ## Building the examples
@@ -88,7 +88,7 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `api` (C): self-check of queries, errors, entry point variants, array types, VBOs and the ES API; green screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
-  page 3: multitexturing and `GL_COMBINE`
+  page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps
 - `fragment`: per-fragment operations (alpha test, texture environment, stencil, `glClear`); A switches pages
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
@@ -129,6 +129,7 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - `glGetError`, `glGet{Boolean,Integer,Float,Double}v` for the common state, `glIsEnabled`, `glIsTexture`
 - The common variants of the immediate mode calls (`glVertex2/3/4{f,d,i,s}[v]`, `glColor3/4{f,d,ub}[v]`, ...),
   `glRect*`, `glLoadMatrix*`, `glTranslated`/`glRotated`/`glScaled`
+- Mipmaps: all levels, mipmap filters, `GL_GENERATE_MIPMAP`; `glGetTexParameter`
 - Pixel store modes (alignment, row length, skip rows/pixels, byte swapping), texture borders, proxy textures,
   `glGetTexLevelParameter`
 - GLU: the complete Mesa GLU 9.0.3 (`c3dgl::glu`, `<GL/glu.h>`), see [GLU](#glu)
@@ -139,7 +140,8 @@ The full list of functions is `include/GL/gl.h`.
 
 ## Not supported
 
-Lighting, fog, display lists, mipmaps (only level 0 is used), `glReadPixels`, round points (`GL_POINT_SMOOTH`) and stereoscopic 3D.
+Lighting, fog, display lists, `glReadPixels`, round points (`GL_POINT_SMOOTH`) and stereoscopic 3D. Mipmap levels
+below 8x8 are accepted but not sampled (PICA stops at 8x8).
 `GL_REPEAT` on non-power-of-two textures samples the padding.
 
 ## How it works

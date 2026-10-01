@@ -20,6 +20,7 @@
 //   - Matrix stacks (modelview, projection, texture), glOrtho/glFrustum/glTranslate/glRotate/glScale/glMultMatrix
 //   - Textures: RGBA8, RGB8, LA8, L8, A8, RGB565, RGBA5551, RGBA4; any size up to 1024x1024
 //   - Texture environment: GL_MODULATE, GL_REPLACE, GL_DECAL, GL_BLEND, GL_ADD, GL_COMBINE (incl. DOT3)
+//   - Mipmaps (all levels, mipmap filters, GL_GENERATE_MIPMAP)
 //   - Multitexturing: 3 units (glActiveTexture, glClientActiveTexture, glMultiTexCoord)
 //   - Blending, alpha test, stencil, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
 //   - glClear of color/depth/stencil honors scissor and write masks
@@ -30,7 +31,8 @@
 //   - Buffer objects (VBOs) for vertex arrays and indices
 //   - OpenGL ES 1.1: <GLES/gl.h>, fixed-point x functions, glOrthof/glFrustumf/... for the implemented features
 //
-// Not supported: lighting, fog, display lists, mipmaps, glReadPixels. Points are always square (no GL_POINT_SMOOTH).
+// Not supported: lighting, fog, display lists, glReadPixels.
+// Mipmaps work down to 8x8; smaller levels are accepted but PICA cannot sample them. Points are always square (no GL_POINT_SMOOTH).
 //
 // Screens: rendering goes to the top screen (400x240) by default. c3dglSetScreen() switches to the
 // bottom screen (320x240) and back, also within a frame; both are presented by c3dglSwapBuffers().

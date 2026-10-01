@@ -239,7 +239,9 @@ void drawEdgeFlags() {
 }
 
 // Polygon offset: a green plane tilted away from the viewer, red decals on it at the SAME depth with GL_LESS.
-// Left decal uses glPolygonOffset(-1, -1) and must be solid red, the right one has no offset and must not show
+// Left decal: glPolygonOffset(-1, -1) pulls it in front, it must be solid red. Right decal: (+1, +1) pushes it
+// behind, it must not show at all. (Without any offset the result is undefined: coplanar but different triangles
+// z-fight, GL gives no guarantee which one wins.)
 void drawPolygonOffset() {
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
@@ -258,8 +260,9 @@ void drawPolygonOffset() {
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(-1.0f, -1.0f);
     glRectf(-0.8f, -1.2f, -0.1f, 1.2f);
-    glDisable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.0f, 1.0f);
     glRectf(0.1f, -1.2f, 0.8f, 1.2f);
+    glDisable(GL_POLYGON_OFFSET_FILL);
     glDisable(GL_DEPTH_TEST);
 }
 
@@ -318,7 +321,7 @@ void printPage(int page) {
                     "  no diagonal\n"
                     "- polygon offset: solid red decal\n"
                     "  LEFT on a tilted green plane,\n"
-                    "  none on the right\n"
+                    "  none on the right (pushed back)\n"
                     "- depth range: red square in\n"
                     "  FRONT of the blue one\n");
     }

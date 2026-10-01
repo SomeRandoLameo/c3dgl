@@ -52,3 +52,4 @@ Thumbs.db
 # Claude Code: personal settings stay local; shared .claude/settings.json may be committed
 .claude/settings.local.json
 CLAUDE.local.md
+.freebuff/project-id

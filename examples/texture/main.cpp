@@ -2,7 +2,8 @@
 // All cells use an asymmetric "F" texture (white F on blue, red block in the texel corner s = 0, t = 0).
 // Page 1: texture matrix, the same square with texcoords 0..1 in every cell, only the GL_TEXTURE matrix differs.
 // Page 2: texture coordinates: per-vertex q, texcoord array types.
-// Page 3: multitexturing (3 units) and GL_COMBINE. A switches pages.
+// Page 3: multitexturing (3 units) and GL_COMBINE.
+// Page 4: mipmaps on a floor that recedes into the distance. A switches pages.
 // The expected result is printed on the bottom screen.
 #include <3ds.h>
 #include <GL/gl.h>
@@ -362,9 +363,118 @@ void drawMultitexturePage(const MultiTextures& t) {
     resetUnits();
 }
 
+// Page 4 ------------------------------------------------------------------------------------------------
+
+constexpr int MIP_SIZE = 64;    // Levels 64x64 .. 1x1 (0..6), PICA stores 64 .. 8 (0..3)
+
+// Solid color per level: red, green, blue, yellow, then magenta/cyan/white for the levels PICA does not store
+GLuint createLevelColors(int levels) {
+    static const GLubyte colors[7][3] = {{220, 40, 40}, {40, 200, 40}, {50, 80, 230}, {230, 220, 40},
+                                         {220, 40, 220}, {40, 220, 220}, {255, 255, 255}};
+    static GLubyte pixels[MIP_SIZE * MIP_SIZE * 3];
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    for (int level = 0; level < levels; level++) {
+        const int size = MIP_SIZE >> level;
+        for (int i = 0; i < size * size; i++)
+            for (int c = 0; c < 3; c++) pixels[i * 3 + c] = colors[level][c];
+        glTexImage2D(GL_TEXTURE_2D, level, GL_RGB, size, size, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+    }
+    return id;
+}
+
+// 1 px black/white checker with GL_GENERATE_MIPMAP (or without mipmaps)
+GLuint createFineChecker(bool generate, bool rgb565) {
+    static GLubyte pixels[MIP_SIZE * MIP_SIZE * 3];
+    static GLushort pixels565[MIP_SIZE * MIP_SIZE];
+    for (int y = 0; y < MIP_SIZE; y++) {
+        for (int x = 0; x < MIP_SIZE; x++) {
+            const bool light = (x + y) % 2 == 0;
+            for (int c = 0; c < 3; c++) pixels[(y * MIP_SIZE + x) * 3 + c] = light ? 255 : 0;
+            pixels565[y * MIP_SIZE + x] = light ? 0xFFFF : 0x001F;     // White / blue
+        }
+    }
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    if (generate) glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (rgb565) glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, MIP_SIZE, MIP_SIZE, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, pixels565);
+    else glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, MIP_SIZE, MIP_SIZE, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, generate ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST);
+    return id;
+}
+
+// Green texture with GL_GENERATE_MIPMAP, then level 0 overwritten with red by glTexSubImage2D: all levels red
+GLuint createRegenerated() {
+    static GLubyte pixels[MIP_SIZE * MIP_SIZE * 3];
+    for (int i = 0; i < MIP_SIZE * MIP_SIZE; i++) { pixels[i * 3] = 40; pixels[i * 3 + 1] = 200; pixels[i * 3 + 2] = 40; }
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, MIP_SIZE, MIP_SIZE, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+    for (int i = 0; i < MIP_SIZE * MIP_SIZE; i++) { pixels[i * 3] = 220; pixels[i * 3 + 1] = 40; pixels[i * 3 + 2] = 40; }
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, MIP_SIZE, MIP_SIZE, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+    return id;
+}
+
+struct MipTextures {
+    GLuint levels, incomplete, checkerMip, checkerFlat, regenerated, checker565;
+};
+
+MipTextures createMipTextures() {
+    MipTextures t{};
+    t.levels = createLevelColors(7);
+    t.incomplete = createLevelColors(3);       // Levels 0..2 only
+    t.checkerMip = createFineChecker(true, false);
+    t.checkerFlat = createFineChecker(false, false);
+    t.regenerated = createRegenerated();
+    t.checker565 = createFineChecker(true, true);
+    return t;
+}
+
+// Floor from z = -1 to z = -40 in a perspective view, texture repeated 4x across and 40x along it
+void drawFloor(int column, int row, GLuint texture, GLint minFilter) {
+    glViewport(column * CELL_W, (ROWS - 1 - row) * CELL_H, CELL_W, CELL_H);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glFrustum(-0.1, 0.1, -0.12, 0.12, 0.1, 100.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    if (minFilter != 0) glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glColor3f(1, 1, 1);
+    glBegin(GL_QUADS);
+    glTexCoord2f(0, 0); glVertex3f(-2.0f, -1.0f, -1.0f);
+    glTexCoord2f(4, 0); glVertex3f(2.0f, -1.0f, -1.0f);
+    glTexCoord2f(4, 40); glVertex3f(2.0f, -1.0f, -40.0f);
+    glTexCoord2f(0, 40); glVertex3f(-2.0f, -1.0f, -40.0f);
+    glEnd();
+    glDisable(GL_TEXTURE_2D);
+}
+
+void drawMipmapPage(const MipTextures& t) {
+    drawFloor(0, 0, t.levels, GL_LINEAR_MIPMAP_NEAREST);
+    drawFloor(1, 0, t.levels, GL_LINEAR_MIPMAP_LINEAR);
+    drawFloor(2, 0, t.levels, GL_LINEAR);
+    drawFloor(3, 0, t.incomplete, GL_LINEAR_MIPMAP_NEAREST);
+    drawFloor(0, 1, t.checkerMip, 0);
+    drawFloor(1, 1, t.checkerFlat, 0);
+    drawFloor(2, 1, t.regenerated, 0);
+    drawFloor(3, 1, t.checker565, 0);
+}
+
 void printPage(int page) {
     consoleClear();
-    std::printf("c3dgl texture test, page %i/3\n\n", page + 1);
+    std::printf("c3dgl texture test, page %i/4\n\n", page + 1);
     if (page == 0) {
         std::printf("Texture matrix. Expected on the\n"
                     "top screen, left to right, top row:\n"
@@ -386,6 +496,24 @@ void printPage(int page) {
                     "  to the right\n"
                     "- NPOT 12x12, scale -1 in t:\n"
                     "  F upside down\n");
+    } else if (page == 3) {
+        std::printf("Mipmaps on a floor. Expected,\n"
+                    "left to right, top row:\n"
+                    "- MIPMAP_NEAREST: color bands red,\n"
+                    "  green, blue, yellow (far)\n"
+                    "- MIPMAP_LINEAR: same, blended\n"
+                    "- GL_LINEAR: only level 0 (red)\n"
+                    "- incomplete levels: texturing\n"
+                    "  off, plain white floor\n"
+                    "bottom row:\n"
+                    "- generated mipmaps: checker\n"
+                    "  fades to smooth gray\n"
+                    "- no mipmaps: flickering moire\n"
+                    "  in the distance\n"
+                    "- regenerated after\n"
+                    "  glTexSubImage2D: all red\n"
+                    "- RGB565 generated: blue/white\n"
+                    "  fades to smooth light blue\n");
     } else if (page == 2) {
         std::printf("Multitexturing. Expected,\n"
                     "left to right, top row:\n"
@@ -446,6 +574,7 @@ int main() {
 
     const GLuint texPot = createF(16), texNpot = createF(12);
     const MultiTextures multi = createMultiTextures(texPot);
+    const MipTextures mips = createMipTextures();
     glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
     float time = 0.0f;
     int page = 0;
@@ -456,11 +585,16 @@ int main() {
         const u32 keys = hidKeysDown();
         if (keys & KEY_START) break;
         if (keys & KEY_A) {
-            page = (page + 1) % 3;
+            page = (page + 1) % 4;
             printPage(page);
         }
 
         glClear(GL_COLOR_BUFFER_BIT);
+        if (page == 3) {
+            drawMipmapPage(mips);
+            c3dglSwapBuffers();
+            continue;
+        }
         if (page == 2) {
             drawMultitexturePage(multi);
             c3dglSwapBuffers();

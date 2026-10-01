@@ -43,6 +43,7 @@
 #define C3DGL_MATRIX_STACK      32
 #define C3DGL_TEXTURE_UNITS     3           // PICA texture units 0..2 (unit 3 is procedural only)
 #define C3DGL_MAX_TEXTURE_SIZE  1024
+#define MAX_TEXTURE_LEVEL       10          // log2(C3DGL_MAX_TEXTURE_SIZE)
 
 // Row order of texture memory: the first row in memory is the top of the texture (t = 1),
 // glTexImage2D data starts at t = 0, so rows are flipped while swizzling (verified in Azahar)
@@ -97,14 +98,25 @@ typedef struct {
     GPU_TEXCOLOR format;
 } ProxyLevel;
 
+// One mipmap level as GL sees it (also levels below 8x8, which PICA cannot store)
+typedef struct {
+    bool defined;
+    int width, height;          // Without border
+    int border;
+    GLint internalFormat;
+    GPU_TEXCOLOR format;
+} TexLevel;
+
 typedef struct {
     bool used;                  // Id handed out by glGenTextures
-    bool loaded;                // tex is initialized
-    C3D_Tex tex;
+    bool loaded;                // tex is initialized (level 0 defined)
+    C3D_Tex tex;                // Level 0 padded to power-of-two; mip chain down to 8x8 once a level > 0 arrives
+    int levels;                 // Levels stored in tex (1 + tex.maxLevel when mipmapped)
     TexFormat format;
-    int width, height;          // Image size without border; tex is padded to power-of-two
-    int border;                 // As given to glTexImage2D (the border texels are dropped)
-    GLint internalFormat;       // As given to glTexImage2D, for glGetTexLevelParameter
+    int width, height;          // Level 0 image size without border
+    TexLevel level[MAX_TEXTURE_LEVEL + 1];
+    bool complete;              // All levels down to 1x1 defined and consistent (needed by mipmap filters)
+    bool generateMipmap;        // GL_GENERATE_MIPMAP
     GLenum minFilter, magFilter, wrapS, wrapT;
 } Texture;
 
@@ -421,11 +433,19 @@ static GPU_TEXTURE_FILTER_PARAM texFilter(GLenum f)
     return ((f == GL_NEAREST) || (f == GL_NEAREST_MIPMAP_NEAREST) || (f == GL_NEAREST_MIPMAP_LINEAR))? GPU_NEAREST : GPU_LINEAR;
 }
 
+static bool mipmapFilter(GLenum f)
+{
+    return (f == GL_NEAREST_MIPMAP_NEAREST) || (f == GL_LINEAR_MIPMAP_NEAREST) ||
+           (f == GL_NEAREST_MIPMAP_LINEAR) || (f == GL_LINEAR_MIPMAP_LINEAR);
+}
+
+// GL_CLAMP (GL 1.1) would blend in the border color at the edges; without border texels clamping to the edge is
+// the usual approximation
 static GPU_TEXTURE_WRAP_PARAM texWrap(GLenum w)
 {
     switch (w)
     {
-        case GL_CLAMP_TO_EDGE: return GPU_CLAMP_TO_EDGE;
+        case GL_CLAMP: case GL_CLAMP_TO_EDGE: return GPU_CLAMP_TO_EDGE;
         case GL_MIRRORED_REPEAT: return GPU_MIRRORED_REPEAT;
         default: return GPU_REPEAT;
     }
@@ -791,6 +811,13 @@ static void prepareDraw(bool clipSpace)
     {
         TexUnitState *u = &key.units[unit];
         u->texture = (gl.texture2D[unit] && textureValid(gl.boundTexture[unit]))? gl.boundTexture[unit] : 0;
+        if (u->texture && mipmapFilter(gl.textures[u->texture].minFilter) && !gl.textures[u->texture].complete)
+        {
+            // GL: a mipmap filter without all levels disables the unit
+            WARN_ONCE("Texture %u has a mipmap min filter but not all mipmap levels: texturing disabled "
+                      "(set GL_TEXTURE_MIN_FILTER to GL_LINEAR or GL_NEAREST?)\n", u->texture);
+            u->texture = 0;
+        }
         if (u->texture == 0) memset(&u->env, 0, sizeof(u->env));      // Unused, don't split batches over it
         textured = textured || (u->texture != 0);
     }
@@ -2617,20 +2644,31 @@ static int nextPow2(int v)
     return p;
 }
 
-// Byte offset of pixel (x, y) in a Morton-swizzled PICA texture (8x8 tiles, Z-order inside a tile)
-static u32 tiledOffset(const C3D_Tex *tex, int x, int y, int bpp)
+// Byte offset of pixel (x, y) in a Morton-swizzled PICA texture image of texWidth x texHeight
+// (8x8 tiles, Z-order inside a tile)
+static u32 tiledOffset(int texWidth, int texHeight, int x, int y, int bpp)
 {
 #if C3DGL_TEXTURE_FLIP_Y
-    y = tex->height - 1 - y;
+    y = texHeight - 1 - y;
+#else
+    (void)texHeight;
 #endif
-    u32 tile = (u32)((y >> 3)*(tex->width >> 3) + (x >> 3));
+    u32 tile = (u32)((y >> 3)*(texWidth >> 3) + (x >> 3));
     u32 morton = (x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2) | ((x & 4) << 2) | ((y & 4) << 3);
     return (tile*64 + morton)*bpp;
 }
 
-// Copy a rectangle between GL pixel data (laid out as described by ps) and the swizzled texture,
+// Stored mip level `level`: data and padded size
+static u8 *levelData(Texture *t, int level, int *texWidth, int *texHeight)
+{
+    *texWidth = t->tex.width >> level;
+    *texHeight = t->tex.height >> level;
+    return (u8 *)C3D_Tex2DGetImagePtr(&t->tex, level, NULL);
+}
+
+// Copy a rectangle between GL pixel data (laid out as described by ps) and stored mip level `level`,
 // in either direction
-static void transferPixels(Texture *t, int x0, int y0, int w, int h, u8 *pixels, const PixelStore *ps, bool upload)
+static void transferPixels(Texture *t, int level, int x0, int y0, int w, int h, u8 *pixels, const PixelStore *ps, bool upload)
 {
     const TexFormat *f = &t->format;
     size_t rowBytes = (size_t)((ps->rowLength > 0)? ps->rowLength : w)*f->bpp;
@@ -2640,14 +2678,15 @@ static void transferPixels(Texture *t, int x0, int y0, int w, int h, u8 *pixels,
     // Byte order within a pixel: PICA reversal, and GL byte swapping of 16-bit elements
     bool reverse = f->reverse != (f->packed16 && ps->swapBytes);
 
-    u8 *texData = (u8 *)t->tex.data;
+    int texWidth, texHeight;
+    u8 *texData = levelData(t, level, &texWidth, &texHeight);
     for (int y = 0; y < h; y++)
     {
         u8 *row = pixels + (size_t)y*rowBytes;
         for (int x = 0; x < w; x++)
         {
             u8 *src = row + x*f->bpp;
-            u8 *dst = texData + tiledOffset(&t->tex, x0 + x, y0 + y, f->bpp);
+            u8 *dst = texData + tiledOffset(texWidth, texHeight, x0 + x, y0 + y, f->bpp);
             for (int i = 0; i < f->bpp; i++)
             {
                 int j = reverse? (f->bpp - 1 - i) : i;
@@ -2682,6 +2721,135 @@ static void applyTextureParams(Texture *t)
 {
     C3D_TexSetFilter(&t->tex, texFilter(t->magFilter), texFilter(t->minFilter));
     C3D_TexSetWrap(&t->tex, texWrap(t->wrapS), texWrap(t->wrapT));
+
+    // Mipmap filters use all stored levels, the others only level 0
+    bool mipLinear = (t->minFilter == GL_NEAREST_MIPMAP_LINEAR) || (t->minFilter == GL_LINEAR_MIPMAP_LINEAR);
+    C3D_TexSetFilterMipmap(&t->tex, mipLinear? GPU_LINEAR : GPU_NEAREST);
+    t->tex.minLevel = 0;
+    t->tex.maxLevel = mipmapFilter(t->minFilter)? (u8)(t->levels - 1) : 0;
+}
+
+// GL mipmap completeness: levels 1..log2(max(w, h)) defined with halved sizes and level 0's format
+static void updateCompleteness(Texture *t)
+{
+    const TexLevel *base = &t->level[0];
+    t->complete = base->defined && (base->width > 0) && (base->height > 0);
+    for (int l = 1; t->complete && ((base->width >> l) > 0 || (base->height >> l) > 0); l++)
+    {
+        const TexLevel *lv = &t->level[l];
+        int w = (base->width >> l)? (base->width >> l) : 1, h = (base->height >> l)? (base->height >> l) : 1;
+        t->complete = lv->defined && (lv->width == w) && (lv->height == h) && (lv->format == base->format) &&
+                      (lv->border == base->border);
+    }
+}
+
+// Switch tex to a mip chain (down to 8x8), keeping level 0; false if the size has no levels below 8x8
+static bool ensureMipmapStorage(Texture *t)
+{
+    if (t->levels > 1) return true;
+    if (C3D_TexCalcMaxLevel(t->tex.width, t->tex.height) < 1) return false;
+
+    C3D_Tex mip;
+    if (!C3D_TexInitMipmap(&mip, t->tex.width, t->tex.height, t->format.format))
+    {
+        LOG("Out of memory for mipmaps\n");
+        setError(GL_OUT_OF_MEMORY);
+        return false;
+    }
+    memset(mip.data, 0, C3D_TexCalcTotalSize(mip.size, mip.maxLevel));
+    memcpy(mip.data, t->tex.data, t->tex.size);     // Level 0 comes first in both
+
+    if (gl.frameActive) deferTextureDelete(&t->tex);
+    else C3D_TexDelete(&t->tex);
+    t->tex = mip;
+    t->levels = mip.maxLevel + 1;
+    return true;
+}
+
+static void flushTexture(Texture *t)
+{
+    GSPGPU_FlushDataCache(t->tex.data, C3D_TexCalcTotalSize(t->tex.size, t->levels - 1));
+}
+
+// Unpack/pack a texel of a 16-bit packed format into 4 channels of 0..255
+static void unpack16(GPU_TEXCOLOR format, u16 v, int c[4])
+{
+    switch (format)
+    {
+        case GPU_RGB565: c[0] = (v >> 11)*255/31; c[1] = ((v >> 5) & 63)*255/63; c[2] = (v & 31)*255/31; c[3] = 255; break;
+        case GPU_RGBA5551: c[0] = (v >> 11)*255/31; c[1] = ((v >> 6) & 31)*255/31; c[2] = ((v >> 1) & 31)*255/31; c[3] = (v & 1)*255; break;
+        default: c[0] = (v >> 12)*17; c[1] = ((v >> 8) & 15)*17; c[2] = ((v >> 4) & 15)*17; c[3] = (v & 15)*17; break;   // RGBA4
+    }
+}
+
+static u16 pack16(GPU_TEXCOLOR format, const int c[4])
+{
+    switch (format)
+    {
+        case GPU_RGB565: return (u16)(((c[0]*31 + 127)/255 << 11) | ((c[1]*63 + 127)/255 << 5) | ((c[2]*31 + 127)/255));
+        case GPU_RGBA5551: return (u16)(((c[0]*31 + 127)/255 << 11) | ((c[1]*31 + 127)/255 << 6) | ((c[2]*31 + 127)/255 << 1) | (c[3] >= 128));
+        default: return (u16)(((c[0]*15 + 127)/255 << 12) | ((c[1]*15 + 127)/255 << 8) | ((c[2]*15 + 127)/255 << 4) | ((c[3]*15 + 127)/255));
+    }
+}
+
+// GL_GENERATE_MIPMAP: all levels from level 0 with a 2x2 box filter (on the CPU). Levels below 8x8 are only
+// marked as defined, PICA cannot sample them
+static void generateMipmaps(Texture *t)
+{
+    const TexLevel base = t->level[0];
+    for (int l = 1; (base.width >> l) > 0 || (base.height >> l) > 0; l++)
+    {
+        TexLevel *lv = &t->level[l];
+        *lv = base;
+        lv->width = (base.width >> l)? (base.width >> l) : 1;
+        lv->height = (base.height >> l)? (base.height >> l) : 1;
+        lv->border = 0;
+    }
+    t->level[0].border = 0;     // Generated levels have no border, level 0's border texels were dropped anyway
+    updateCompleteness(t);
+
+    if (!ensureMipmapStorage(t)) return;
+    int bpp = t->format.bpp;
+    for (int l = 1; l < t->levels; l++)
+    {
+        int srcW, srcH, dstW, dstH;
+        const u8 *src = levelData(t, l - 1, &srcW, &srcH);
+        u8 *dst = levelData(t, l, &dstW, &dstH);
+        int w = t->level[l].width, h = t->level[l].height;
+        int sw = t->level[l - 1].width, sh = t->level[l - 1].height;
+
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                // Source texels 2x..2x+1, 2y..2y+1, clamped for odd and 1-wide sizes
+                int xs[2] = { 2*x, (2*x + 1 < sw)? 2*x + 1 : 2*x }, ys[2] = { 2*y, (2*y + 1 < sh)? 2*y + 1 : 2*y };
+                int sum[4] = { 0 };
+                for (int i = 0; i < 4; i++)
+                {
+                    const u8 *p = src + tiledOffset(srcW, srcH, xs[i & 1], ys[i >> 1], bpp);
+                    if (t->format.packed16)
+                    {
+                        int c[4];
+                        u16 v;
+                        memcpy(&v, p, 2);
+                        unpack16(t->format.format, v, c);
+                        for (int k = 0; k < 4; k++) sum[k] += c[k];
+                    }
+                    else for (int k = 0; k < bpp; k++) sum[k] += p[k];     // 8-bit channels: average byte-wise
+                }
+
+                u8 *q = dst + tiledOffset(dstW, dstH, x, y, bpp);
+                if (t->format.packed16)
+                {
+                    int c[4] = { (sum[0] + 2)/4, (sum[1] + 2)/4, (sum[2] + 2)/4, (sum[3] + 2)/4 };
+                    u16 v = pack16(t->format.format, c);
+                    memcpy(q, &v, 2);
+                }
+                else for (int k = 0; k < bpp; k++) q[k] = (u8)((sum[k] + 2)/4);
+            }
+        }
+    }
 }
 
 void glGenTextures(GLsizei n, GLuint *textures)
@@ -2918,14 +3086,36 @@ void glMultiTexCoord4sv(GLenum target, const GLshort *v) { glMultiTexCoord4f(tar
 void glTexParameteri(GLenum target, GLenum pname, GLint param)
 {
     Texture *t = boundTexture(target);
-    if (t == NULL) return;
+    if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
 
     switch (pname)
     {
-        case GL_TEXTURE_MIN_FILTER: t->minFilter = param; break;
-        case GL_TEXTURE_MAG_FILTER: t->magFilter = param; break;
-        case GL_TEXTURE_WRAP_S: t->wrapS = param; break;
-        case GL_TEXTURE_WRAP_T: t->wrapT = param; break;
+        case GL_TEXTURE_MIN_FILTER:
+            if ((param != GL_NEAREST) && (param != GL_LINEAR) && !mipmapFilter(param)) { setError(GL_INVALID_ENUM); return; }
+            t->minFilter = param;
+            break;
+        case GL_TEXTURE_MAG_FILTER:
+            if ((param != GL_NEAREST) && (param != GL_LINEAR)) { setError(GL_INVALID_ENUM); return; }
+            t->magFilter = param;
+            break;
+        case GL_TEXTURE_WRAP_S: case GL_TEXTURE_WRAP_T:
+            if ((param != GL_REPEAT) && (param != GL_CLAMP_TO_EDGE) && (param != GL_MIRRORED_REPEAT) && (param != GL_CLAMP))
+            {
+                setError(GL_INVALID_ENUM);
+                return;
+            }
+            if (pname == GL_TEXTURE_WRAP_S) t->wrapS = param;
+            else t->wrapT = param;
+            break;
+        case GL_GENERATE_MIPMAP:
+            t->generateMipmap = (param != 0);
+            if (t->generateMipmap && t->loaded)
+            {
+                textureModified(gl.boundTexture[gl.activeTexture]);
+                generateMipmaps(t);
+                flushTexture(t);
+            }
+            break;
         default: setError(GL_INVALID_ENUM); return;
     }
 
@@ -2936,11 +3126,39 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param)
     }
 }
 
+// glGetTexParameter: values of the texture bound to the active unit; returns the count, 0 on error
+static int getTexParameter(GLenum target, GLenum pname, float v[4])
+{
+    Texture *t = boundTexture(target);
+    if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return 0; }
+    switch (pname)
+    {
+        case GL_TEXTURE_MIN_FILTER: v[0] = t->minFilter; return 1;
+        case GL_TEXTURE_MAG_FILTER: v[0] = t->magFilter; return 1;
+        case GL_TEXTURE_WRAP_S: v[0] = t->wrapS; return 1;
+        case GL_TEXTURE_WRAP_T: v[0] = t->wrapT; return 1;
+        case GL_GENERATE_MIPMAP: v[0] = t->generateMipmap; return 1;
+        default: setError(GL_INVALID_ENUM); return 0;
+    }
+}
+
+void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params)
+{
+    float v[4];
+    int n = getTexParameter(target, pname, v);
+    for (int i = 0; i < n; i++) params[i] = (GLint)v[i];
+}
+
+void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params)
+{
+    float v[4];
+    int n = getTexParameter(target, pname, v);
+    for (int i = 0; i < n; i++) params[i] = v[i];
+}
+
 void glTexParameterf(GLenum target, GLenum pname, GLfloat param) { glTexParameteri(target, pname, (GLint)param); }
 void glTexParameteriv(GLenum target, GLenum pname, const GLint *params) { glTexParameteri(target, pname, params[0]); }
 void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params) { glTexParameteri(target, pname, (GLint)params[0]); }
-
-#define MAX_TEXTURE_LEVEL   10      // log2(C3DGL_MAX_TEXTURE_SIZE)
 
 // Size check shared by real and proxy textures. Non-power-of-two sizes are accepted (padded internally)
 static bool textureSizeValid(GLint level, GLsizei width, GLsizei height, GLint border)
@@ -2951,8 +3169,10 @@ static bool textureSizeValid(GLint level, GLsizei width, GLsizei height, GLint b
 
 static bool textureSizeFits(GLint level, GLsizei width, GLsizei height, GLint border)
 {
-    int max = C3DGL_MAX_TEXTURE_SIZE >> level;
-    return (nextPow2(width - 2*border) <= max) && (nextPow2(height - 2*border) <= max);
+    int max = C3DGL_MAX_TEXTURE_SIZE >> level, w = 1, h = 1;
+    while (w < width - 2*border) w <<= 1;
+    while (h < height - 2*border) h <<= 1;
+    return (w <= max) && (h <= max);
 }
 
 void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
@@ -2981,54 +3201,75 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei widt
 
     Texture *t = boundTexture(target);
     if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
-    if (level != 0) return;     // Mipmaps are not supported, only level 0 is used
 
     if (!textureSizeFits(level, width, height, border))
     {
-        LOG("glTexImage2D: %ix%i exceeds the maximum of %i\n", width, height, C3DGL_MAX_TEXTURE_SIZE);
+        LOG("glTexImage2D: %ix%i exceeds the maximum of %i\n", width, height, C3DGL_MAX_TEXTURE_SIZE >> level);
         setError(GL_INVALID_VALUE);
         return;
     }
 
     int imageWidth = width - 2*border, imageHeight = height - 2*border;
-    int texWidth = nextPow2(imageWidth), texHeight = nextPow2(imageHeight);
-
+    TexLevel lv = { true, imageWidth, imageHeight, border, internalformat, f.format };
     textureModified(gl.boundTexture[gl.activeTexture]);
-    if (t->loaded)
+
+    // The border texels are not stored (PICA has no texture borders): skip them
+    PixelStore ps = gl.unpack;
+    if (border)
     {
-        if (gl.frameActive) deferTextureDelete(&t->tex);
-        else C3D_TexDelete(&t->tex);
-        t->loaded = false;
+        if (ps.rowLength == 0) ps.rowLength = width;
+        ps.skipRows += border;
+        ps.skipPixels += border;
     }
 
-    if (!C3D_TexInit(&t->tex, texWidth, texHeight, f.format))
+    if (level > 0)
     {
-        LOG("glTexImage2D: out of memory for %ix%i texture\n", texWidth, texHeight);
-        setError(GL_OUT_OF_MEMORY);
+        if (!t->loaded) { WARN_ONCE("glTexImage2D: mipmap level before level 0, ignored\n"); return; }
+        t->level[level] = lv;
+        updateCompleteness(t);
+
+        // Stored if it fits the chain (sizes and format of level 0), levels below 8x8 only count for completeness
+        bool matches = (lv.width == (t->width >> level)) && (lv.height == (t->height >> level)) && (f.format == t->format.format);
+        if (matches && (level <= C3D_TexCalcMaxLevel(t->tex.width, t->tex.height)) && ensureMipmapStorage(t))
+        {
+            if (pixels != NULL) transferPixels(t, level, 0, 0, imageWidth, imageHeight, (u8 *)pixels, &ps, true);
+            flushTexture(t);
+        }
+        applyTextureParams(t);
         return;
     }
 
-    t->loaded = true;
-    t->format = f;
-    t->width = imageWidth;
-    t->height = imageHeight;
-    t->border = border;
-    t->internalFormat = internalformat;
-
-    memset(t->tex.data, 0, t->tex.size);
-    if (pixels != NULL)
+    // Level 0: keep the storage (and the other levels) if only the content changes
+    int texWidth = nextPow2(imageWidth), texHeight = nextPow2(imageHeight);
+    bool same = t->loaded && (imageWidth == t->width) && (imageHeight == t->height) && (f.format == t->format.format);
+    if (!same)
     {
-        // The border texels are not stored (PICA has no texture borders): skip them
-        PixelStore ps = gl.unpack;
-        if (border)
+        if (t->loaded)
         {
-            if (ps.rowLength == 0) ps.rowLength = width;
-            ps.skipRows += border;
-            ps.skipPixels += border;
+            if (gl.frameActive) deferTextureDelete(&t->tex);
+            else C3D_TexDelete(&t->tex);
+            t->loaded = false;
         }
-        transferPixels(t, 0, 0, imageWidth, imageHeight, (u8 *)pixels, &ps, true);
+        if (!C3D_TexInit(&t->tex, texWidth, texHeight, f.format))
+        {
+            LOG("glTexImage2D: out of memory for %ix%i texture\n", texWidth, texHeight);
+            setError(GL_OUT_OF_MEMORY);
+            return;
+        }
+        memset(t->tex.data, 0, t->tex.size);
+        memset(t->level, 0, sizeof(t->level));
+        t->loaded = true;
+        t->levels = 1;
+        t->format = f;
+        t->width = imageWidth;
+        t->height = imageHeight;
     }
-    C3D_TexFlush(&t->tex);
+    t->level[0] = lv;
+
+    if (pixels != NULL) transferPixels(t, 0, 0, 0, imageWidth, imageHeight, (u8 *)pixels, &ps, true);
+    if (t->generateMipmap) generateMipmaps(t);
+    updateCompleteness(t);
+    flushTexture(t);
     applyTextureParams(t);
 }
 
@@ -3036,26 +3277,34 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
                      GLenum format, GLenum type, const GLvoid *pixels)
 {
     Texture *t = boundTexture(target);
-    if ((t == NULL) || !t->loaded || (level != 0) || (pixels == NULL)) return;
+    if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
+    if ((level < 0) || (level > MAX_TEXTURE_LEVEL)) { setError(GL_INVALID_VALUE); return; }
+    const TexLevel *lv = &t->level[level];
+    if (!t->loaded || !lv->defined) { setError(GL_INVALID_OPERATION); return; }
+    if (pixels == NULL) return;
 
     TexFormat f;
     if (!texFormat(format, type, &f) || (f.format != t->format.format)) { LOG("glTexSubImage2D: format mismatch\n"); setError(GL_INVALID_OPERATION); return; }
-    if ((xoffset < 0) || (yoffset < 0) || (xoffset + width > t->width) || (yoffset + height > t->height)) { setError(GL_INVALID_VALUE); return; }
+    if ((xoffset < 0) || (yoffset < 0) || (xoffset + width > lv->width) || (yoffset + height > lv->height)) { setError(GL_INVALID_VALUE); return; }
 
     textureModified(gl.boundTexture[gl.activeTexture]);
-    transferPixels(t, xoffset, yoffset, width, height, (u8 *)pixels, &gl.unpack, true);
-    C3D_TexFlush(&t->tex);
+    if (level < t->levels) transferPixels(t, level, xoffset, yoffset, width, height, (u8 *)pixels, &gl.unpack, true);
+    if ((level == 0) && t->generateMipmap) generateMipmaps(t);
+    flushTexture(t);
 }
 
 void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid *pixels)
 {
     Texture *t = boundTexture(target);
-    if ((t == NULL) || !t->loaded || (level != 0)) return;
+    if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
+    if ((level < 0) || (level > MAX_TEXTURE_LEVEL)) { setError(GL_INVALID_VALUE); return; }
+    if (!t->loaded || !t->level[level].defined) return;
 
     TexFormat f;
     if (!texFormat(format, type, &f) || (f.format != t->format.format)) { LOG("glGetTexImage: format mismatch\n"); setError(GL_INVALID_OPERATION); return; }
 
-    transferPixels(t, 0, 0, t->width, t->height, (u8 *)pixels, &gl.pack, false);
+    if (level < t->levels) transferPixels(t, level, 0, 0, t->level[level].width, t->level[level].height, (u8 *)pixels, &gl.pack, false);
+    else WARN_ONCE("glGetTexImage: levels below 8x8 are not stored\n");
 }
 
 // Bits per component of a PICA format: R, G, B, A, L
@@ -3089,13 +3338,14 @@ void glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint *p
         case GL_TEXTURE_2D:
         {
             Texture *t = boundTexture(target);
-            if ((t != NULL) && t->loaded && (level == 0))
+            if ((t != NULL) && t->loaded && t->level[level].defined)
             {
-                width = t->width + 2*t->border;
-                height = t->height + 2*t->border;
-                border = t->border;
-                internalFormat = t->internalFormat;
-                format = t->format.format;
+                const TexLevel *lv = &t->level[level];
+                width = lv->width + 2*lv->border;
+                height = lv->height + 2*lv->border;
+                border = lv->border;
+                internalFormat = lv->internalFormat;
+                format = lv->format;
                 hasImage = true;
             }
             break;
@@ -3232,7 +3482,8 @@ static GLfixed floatToFixed(double f)
 static bool fixedParamIsEnum(GLenum pname)
 {
     return (pname == GL_TEXTURE_ENV_MODE) || (pname == GL_TEXTURE_MIN_FILTER) || (pname == GL_TEXTURE_MAG_FILTER) ||
-           (pname == GL_TEXTURE_WRAP_S) || (pname == GL_TEXTURE_WRAP_T);
+           (pname == GL_TEXTURE_WRAP_S) || (pname == GL_TEXTURE_WRAP_T) || (pname == GL_GENERATE_MIPMAP) ||
+           ((pname >= GL_COMBINE_RGB) && (pname <= GL_COMBINE_ALPHA)) || ((pname >= GL_SRC0_RGB) && (pname <= GL_OPERAND2_ALPHA));
 }
 
 void glAlphaFuncx(GLenum func, GLclampx ref) { glAlphaFunc(func, fixedToFloat(ref)); }
@@ -3300,6 +3551,13 @@ void glGetTexEnvxv(GLenum target, GLenum pname, GLfixed *params)
 
 void glTexParameterx(GLenum target, GLenum pname, GLfixed param) { glTexParameteri(target, pname, fixedParamIsEnum(pname)? param : (GLint)fixedToFloat(param)); }
 void glTexParameterxv(GLenum target, GLenum pname, const GLfixed *params) { glTexParameterx(target, pname, params[0]); }
+
+void glGetTexParameterxv(GLenum target, GLenum pname, GLfixed *params)
+{
+    float v[4];
+    int n = getTexParameter(target, pname, v);
+    for (int i = 0; i < n; i++) params[i] = (GLfixed)v[i];     // All values are enums or booleans
+}
 
 void glGetFixedv(GLenum pname, GLfixed *params)
 {

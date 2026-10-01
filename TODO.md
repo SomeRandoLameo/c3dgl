@@ -79,7 +79,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glTexParameter*` (filters, wrap)
 * [x] Texture borders (GL; border texels are dropped), proxy textures, `glGetTexLevelParameter*` (GL)
 * [ ] Internal formats with different sampling (`GL_INTENSITY`, ...) (GL)
-* [ ] `glGetTexParameter*`
+* [x] `glGetTexParameter*` (`iv`, `fv`, `xv`)
 * [ ] `glCopyTexImage2D`, `glCopyTexSubImage2D`
 * [ ] `glCompressedTexImage2D`, `glCompressedTexSubImage2D`
 * [ ] Paletted textures `GL_PALETTE4/8_*_OES` (ES, required); ETC1 (PICA native, extension)
@@ -106,9 +106,12 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 ## Mipmapping
 
-* [~] `gluBuild2DMipmaps` — uploads all levels, only level 0 is used
-* [ ] Multiple mipmap levels, mipmap filtering, automatic LOD
-* [ ] `GL_GENERATE_MIPMAP` (ES), `GL_GENERATE_MIPMAP_HINT` (ES)
+* [x] Mipmap levels via `glTexImage2D`/`glTexSubImage2D`/`glGetTexImage` level > 0, `glGetTexLevelParameter` per level
+* [x] Mipmap filters (`GL_*_MIPMAP_*`), hardware LOD selection; non-mipmap filters sample level 0 only
+* [x] GL completeness: a mipmap filter without all levels disables the unit (with a one-time warning)
+* [x] `GL_GENERATE_MIPMAP` (ES; CPU box filter, also for RGB565/RGBA5551/RGBA4), `GL_GENERATE_MIPMAP_HINT`
+* [x] `gluBuild2DMipmaps`
+* [~] Levels smaller than 8x8 are accepted and count for completeness, but PICA cannot store them: sampling stops at 8x8
 
 ## Per-Fragment Operations
 
@@ -163,7 +166,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glGetBooleanv`, `glGetIntegerv`, `glGetFloatv`, `glGetDoublev` (GL) for the implemented state
 * [x] `glGetError`, `glGetString`, `glIsEnabled`, `glIsTexture`
 * [x] `glGetFixedv` (ES), `glGetPointerv`, `glGetBufferParameteriv` (ES)
-* [ ] `glGetTexParameter*`, `glGetLight*`, `glGetMaterial*`, `glGetClipPlane*`
+* [ ] `glGetLight*`, `glGetMaterial*`, `glGetClipPlane*`
 * [ ] `GL_EXTENSIONS` lists nothing yet (ES 1.1 requires the point sprite / point size array / paletted texture names)
 * [~] `glHint` — accepted, hints have no effect (allowed by the spec)
 
@@ -198,13 +201,13 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 ```text
 [ ] Lighting                          [ ] Display lists (GL)
 [ ] Fog                               [ ] Attribute stacks (GL)
-[ ] Mipmapping (+ GL_GENERATE_MIPMAP) [ ] Evaluators (GL)
+[ ] Compressed / paletted textures    [ ] Evaluators (GL)
 [ ] Clip planes                       [ ] Feedback / selection (GL)
 [ ] Smooth points/lines               [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
 [ ] glReadPixels, texture copies      [ ] Accumulation buffer (GL)
 [ ] Point parameters + sprites (ES)   [ ] 1D textures, texgen (GL)
 [ ] Logic op, sample coverage         [ ] Stipple (GL)
-[ ] Compressed / paletted textures    [ ] Complete state queries
+                                      [ ] Complete state queries
 ```
 
 # Already Solid
@@ -218,4 +221,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Blending                          [x] Error handling, state queries
 [x] GLU (Mesa)                       [x] ES fixed-point API (implemented features)
 [x] VBOs (ES)                         [x] Multitexturing + GL_COMBINE (ES)
+[x] Mipmapping (+ GL_GENERATE_MIPMAP)
 ```

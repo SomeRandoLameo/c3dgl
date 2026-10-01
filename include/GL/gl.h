@@ -458,7 +458,10 @@ typedef void            GLvoid;
 #define GL_LINEAR_MIPMAP_NEAREST            0x2701
 #define GL_NEAREST_MIPMAP_LINEAR            0x2702
 #define GL_LINEAR_MIPMAP_LINEAR             0x2703
+#define GL_CLAMP                            0x2900      // GL; treated like GL_CLAMP_TO_EDGE
 #define GL_REPEAT                           0x2901
+#define GL_GENERATE_MIPMAP                  0x8191      // ES
+#define GL_GENERATE_MIPMAP_HINT             0x8192      // ES
 #define GL_CLAMP_TO_EDGE                    0x812F
 #define GL_MIRRORED_REPEAT                  0x8370
 
@@ -666,6 +669,8 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param);
 void glTexParameterf(GLenum target, GLenum pname, GLfloat param);
 void glTexParameteriv(GLenum target, GLenum pname, const GLint *params);
 void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params);
+void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params);
+void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params);
 void glTexEnvi(GLenum target, GLenum pname, GLint param);
 void glTexEnvf(GLenum target, GLenum pname, GLfloat param);
 void glTexEnviv(GLenum target, GLenum pname, const GLint *params);
@@ -767,6 +772,7 @@ void glMultiTexCoord4x(GLenum target, GLfixed s, GLfixed t, GLfixed r, GLfixed q
 void glGetTexEnvxv(GLenum target, GLenum pname, GLfixed *params);
 void glTexParameterx(GLenum target, GLenum pname, GLfixed param);
 void glTexParameterxv(GLenum target, GLenum pname, const GLfixed *params);
+void glGetTexParameterxv(GLenum target, GLenum pname, GLfixed *params);
 void glTranslatex(GLfixed x, GLfixed y, GLfixed z);
 
 #ifdef __cplusplus
