@@ -1,6 +1,7 @@
 // c3dgl example: texture features, one cell each on the top screen (4x2 grid, 100x120 px per cell).
-// Page 1: texture matrix. Every cell draws the same square with texcoords 0..1 and an asymmetric "F" texture
-// (white F on blue, red block in the texel corner s = 0, t = 0), only the GL_TEXTURE matrix differs.
+// All cells use an asymmetric "F" texture (white F on blue, red block in the texel corner s = 0, t = 0).
+// Page 1: texture matrix, the same square with texcoords 0..1 in every cell, only the GL_TEXTURE matrix differs.
+// Page 2: texture coordinates: per-vertex q, texcoord array types. A switches pages.
 // The expected result is printed on the bottom screen.
 #include <3ds.h>
 #include <GL/gl.h>
@@ -84,6 +85,126 @@ void resetTextureMatrix() {
     textureMatrix([] {});
 }
 
+// Page 2 ------------------------------------------------------------------------------------------------
+
+void beginCell(int column, int row, GLuint texture) {
+    glViewport(column * CELL_W, (ROWS - 1 - row) * CELL_H, CELL_W, CELL_H);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(-1.0, 1.0, -1.2, 1.2, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glColor3f(1, 1, 1);
+}
+
+// Trapezoid, bottom edge twice as long as the top. q = edge length makes the mapping perspective correct
+// (projective = true): the F looks like it lies on a floor tilted away. Without q (projective = false) both
+// triangles are mapped affinely and the F bends along the diagonal
+void drawTrapezoid(bool projective) {
+    const float q = projective ? 2.0f : 1.0f;
+    glBegin(GL_QUADS);
+    glTexCoord4f(0, 0, 0, q); glVertex2f(-0.8f, -0.8f);
+    glTexCoord4f(q, 0, 0, q); glVertex2f(0.8f, -0.8f);
+    glTexCoord4f(1, 1, 0, 1); glVertex2f(0.4f, 0.8f);
+    glTexCoord4f(0, 1, 0, 1); glVertex2f(-0.4f, 0.8f);
+    glEnd();
+}
+
+// Square from texcoord arrays of the given type; size 4 arrays carry q
+template <typename T>
+void drawArraySquare(GLenum type, int size, const T* texcoords) {
+    static const GLfloat positions[8] = {-0.8f, -0.8f, 0.8f, -0.8f, 0.8f, 0.8f, -0.8f, 0.8f};
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glVertexPointer(2, GL_FLOAT, 0, positions);
+    glTexCoordPointer(size, type, 0, texcoords);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY);
+}
+
+void drawTexcoordPage(GLuint tex) {
+    beginCell(0, 0, tex); drawTrapezoid(true);
+    beginCell(1, 0, tex); drawTrapezoid(false);
+
+    // glTexCoord3f: r is ignored, plain F
+    beginCell(2, 0, tex);
+    glBegin(GL_QUADS);
+    glTexCoord3f(0, 0, 0.7f); glVertex2f(-0.8f, -0.8f);
+    glTexCoord3f(1, 0, 0.7f); glVertex2f(0.8f, -0.8f);
+    glTexCoord3f(1, 1, 0.7f); glVertex2f(0.8f, 0.8f);
+    glTexCoord3f(0, 1, 0.7f); glVertex2f(-0.8f, 0.8f);
+    glEnd();
+
+    // GL_SHORT texcoords 0..2: 2x2 tiles
+    static const GLshort shorts[8] = {0, 0, 2, 0, 2, 2, 0, 2};
+    beginCell(3, 0, tex); drawArraySquare(GL_SHORT, 2, shorts);
+
+    // GL_BYTE texcoords, size 1 (t = 0 for all): the bottom texel row stretched over the square
+    static const GLbyte bytes[4] = {0, 1, 1, 0};
+    beginCell(0, 1, tex); drawArraySquare(GL_BYTE, 1, bytes);
+
+    // GL_FIXED texcoords (ES) 0..1
+    static const GLfixed fixeds[8] = {0, 0, 0x10000, 0, 0x10000, 0x10000, 0, 0x10000};
+    beginCell(1, 1, tex); drawArraySquare(GL_FIXED, 2, fixeds);
+
+    // GL_FLOAT size 4: texcoords 0..2 with q = 2, so (s, t) / q = 0..1, a plain F (without the q divide: 2x2 tiles)
+    static const GLfloat floats4[16] = {0, 0, 0, 2, 2, 0, 0, 2, 2, 2, 0, 2, 0, 2, 0, 2};
+    beginCell(2, 1, tex); drawArraySquare(GL_FLOAT, 4, floats4);
+
+    // GL_DOUBLE texcoords (desktop GL), mirrored in s
+    static const GLdouble doubles[8] = {1, 0, 0, 0, 0, 1, 1, 1};
+    beginCell(3, 1, tex); drawArraySquare(GL_DOUBLE, 2, doubles);
+    glDisable(GL_TEXTURE_2D);
+}
+
+void printPage(int page) {
+    consoleClear();
+    std::printf("c3dgl texture test, page %i/2\n\n", page + 1);
+    if (page == 0) {
+        std::printf("Texture matrix. Expected on the\n"
+                    "top screen, left to right, top row:\n"
+                    "- identity: upright white F,\n"
+                    "  red block bottom left\n"
+                    "- translate s by 0.25: F shifted\n"
+                    "  LEFT by a quarter, wrapping\n"
+                    "- scale 2: 2x2 small F tiles\n"
+                    "- rotate 90 around the center:\n"
+                    "  F lying on its back, rotated\n"
+                    "  counter-clockwise (red block\n"
+                    "  bottom right)\n"
+                    "bottom row:\n"
+                    "- scrolling diagonally\n"
+                    "- projective q = 2: the bottom\n"
+                    "  left quarter of the F, 2x\n"
+                    "- projective q = 1 + s: F corner\n"
+                    "  in perspective, texels wider\n"
+                    "  to the right\n"
+                    "- NPOT 12x12, scale -1 in t:\n"
+                    "  F upside down\n");
+    } else {
+        std::printf("Texture coordinates. Expected,\n"
+                    "left to right, top row:\n"
+                    "- trapezoid with q: F on a floor\n"
+                    "  tilted away, bars straight\n"
+                    "- same without q: F bent along\n"
+                    "  the diagonal (affine)\n"
+                    "- glTexCoord3f: plain upright F\n"
+                    "- GL_SHORT 0..2: 2x2 F tiles\n"
+                    "bottom row:\n"
+                    "- GL_BYTE size 1: the bottom\n"
+                    "  texel row stretched: red\n"
+                    "  stripe left, rest blue\n"
+                    "- GL_FIXED: plain upright F\n"
+                    "- size 4, (2s, 2t, q = 2): plain\n"
+                    "  upright F (2x2 tiles = q lost)\n"
+                    "- GL_DOUBLE: F mirrored left-right\n");
+    }
+    std::printf("\nA: next page   START: exit\n");
+}
+
 } // namespace
 
 int main() {
@@ -101,38 +222,27 @@ int main() {
         return 1;
     }
 
-    std::printf("c3dgl texture test\n\n"
-                "Texture matrix. Expected on the\n"
-                "top screen, left to right, top row:\n"
-                "- identity: upright white F,\n"
-                "  red block bottom left\n"
-                "- translate s by 0.25: F shifted\n"
-                "  LEFT by a quarter, wrapping\n"
-                "- scale 2: 2x2 small F tiles\n"
-                "- rotate 90 around the center:\n"
-                "  F lying on its back, rotated\n"
-                "  counter-clockwise (red block\n"
-                "  bottom right)\n"
-                "bottom row:\n"
-                "- scrolling diagonally\n"
-                "- projective q = 2: the bottom\n"
-                "  left quarter of the F, 2x\n"
-                "- projective q = 1 + s: F corner\n"
-                "  in perspective, texels wider\n"
-                "  to the right\n"
-                "- NPOT 12x12, scale -1 in t:\n"
-                "  F upside down\n\n"
-                "START: exit\n");
-
     const GLuint texPot = createF(16), texNpot = createF(12);
     glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
     float time = 0.0f;
+    int page = 0;
+    printPage(page);
 
     while (aptMainLoop()) {
         hidScanInput();
-        if (hidKeysDown() & KEY_START) break;
+        const u32 keys = hidKeysDown();
+        if (keys & KEY_START) break;
+        if (keys & KEY_A) {
+            page = 1 - page;
+            printPage(page);
+        }
 
         glClear(GL_COLOR_BUFFER_BIT);
+        if (page == 1) {
+            drawTexcoordPage(texPot);
+            c3dglSwapBuffers();
+            continue;
+        }
 
         resetTextureMatrix();
         drawCell(0, 0, texPot);

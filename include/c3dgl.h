@@ -15,7 +15,7 @@
 //     gfxExit();
 //
 // Supported:
-//   - glBegin/glEnd and glDrawArrays/glDrawElements (client arrays) with all primitives
+//   - glBegin/glEnd and glDrawArrays/glDrawElements (client arrays of all GL 1.1 / ES 1.1 types) with all primitives
 //     (points, lines, line strips/loops, triangles, triangle strips/fans, quads, quad strips, convex polygons)
 //   - Matrix stacks (modelview, projection, texture), glOrtho/glFrustum/glTranslate/glRotate/glScale/glMultMatrix
 //   - Textures: RGBA8, RGB8, LA8, L8, A8, RGB565, RGBA5551, RGBA4; any size up to 1024x1024
@@ -26,6 +26,7 @@
 //   - GL_FLAT, glPolygonMode (with edge flags), glPolygonOffset, glDepthRange
 //   - Pixel store modes, texture borders, proxy textures, glGetTexLevelParameter
 //   - GLU: Mesa GLU as c3dgl::glu (<GL/glu.h>), see README
+//   - OpenGL ES 1.1: <GLES/gl.h>, fixed-point x functions, glOrthof/glFrustumf/... for the implemented features
 //
 // Not supported: lighting, fog, display lists, mipmaps, glReadPixels. Points are always square (no GL_POINT_SMOOTH).
 //

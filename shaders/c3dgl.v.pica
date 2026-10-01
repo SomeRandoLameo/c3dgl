@@ -1,7 +1,7 @@
 ; c3dgl vertex shader (PICA200): the whole fixed-function vertex stage of c3dgl.c
 ;   position: mvp * (x, y, z, 1)   (mvp already contains screen rotation and PICA depth range)
 ;             z += bias * w        (polygon offset of filled polygons, in PICA NDC units)
-;   texcoord: texmat * (u, v, 0, 1) -> (s, t, q), q is divided out by projection mode when used
+;   texcoord: texmat * (s, t, 0, q) -> (s', t', q'), q is divided out by projection mode when used
 ;             (texmat = texture matrix with NPOT padding scale, see c3dgl.c)
 ;   color:    ubyte RGBA -> 0..1
 
@@ -42,10 +42,10 @@
 	add r1.z, r1.z, r2.x
 	mov outpos, r1
 
-	; r2 = (u, v, 0, 1)
-	mov r2.xy, intc
+	; r2 = (s, t, 0, q)
+	mov r2.xy, intc.xy
 	mov r2.z,  zero
-	mov r2.w,  one
+	mov r2.w,  intc.z
 	dp4 outtc0.x, texmat[0], r2
 	dp4 outtc0.y, texmat[1], r2
 	dp4 outtc0.z, texmat[2], r2

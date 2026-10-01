@@ -13,22 +13,22 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 * [x] All primitive modes: points, lines, line strips/loops, triangles, strips, fans, quads (GL), quad strips (GL), polygons (GL)
 * [x] `glBegin` / `glEnd` (GL)
-* [x] `glVertex*`, `glColor*`, `glTexCoord*`, `glNormal*` variants (GL; ES has `glColor4f/4ub/4x`, `glNormal3f/3x`)
+* [x] All GL 1.1 variants of `glVertex*`, `glColor*`, `glTexCoord*` (incl. projective q), `glNormal*`; integer colors/normals normalized
 * [x] `glRect*` (GL)
 * [x] `glEdgeFlag*`, `glEdgeFlagPointer`, `GL_EDGE_FLAG_ARRAY` (GL)
 * [ ] `glMultiTexCoord*` (ES; with multitexturing)
-* [ ] `glTexCoord1/3/4*`, `glVertex4*` with w <= 0, `glIndex*` variants (GL)
+* [ ] `glVertex4*` with w = 0 (points at infinity), `glIndex*` (GL, color index mode)
 
 ## Vertex Arrays
 
 * [x] `glVertexPointer`, `glColorPointer`, `glTexCoordPointer`
 * [x] `glEnableClientState`, `glDisableClientState`
 * [x] `glDrawArrays`, `glDrawElements` (ubyte/ushort indices; uint (GL))
-* [~] Array types: only `GL_FLOAT` positions/texcoords and `GL_UNSIGNED_BYTE`/`GL_FLOAT` colors
-* [ ] Array types `GL_BYTE`, `GL_SHORT`, `GL_FIXED` (ES), `GL_INT`, `GL_DOUBLE` (GL)
-* [ ] `glNormalPointer` — accepted but ignored (no normals stored)
-* [ ] `glArrayElement`, `glInterleavedArrays` (GL)
-* [ ] `glGetPointerv`
+* [x] All array types and sizes: `GL_BYTE`, `GL_SHORT`, `GL_FIXED` (ES), `GL_INT`, `GL_DOUBLE` (GL), `GL_FLOAT`; unsigned color types
+* [x] Size 4 texcoord arrays with per-vertex q, size 4 vertex arrays (divided by w)
+* [x] `glNormalPointer`, `GL_NORMAL_ARRAY` (normals read; not used until lighting)
+* [x] `glArrayElement`, `glInterleavedArrays` (GL)
+* [x] `glGetPointerv`, array state queries, validation errors
 * [ ] `glPointSizePointerOES`, `GL_POINT_SIZE_ARRAY_OES` (ES, required extension)
 
 ## Vertex Buffer Objects (ES)
@@ -46,12 +46,17 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glDepthRange`
 * [x] `glViewport`
 * [x] Texture matrix (`GL_TEXTURE`), including projective matrices (q divide by PICA projection mode)
-* [ ] `glOrthof`, `glFrustumf`, `glDepthRangef`, `glClearDepthf` (ES float variants)
+* [x] `glOrthof`, `glFrustumf`, `glDepthRangef`, `glClearDepthf` (ES float variants)
 * [ ] Clip planes: `glClipPlane`, `glGetClipPlane` (`f`/`x` variants in ES), `GL_CLIP_PLANE0..5`
 
 ## Fixed-Point API (ES)
 
-* [ ] `GL_FIXED` type and all `x` entry points (`glColor4x`, `glTranslatex`, `glLoadMatrixx`, `glFogx`, `glLightx`, ...)
+* [x] `GLfixed`, `GL_FIXED` arrays, `<GLES/gl.h>`
+* [x] `x` entry points of the implemented features: `glAlphaFuncx`, `glClearColorx`, `glClearDepthx`, `glColor4x`,
+  `glDepthRangex`, `glFrustumx`, `glGetFixedv`, `glLineWidthx`, `glLoadMatrixx`, `glMultMatrixx`, `glNormal3x`,
+  `glOrthox`, `glPointSizex`, `glPolygonOffsetx`, `glRotatex`, `glScalex`, `glTexEnvx(v)`, `glTexParameterx(v)`, `glTranslatex`
+* [ ] `x` entry points that come with their features: `glClipPlanex`, `glFogx(v)`, `glLightx(v)`, `glLightModelx(v)`,
+  `glMaterialx(v)`, `glMultiTexCoord4x`, `glPointParameterx(v)`, `glSampleCoveragex`, `glGet*xv`
 
 ## Lighting
 
@@ -155,7 +160,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 * [x] `glGetBooleanv`, `glGetIntegerv`, `glGetFloatv`, `glGetDoublev` (GL) for the implemented state
 * [x] `glGetError`, `glGetString`, `glIsEnabled`, `glIsTexture`
-* [ ] `glGetFixedv` (ES), `glGetPointerv`, `glGetTexEnv*`, `glGetTexParameter*`, `glGetLight*`, `glGetMaterial*`, `glGetClipPlane*`, `glGetBufferParameteriv` (ES)
+* [x] `glGetFixedv` (ES), `glGetPointerv`
+* [ ] `glGetTexEnv*`, `glGetTexParameter*`, `glGetLight*`, `glGetMaterial*`, `glGetClipPlane*`, `glGetBufferParameteriv` (ES)
 * [ ] `GL_EXTENSIONS` lists nothing yet (ES 1.1 requires the point sprite / point size array / paletted texture names)
 * [~] `glHint` — accepted, hints have no effect (allowed by the spec)
 
@@ -194,11 +200,10 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [ ] Clip planes                       [ ] Feedback / selection (GL)
 [ ] Multitexturing + GL_COMBINE (ES)  [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
 [ ] VBOs (ES)                         [ ] Accumulation buffer (GL)
-[ ] Fixed-point API (ES)              [ ] 1D textures, texgen (GL)
-[ ] Array types BYTE/SHORT/FIXED      [ ] Stipple (GL)
+[ ] Point parameters + sprites (ES)   [ ] 1D textures, texgen (GL)
+[ ] Logic op, sample coverage         [ ] Stipple (GL)
 [ ] glReadPixels, texture copies      [ ] Smooth points/lines
-[ ] Point parameters + sprites (ES)   [ ] Compressed / paletted textures
-[ ] Logic op, sample coverage         [ ] Complete state queries
+[ ] Compressed / paletted textures    [ ] Complete state queries
 ```
 
 # Already Solid
@@ -206,9 +211,9 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 ```text
 [x] Primitives and immediate mode     [x] Alpha test, depth, stencil
 [x] Matrix system, stacks, texture matrix [x] Culling, flat shading, polygon mode/offset
-[x] Vertex arrays (float)             [x] Scissor, viewport, depth range
+[x] Vertex arrays, all types (GL+ES) [x] Scissor, viewport, depth range
 [x] Texture upload and sampling       [x] Clears with masks and scissor
 [x] Texture environment               [x] Pixel store, proxy textures
 [x] Blending                          [x] Error handling, state queries
-[x] GLU (Mesa)
+[x] GLU (Mesa)                       [x] ES fixed-point API (implemented features)
 ```

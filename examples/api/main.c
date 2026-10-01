@@ -4,6 +4,7 @@
 // (glRectf, glRecti, glVertex2sv, glVertex4f with w = 2) and must look identical.
 #include <3ds.h>
 #include <GL/gl.h>
+#include <GLES/gl.h>                     // Must coexist with <GL/gl.h>
 #include <c3dgl.h>
 
 #include <math.h>
@@ -186,6 +187,81 @@ static void testMatrices(void)
     CHECK(depth == 1);
 }
 
+static void testArraysAndEs(void)
+{
+    // Array state and validation
+    static const GLshort shorts[8] = {0};
+    GLint v = 0;
+    glVertexPointer(2, GL_SHORT, 4, shorts);
+    glGetIntegerv(GL_VERTEX_ARRAY_SIZE, &v);
+    CHECK(v == 2);
+    glGetIntegerv(GL_VERTEX_ARRAY_TYPE, &v);
+    CHECK(v == GL_SHORT);
+    glGetIntegerv(GL_VERTEX_ARRAY_STRIDE, &v);
+    CHECK(v == 4);
+    GLvoid *ptr = NULL;
+    glGetPointerv(GL_VERTEX_ARRAY_POINTER, &ptr);
+    CHECK(ptr == shorts);
+    glGetIntegerv(GL_COLOR_ARRAY_SIZE, &v);
+    CHECK(v == 4);                              // Default
+    glVertexPointer(1, GL_FLOAT, 0, shorts);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glVertexPointer(2, GL_UNSIGNED_BYTE, 0, shorts);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glColorPointer(2, GL_FLOAT, 0, shorts);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glNormalPointer(GL_UNSIGNED_BYTE, 0, shorts);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glDrawElements(GL_TRIANGLES, 3, GL_FLOAT, shorts);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+
+    // glInterleavedArrays sets up and enables the arrays of the format
+    static const GLfloat interleaved[12] = {0};
+    glInterleavedArrays(GL_T2F_N3F_V3F, 0, interleaved);
+    glGetIntegerv(GL_TEXTURE_COORD_ARRAY_STRIDE, &v);
+    CHECK(v == 32);
+    glGetPointerv(GL_NORMAL_ARRAY_POINTER, &ptr);
+    CHECK(ptr == (const GLvoid *)&interleaved[2]);
+    CHECK(glIsEnabled(GL_NORMAL_ARRAY) && glIsEnabled(GL_TEXTURE_COORD_ARRAY) && !glIsEnabled(GL_COLOR_ARRAY));
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisableClientState(GL_NORMAL_ARRAY);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+
+    // Integer colors and normals are normalized, texcoords keep r and q
+    GLfloat f[4];
+    glColor3b(127, 63, -128);                   // (2c + 1)/255: 1.0, 0.5, -1.0 (clamped to 0)
+    glGetFloatv(GL_CURRENT_COLOR, f);
+    CHECK(f[0] == 1.0f && fabsf(f[1] - 0.5f) < 0.01f && f[2] == 0.0f && f[3] == 1.0f);
+    glColor4us(65535, 0, 65535, 32768);
+    glGetFloatv(GL_CURRENT_COLOR, f);
+    CHECK(f[0] == 1.0f && f[1] == 0.0f && fabsf(f[3] - 0.5f) < 0.01f);
+    glNormal3s(32767, -32768, 0);
+    glGetFloatv(GL_CURRENT_NORMAL, f);
+    CHECK(near(f[0], 1.0) && near(f[1], -1.0) && fabsf(f[2]) < 1e-4f);
+    glTexCoord4f(1, 2, 3, 4);
+    glGetFloatv(GL_CURRENT_TEXTURE_COORDS, f);
+    CHECK(f[0] == 1 && f[1] == 2 && f[2] == 3 && f[3] == 4);
+    glTexCoord2f(0, 0);
+    glColor3ub(255, 255, 255);
+
+    // ES fixed point: 1.5 = 0x18000
+    glLineWidthx(0x18000);
+    GLfixed x = 0;
+    glGetFixedv(GL_LINE_WIDTH, &x);
+    CHECK(x == 0x18000);
+    glLineWidth(1.0f);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glTranslatex(0x10000, 0x20000, -0x8000);
+    GLfloat m[16];
+    glGetFloatv(GL_MODELVIEW_MATRIX, m);
+    CHECK(m[12] == 1.0f && m[13] == 2.0f && m[14] == -0.5f);
+    glLoadIdentity();
+    glTexEnvx(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);    // Enums are not scaled
+    CHECK(glGetError() == GL_NO_ERROR);
+    glTexEnvx(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+}
+
 // Four white 60x60 squares with different vertex calls, pixel coordinates y down
 static void drawSquares(void)
 {
@@ -196,20 +272,73 @@ static void drawSquares(void)
     glLoadIdentity();
     glColor3ub(255, 255, 255);
 
-    glRectf(30.0f, 90.0f, 90.0f, 150.0f);
-    glRecti(125, 90, 185, 150);
+    glRectf(30.0f, 50.0f, 90.0f, 110.0f);
+    glRecti(125, 50, 185, 110);
 
-    static const GLshort corners[4][2] = {{215, 90}, {275, 90}, {275, 150}, {215, 150}};
+    static const GLshort corners[4][2] = {{215, 50}, {275, 50}, {275, 110}, {215, 110}};
     glBegin(GL_QUADS);
     for (int i = 0; i < 4; i++) glVertex2sv(corners[i]);
     glEnd();
 
     glBegin(GL_QUADS);                          // Homogeneous: (2x, 2y, 0, 2)
-    glVertex4f(620.0f, 180.0f, 0.0f, 2.0f);
-    glVertex4f(740.0f, 180.0f, 0.0f, 2.0f);
-    glVertex4f(740.0f, 300.0f, 0.0f, 2.0f);
-    glVertex4f(620.0f, 300.0f, 0.0f, 2.0f);
+    glVertex4f(620.0f, 100.0f, 0.0f, 2.0f);
+    glVertex4f(740.0f, 100.0f, 0.0f, 2.0f);
+    glVertex4f(740.0f, 220.0f, 0.0f, 2.0f);
+    glVertex4f(620.0f, 220.0f, 0.0f, 2.0f);
     glEnd();
+}
+
+// Second row: four ORANGE (1, 0.5, 0) 60x60 squares from arrays of different types, colors in the array's own
+// type. A wrong normalization shows as a different color (white/yellow), a wrong position type as a misplaced square
+static void drawArraySquares(void)
+{
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
+
+    // GL_BYTE positions (unit square, scaled by the modelview) and GL_BYTE colors: 127 = 1.0, 63 = 0.5
+    static const GLbyte bytePos[8] = {0, 0, 1, 0, 1, 1, 0, 1};
+    static const GLbyte byteColor[16] = {127, 63, -128, 127, 127, 63, -128, 127, 127, 63, -128, 127, 127, 63, -128, 127};
+    glPushMatrix();
+    glTranslatef(30, 170, 0);
+    glScalef(60, 60, 1);
+    glVertexPointer(2, GL_BYTE, 0, bytePos);
+    glColorPointer(4, GL_BYTE, 0, byteColor);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    glPopMatrix();
+
+    // GL_SHORT positions with a stride, GL_UNSIGNED_SHORT colors (size 3)
+    static const GLshort shortPos[4][3] = {{125, 170, 99}, {185, 170, 99}, {185, 230, 99}, {125, 230, 99}};
+    static const GLushort ushortColor[12] = {65535, 32768, 0, 65535, 32768, 0, 65535, 32768, 0, 65535, 32768, 0};
+    glVertexPointer(2, GL_SHORT, 3 * sizeof(GLshort), shortPos);
+    glColorPointer(3, GL_UNSIGNED_SHORT, 0, ushortColor);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+    // ES: GL_FIXED positions and colors, matrices set with the x API
+    static const GLfixed fixedPos[8] = {0, 0, 0x10000, 0, 0x10000, 0x10000, 0, 0x10000};
+    static const GLfixed fixedColor[16] = {0x10000, 0x8000, 0, 0x10000, 0x10000, 0x8000, 0, 0x10000,
+                                           0x10000, 0x8000, 0, 0x10000, 0x10000, 0x8000, 0, 0x10000};
+    glPushMatrix();
+    glTranslatex(215 << 16, 170 << 16, 0);
+    glScalex(60 << 16, 60 << 16, 0x10000);
+    glVertexPointer(2, GL_FIXED, 0, fixedPos);
+    glColorPointer(4, GL_FIXED, 0, fixedColor);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    glPopMatrix();
+    glDisableClientState(GL_COLOR_ARRAY);
+
+    // glInterleavedArrays GL_C4UB_V2F, vertices sent with glArrayElement inside glBegin/glEnd
+    static struct { GLubyte color[4]; GLfloat pos[2]; } interleaved[4] = {
+        {{255, 128, 0, 255}, {310, 170}}, {{255, 128, 0, 255}, {370, 170}},
+        {{255, 128, 0, 255}, {370, 230}}, {{255, 128, 0, 255}, {310, 230}},
+    };
+    glInterleavedArrays(GL_C4UB_V2F, 0, interleaved);
+    glBegin(GL_QUADS);
+    for (int i = 0; i < 4; i++) glArrayElement(i);
+    glEnd();
+
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisableClientState(GL_COLOR_ARRAY);
+    glColor3ub(255, 255, 255);
 }
 
 int main(void)
@@ -235,13 +364,15 @@ int main(void)
     testCapabilities();
     testQueries();
     testMatrices();
+    testArraysAndEs();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 
     printf("\n%i/%i checks passed\n\n"
            "Expected on the top screen:\n"
            "- GREEN background (all passed)\n"
            "- four identical white squares\n"
-           "  in a row\n\n"
+           "  in a row, below them four\n"
+           "  identical ORANGE squares\n\n"
            "START: exit\n", checks - failures, checks);
 
     while (aptMainLoop()) {
@@ -252,6 +383,7 @@ int main(void)
         else glClearColor(0.7f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         drawSquares();
+        drawArraySquares();
         c3dglSwapBuffers();
     }
 

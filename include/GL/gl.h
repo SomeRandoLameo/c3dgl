@@ -36,6 +36,8 @@ typedef float           GLfloat;
 typedef float           GLclampf;
 typedef double          GLdouble;
 typedef double          GLclampd;
+typedef int             GLfixed;        // OpenGL ES 16.16 fixed point
+typedef int             GLclampx;
 typedef void            GLvoid;
 
 // Boolean
@@ -166,6 +168,39 @@ typedef void            GLvoid;
 #define GL_NORMAL_ARRAY                     0x8075
 #define GL_COLOR_ARRAY                      0x8076
 #define GL_EDGE_FLAG_ARRAY                  0x8079
+#define GL_VERTEX_ARRAY_SIZE                0x807A
+#define GL_VERTEX_ARRAY_TYPE                0x807B
+#define GL_VERTEX_ARRAY_STRIDE              0x807C
+#define GL_NORMAL_ARRAY_TYPE                0x807E
+#define GL_NORMAL_ARRAY_STRIDE              0x807F
+#define GL_COLOR_ARRAY_SIZE                 0x8081
+#define GL_COLOR_ARRAY_TYPE                 0x8082
+#define GL_COLOR_ARRAY_STRIDE               0x8083
+#define GL_TEXTURE_COORD_ARRAY_SIZE         0x8088
+#define GL_TEXTURE_COORD_ARRAY_TYPE         0x8089
+#define GL_TEXTURE_COORD_ARRAY_STRIDE       0x808A
+#define GL_EDGE_FLAG_ARRAY_STRIDE           0x808C
+#define GL_VERTEX_ARRAY_POINTER             0x808E
+#define GL_NORMAL_ARRAY_POINTER             0x808F
+#define GL_COLOR_ARRAY_POINTER              0x8090
+#define GL_TEXTURE_COORD_ARRAY_POINTER      0x8092
+#define GL_EDGE_FLAG_ARRAY_POINTER          0x8093
+
+// glInterleavedArrays formats
+#define GL_V2F                              0x2A20
+#define GL_V3F                              0x2A21
+#define GL_C4UB_V2F                         0x2A22
+#define GL_C4UB_V3F                         0x2A23
+#define GL_C3F_V3F                          0x2A24
+#define GL_N3F_V3F                          0x2A25
+#define GL_C4F_N3F_V3F                      0x2A26
+#define GL_T2F_V3F                          0x2A27
+#define GL_T4F_V4F                          0x2A28
+#define GL_T2F_C4UB_V3F                     0x2A29
+#define GL_T2F_C3F_V3F                      0x2A2A
+#define GL_T2F_N3F_V3F                      0x2A2B
+#define GL_T2F_C4F_N3F_V3F                  0x2A2C
+#define GL_T4F_C4F_N3F_V4F                  0x2A2D
 #define GL_TEXTURE_COORD_ARRAY              0x8078
 
 // Queries (glGet*)
@@ -264,6 +299,8 @@ typedef void            GLvoid;
 #define GL_INT                              0x1404
 #define GL_UNSIGNED_INT                     0x1405
 #define GL_FLOAT                            0x1406
+#define GL_DOUBLE                           0x140A
+#define GL_FIXED                            0x140C      // ES
 #define GL_UNSIGNED_SHORT_4_4_4_4           0x8033
 #define GL_UNSIGNED_SHORT_5_5_5_1           0x8034
 #define GL_UNSIGNED_SHORT_5_6_5             0x8363
@@ -422,61 +459,116 @@ void glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLd
 // Immediate mode
 void glBegin(GLenum mode);
 void glEnd(void);
-void glVertex2f(GLfloat x, GLfloat y);
-void glVertex2d(GLdouble x, GLdouble y);
-void glVertex2i(GLint x, GLint y);
-void glVertex2s(GLshort x, GLshort y);
-void glVertex2fv(const GLfloat *v);
-void glVertex2dv(const GLdouble *v);
-void glVertex2iv(const GLint *v);
-void glVertex2sv(const GLshort *v);
 void glVertex3f(GLfloat x, GLfloat y, GLfloat z);
-void glVertex3d(GLdouble x, GLdouble y, GLdouble z);
-void glVertex3i(GLint x, GLint y, GLint z);
-void glVertex3s(GLshort x, GLshort y, GLshort z);
-void glVertex3fv(const GLfloat *v);
-void glVertex3dv(const GLdouble *v);
-void glVertex3iv(const GLint *v);
-void glVertex3sv(const GLshort *v);
-void glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w);    // Divided by w, which must be > 0
-void glVertex4d(GLdouble x, GLdouble y, GLdouble z, GLdouble w);
-void glVertex4fv(const GLfloat *v);
-
-void glTexCoord1f(GLfloat s);
-void glTexCoord2f(GLfloat s, GLfloat t);
-void glTexCoord2d(GLdouble s, GLdouble t);
-void glTexCoord2i(GLint s, GLint t);
-void glTexCoord2s(GLshort s, GLshort t);
-void glTexCoord2fv(const GLfloat *v);
-void glTexCoord2dv(const GLdouble *v);
-
+void glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w);    // Divided by w, which must not be 0
+void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q); // r is ignored (2D textures only)
+void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz);            // Stored only, there is no lighting yet
+void glColor4f(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+void glColor4ub(GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha);
+void glRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2);
 void glEdgeFlag(GLboolean flag);
 void glEdgeFlagv(const GLboolean *flag);
 
-void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz);    // Stored only, there is no lighting
+// All other variants of glVertex{2,3,4}, glTexCoord{1,2,3,4}, glNormal3, glColor{3,4}, glRect
+void glVertex2d(GLdouble x, GLdouble y);
+void glVertex2dv(const GLdouble *v);
+void glVertex2f(GLfloat x, GLfloat y);
+void glVertex2fv(const GLfloat *v);
+void glVertex2i(GLint x, GLint y);
+void glVertex2iv(const GLint *v);
+void glVertex2s(GLshort x, GLshort y);
+void glVertex2sv(const GLshort *v);
+void glVertex3d(GLdouble x, GLdouble y, GLdouble z);
+void glVertex3dv(const GLdouble *v);
+void glVertex3fv(const GLfloat *v);
+void glVertex3i(GLint x, GLint y, GLint z);
+void glVertex3iv(const GLint *v);
+void glVertex3s(GLshort x, GLshort y, GLshort z);
+void glVertex3sv(const GLshort *v);
+void glVertex4d(GLdouble x, GLdouble y, GLdouble z, GLdouble w);
+void glVertex4dv(const GLdouble *v);
+void glVertex4fv(const GLfloat *v);
+void glVertex4i(GLint x, GLint y, GLint z, GLint w);
+void glVertex4iv(const GLint *v);
+void glVertex4s(GLshort x, GLshort y, GLshort z, GLshort w);
+void glVertex4sv(const GLshort *v);
+void glTexCoord1d(GLdouble s);
+void glTexCoord1dv(const GLdouble *v);
+void glTexCoord1f(GLfloat s);
+void glTexCoord1fv(const GLfloat *v);
+void glTexCoord1i(GLint s);
+void glTexCoord1iv(const GLint *v);
+void glTexCoord1s(GLshort s);
+void glTexCoord1sv(const GLshort *v);
+void glTexCoord2d(GLdouble s, GLdouble t);
+void glTexCoord2dv(const GLdouble *v);
+void glTexCoord2f(GLfloat s, GLfloat t);
+void glTexCoord2fv(const GLfloat *v);
+void glTexCoord2i(GLint s, GLint t);
+void glTexCoord2iv(const GLint *v);
+void glTexCoord2s(GLshort s, GLshort t);
+void glTexCoord2sv(const GLshort *v);
+void glTexCoord3d(GLdouble s, GLdouble t, GLdouble r);
+void glTexCoord3dv(const GLdouble *v);
+void glTexCoord3f(GLfloat s, GLfloat t, GLfloat r);
+void glTexCoord3fv(const GLfloat *v);
+void glTexCoord3i(GLint s, GLint t, GLint r);
+void glTexCoord3iv(const GLint *v);
+void glTexCoord3s(GLshort s, GLshort t, GLshort r);
+void glTexCoord3sv(const GLshort *v);
+void glTexCoord4d(GLdouble s, GLdouble t, GLdouble r, GLdouble q);
+void glTexCoord4dv(const GLdouble *v);
+void glTexCoord4fv(const GLfloat *v);
+void glTexCoord4i(GLint s, GLint t, GLint r, GLint q);
+void glTexCoord4iv(const GLint *v);
+void glTexCoord4s(GLshort s, GLshort t, GLshort r, GLshort q);
+void glTexCoord4sv(const GLshort *v);
+void glNormal3b(GLbyte nx, GLbyte ny, GLbyte nz);
+void glNormal3bv(const GLbyte *v);
 void glNormal3d(GLdouble nx, GLdouble ny, GLdouble nz);
-void glNormal3fv(const GLfloat *v);
 void glNormal3dv(const GLdouble *v);
-
-void glColor3f(GLfloat red, GLfloat green, GLfloat blue);
-void glColor4f(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+void glNormal3fv(const GLfloat *v);
+void glNormal3i(GLint nx, GLint ny, GLint nz);
+void glNormal3iv(const GLint *v);
+void glNormal3s(GLshort nx, GLshort ny, GLshort nz);
+void glNormal3sv(const GLshort *v);
+void glColor3b(GLbyte red, GLbyte green, GLbyte blue);
+void glColor3bv(const GLbyte *v);
 void glColor3d(GLdouble red, GLdouble green, GLdouble blue);
-void glColor4d(GLdouble red, GLdouble green, GLdouble blue, GLdouble alpha);
-void glColor3ub(GLubyte red, GLubyte green, GLubyte blue);
-void glColor4ub(GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha);
-void glColor3fv(const GLfloat *v);
-void glColor4fv(const GLfloat *v);
 void glColor3dv(const GLdouble *v);
-void glColor4dv(const GLdouble *v);
+void glColor3f(GLfloat red, GLfloat green, GLfloat blue);
+void glColor3fv(const GLfloat *v);
+void glColor3i(GLint red, GLint green, GLint blue);
+void glColor3iv(const GLint *v);
+void glColor3s(GLshort red, GLshort green, GLshort blue);
+void glColor3sv(const GLshort *v);
+void glColor3ub(GLubyte red, GLubyte green, GLubyte blue);
 void glColor3ubv(const GLubyte *v);
+void glColor3ui(GLuint red, GLuint green, GLuint blue);
+void glColor3uiv(const GLuint *v);
+void glColor3us(GLushort red, GLushort green, GLushort blue);
+void glColor3usv(const GLushort *v);
+void glColor4b(GLbyte red, GLbyte green, GLbyte blue, GLbyte alpha);
+void glColor4bv(const GLbyte *v);
+void glColor4d(GLdouble red, GLdouble green, GLdouble blue, GLdouble alpha);
+void glColor4dv(const GLdouble *v);
+void glColor4fv(const GLfloat *v);
+void glColor4i(GLint red, GLint green, GLint blue, GLint alpha);
+void glColor4iv(const GLint *v);
+void glColor4s(GLshort red, GLshort green, GLshort blue, GLshort alpha);
+void glColor4sv(const GLshort *v);
 void glColor4ubv(const GLubyte *v);
-
-void glRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2);
+void glColor4ui(GLuint red, GLuint green, GLuint blue, GLuint alpha);
+void glColor4uiv(const GLuint *v);
+void glColor4us(GLushort red, GLushort green, GLushort blue, GLushort alpha);
+void glColor4usv(const GLushort *v);
 void glRectd(GLdouble x1, GLdouble y1, GLdouble x2, GLdouble y2);
-void glRecti(GLint x1, GLint y1, GLint x2, GLint y2);
-void glRects(GLshort x1, GLshort y1, GLshort x2, GLshort y2);
+void glRectdv(const GLdouble *v1, const GLdouble *v2);
 void glRectfv(const GLfloat *v1, const GLfloat *v2);
+void glRecti(GLint x1, GLint y1, GLint x2, GLint y2);
 void glRectiv(const GLint *v1, const GLint *v2);
+void glRects(GLshort x1, GLshort y1, GLshort x2, GLshort y2);
+void glRectsv(const GLshort *v1, const GLshort *v2);
 
 // Client-side vertex arrays
 void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer);
@@ -484,6 +576,9 @@ void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *po
 void glNormalPointer(GLenum type, GLsizei stride, const GLvoid *pointer);
 void glEdgeFlagPointer(GLsizei stride, const GLvoid *pointer);
 void glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer);
+void glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer);
+void glArrayElement(GLint i);
+void glGetPointerv(GLenum pname, GLvoid **params);
 void glDrawArrays(GLenum mode, GLint first, GLsizei count);
 void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices);
 
@@ -530,6 +625,33 @@ void glEvalPoint2(GLint i, GLint j);
 void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth,
                   GLint border, GLenum format, GLenum type, const GLvoid *pixels);
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels);
+
+// OpenGL ES 1.1: float variants and the fixed-point API (more x functions come with their features)
+void glOrthof(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat zNear, GLfloat zFar);
+void glFrustumf(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat zNear, GLfloat zFar);
+void glDepthRangef(GLclampf zNear, GLclampf zFar);
+void glClearDepthf(GLclampf depth);
+void glAlphaFuncx(GLenum func, GLclampx ref);
+void glClearColorx(GLclampx red, GLclampx green, GLclampx blue, GLclampx alpha);
+void glClearDepthx(GLclampx depth);
+void glColor4x(GLfixed red, GLfixed green, GLfixed blue, GLfixed alpha);
+void glDepthRangex(GLclampx zNear, GLclampx zFar);
+void glFrustumx(GLfixed left, GLfixed right, GLfixed bottom, GLfixed top, GLfixed zNear, GLfixed zFar);
+void glGetFixedv(GLenum pname, GLfixed *params);
+void glLineWidthx(GLfixed width);
+void glLoadMatrixx(const GLfixed *m);
+void glMultMatrixx(const GLfixed *m);
+void glNormal3x(GLfixed nx, GLfixed ny, GLfixed nz);
+void glOrthox(GLfixed left, GLfixed right, GLfixed bottom, GLfixed top, GLfixed zNear, GLfixed zFar);
+void glPointSizex(GLfixed size);
+void glPolygonOffsetx(GLfixed factor, GLfixed units);
+void glRotatex(GLfixed angle, GLfixed x, GLfixed y, GLfixed z);
+void glScalex(GLfixed x, GLfixed y, GLfixed z);
+void glTexEnvx(GLenum target, GLenum pname, GLfixed param);
+void glTexEnvxv(GLenum target, GLenum pname, const GLfixed *params);
+void glTexParameterx(GLenum target, GLenum pname, GLfixed param);
+void glTexParameterxv(GLenum target, GLenum pname, const GLfixed *params);
+void glTranslatex(GLfixed x, GLfixed y, GLfixed z);
 
 #ifdef __cplusplus
 }

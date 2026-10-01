@@ -61,7 +61,7 @@
 //----------------------------------------------------------------------------------
 typedef struct {
     float pos[3];
-    float uv[2];
+    float tex[3];               // s, t, q (r is not kept: only 2D textures)
     u8 color[4];
     float depthBias;            // Added to PICA NDC depth by the shader: polygon offset of filled polygons
 } Vertex;
@@ -108,6 +108,7 @@ typedef struct {
     bool clipSpace;             // Vertices are already in NDC (expanded lines and points)
     u32 matrixSerial;           // Matrix version (0 for clipSpace)
     u32 texMatrixSerial;        // Texture matrix version (0 when untextured)
+    bool texQ;                  // Texcoords with q != 1 were used (projection mode), only when textured
     bool blend;
     GLenum blendSrc, blendDst;
     bool depthTest, depthMask;
@@ -136,7 +137,7 @@ typedef struct {
     GLsizei stride;
 } ClientArray;
 
-enum { ARRAY_VERTEX, ARRAY_TEXCOORD, ARRAY_COLOR, ARRAY_EDGEFLAG, ARRAY_COUNT };
+enum { ARRAY_VERTEX, ARRAY_TEXCOORD, ARRAY_COLOR, ARRAY_NORMAL, ARRAY_EDGEFLAG, ARRAY_COUNT };
 
 //----------------------------------------------------------------------------------
 // Global state
@@ -174,6 +175,8 @@ static struct {
     u32 ignoredCaps;                    // Capabilities accepted but not implemented, see ignoredCapBit()
     GLenum shadeModel;
     float currentNormal[3];             // Only stored for glGet (no lighting)
+    float currentTexR;                  // r of the current texcoord, only for glGet
+    bool texQUsed;                      // A texcoord with q != 1 was submitted: sticky projection mode
 
     // Matrices
     int matrixMode;                     // 0: modelview, 1: projection, 2: texture
@@ -614,8 +617,8 @@ static void applyState(const DrawState *s)
                           tm->m[8 + row]*scale[row], tm->m[12 + row]*scale[row]);
         C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat + 2, tm->m[3], tm->m[7], tm->m[11], tm->m[15]);
 
-        // q != 1: let PICA divide s and t by q (r is always 0, so m[11] does not matter)
-        bool projective = (tm->m[3] != 0.0f) || (tm->m[7] != 0.0f) || (tm->m[15] != 1.0f);
+        // q != 1 (matrix or texcoords): let PICA divide s and t by q (r is always 0, so m[11] does not matter)
+        bool projective = (tm->m[3] != 0.0f) || (tm->m[7] != 0.0f) || (tm->m[15] != 1.0f) || s->texQ;
         t->tex.param = (t->tex.param & ~GPU_TEXTURE_MODE(7)) | GPU_TEXTURE_MODE(projective? GPU_TEX_PROJECTION : GPU_TEX_2D);
 
         C3D_TexBind(0, &t->tex);
@@ -662,7 +665,14 @@ static void prepareDraw(bool clipSpace)
     key.matrixSerial = clipSpace? 0 : gl.matrixSerial;
     key.texture = (gl.texture2D && textureValid(gl.boundTexture))? gl.boundTexture : 0;
     key.texMatrixSerial = gl.texMatrixSerial;
-    if (key.texture == 0) { key.texEnvMode = 0; key.texEnvColor = 0; key.texMatrixSerial = 0; }    // Unused, don't split batches over it
+    key.texQ = gl.texQUsed;
+    if (key.texture == 0)   // Unused, don't split batches over it
+    {
+        key.texEnvMode = 0;
+        key.texEnvColor = 0;
+        key.texMatrixSerial = 0;
+        key.texQ = false;
+    }
     if (!key.stencilTest)
     {
         key.stencilFunc = key.stencilFail = key.stencilDepthFail = key.stencilPass = 0;
@@ -696,7 +706,7 @@ static void emitTriangle(const Vertex *a, const Vertex *b, const Vertex *c)
 
 static void lerpVertex(Vertex *out, const Vertex *a, const Vertex *b, float t)
 {
-    for (int i = 0; i < 2; i++) out->uv[i] = a->uv[i] + (b->uv[i] - a->uv[i])*t;
+    for (int i = 0; i < 3; i++) out->tex[i] = a->tex[i] + (b->tex[i] - a->tex[i])*t;
     for (int i = 0; i < 4; i++) out->color[i] = (u8)(a->color[i] + ((float)b->color[i] - a->color[i])*t);
 }
 
@@ -1065,11 +1075,11 @@ bool c3dglInit(void)
     gl.uLocMvp = shaderInstanceGetUniformLocation(gl.program.vertexShader, "mvp");
     gl.uLocTexMat = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texmat");
 
-    // Vertex layout: v0 = position (3 floats), v1 = texcoord (2 floats), v2 = color (4 ubytes), v3 = depth bias (float)
+    // Vertex layout: v0 = position (3 floats), v1 = texcoord s, t, q (3 floats), v2 = color (4 ubytes), v3 = depth bias (float)
     C3D_AttrInfo *attrInfo = C3D_GetAttrInfo();
     AttrInfo_Init(attrInfo);
     AttrInfo_AddLoader(attrInfo, 0, GPU_FLOAT, 3);
-    AttrInfo_AddLoader(attrInfo, 1, GPU_FLOAT, 2);
+    AttrInfo_AddLoader(attrInfo, 1, GPU_FLOAT, 3);
     AttrInfo_AddLoader(attrInfo, 2, GPU_UNSIGNED_BYTE, 4);
     AttrInfo_AddLoader(attrInfo, 3, GPU_FLOAT, 1);
 
@@ -1113,6 +1123,14 @@ bool c3dglInit(void)
     gl.currentNormal[2] = 1.0f;
     gl.ignoredCaps = 1u << 0;     // GL_DITHER is enabled by default
     memset(gl.current.color, 255, 4);
+    gl.current.tex[2] = 1.0f;
+
+    // Client array defaults: size 4 (3 for normals), GL_FLOAT
+    for (int i = 0; i < ARRAY_COUNT; i++)
+    {
+        gl.arrays[i].size = (i == ARRAY_NORMAL)? 3 : (i == ARRAY_EDGEFLAG)? 1 : 4;
+        gl.arrays[i].type = (i == ARRAY_EDGEFLAG)? GL_UNSIGNED_BYTE : GL_FLOAT;
+    }
 
     for (int i = 0; i < 3; i++) mat4Identity(&gl.stack[i][0]);
     gl.matrixSerial = gl.texMatrixSerial = 1;
@@ -1243,7 +1261,7 @@ static void setClientState(GLenum array, bool enable)
         case GL_TEXTURE_COORD_ARRAY: gl.arrays[ARRAY_TEXCOORD].enabled = enable; break;
         case GL_COLOR_ARRAY: gl.arrays[ARRAY_COLOR].enabled = enable; break;
         case GL_EDGE_FLAG_ARRAY: gl.arrays[ARRAY_EDGEFLAG].enabled = enable; break;
-        case GL_NORMAL_ARRAY: break;    // Normals are not used (no lighting)
+        case GL_NORMAL_ARRAY: gl.arrays[ARRAY_NORMAL].enabled = enable; break;
         default: setError(GL_INVALID_ENUM); break;
     }
 }
@@ -1269,7 +1287,7 @@ GLboolean glIsEnabled(GLenum cap)
         case GL_TEXTURE_COORD_ARRAY: return gl.arrays[ARRAY_TEXCOORD].enabled;
         case GL_COLOR_ARRAY: return gl.arrays[ARRAY_COLOR].enabled;
         case GL_EDGE_FLAG_ARRAY: return gl.arrays[ARRAY_EDGEFLAG].enabled;
-        case GL_NORMAL_ARRAY: return GL_FALSE;
+        case GL_NORMAL_ARRAY: return gl.arrays[ARRAY_NORMAL].enabled;
         case GL_POLYGON_OFFSET_FILL: return gl.offsetFill;
         case GL_POLYGON_OFFSET_LINE: return gl.offsetLine;
         case GL_POLYGON_OFFSET_POINT: return gl.offsetPoint;
@@ -1361,7 +1379,21 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_EDGE_FLAG: v[0] = gl.currentEdge; return 1;
 
         case GL_CURRENT_COLOR: for (int i = 0; i < 4; i++) v[i] = gl.current.color[i]/255.0; *normalized = true; return 4;
-        case GL_CURRENT_TEXTURE_COORDS: v[0] = gl.current.uv[0]; v[1] = gl.current.uv[1]; v[2] = 0.0; v[3] = 1.0; return 4;
+        case GL_CURRENT_TEXTURE_COORDS: v[0] = gl.current.tex[0]; v[1] = gl.current.tex[1]; v[2] = gl.currentTexR; v[3] = gl.current.tex[2]; return 4;
+
+        // Client arrays
+        case GL_VERTEX_ARRAY_SIZE: v[0] = gl.arrays[ARRAY_VERTEX].size; return 1;
+        case GL_VERTEX_ARRAY_TYPE: v[0] = gl.arrays[ARRAY_VERTEX].type; return 1;
+        case GL_VERTEX_ARRAY_STRIDE: v[0] = gl.arrays[ARRAY_VERTEX].stride; return 1;
+        case GL_NORMAL_ARRAY_TYPE: v[0] = gl.arrays[ARRAY_NORMAL].type; return 1;
+        case GL_NORMAL_ARRAY_STRIDE: v[0] = gl.arrays[ARRAY_NORMAL].stride; return 1;
+        case GL_COLOR_ARRAY_SIZE: v[0] = gl.arrays[ARRAY_COLOR].size; return 1;
+        case GL_COLOR_ARRAY_TYPE: v[0] = gl.arrays[ARRAY_COLOR].type; return 1;
+        case GL_COLOR_ARRAY_STRIDE: v[0] = gl.arrays[ARRAY_COLOR].stride; return 1;
+        case GL_TEXTURE_COORD_ARRAY_SIZE: v[0] = gl.arrays[ARRAY_TEXCOORD].size; return 1;
+        case GL_TEXTURE_COORD_ARRAY_TYPE: v[0] = gl.arrays[ARRAY_TEXCOORD].type; return 1;
+        case GL_TEXTURE_COORD_ARRAY_STRIDE: v[0] = gl.arrays[ARRAY_TEXCOORD].stride; return 1;
+        case GL_EDGE_FLAG_ARRAY_STRIDE: v[0] = gl.arrays[ARRAY_EDGEFLAG].stride; return 1;
         case GL_CURRENT_NORMAL: for (int i = 0; i < 3; i++) v[i] = gl.currentNormal[i]; return 3;
 
         case GL_COLOR_CLEAR_VALUE:
@@ -1813,13 +1845,28 @@ void glVertex3f(GLfloat x, GLfloat y, GLfloat z)
     submitVertex(&v, gl.currentEdge);
 }
 
-void glVertex2f(GLfloat x, GLfloat y) { glVertex3f(x, y, 0.0f); }
-void glVertex2i(GLint x, GLint y) { glVertex3f((float)x, (float)y, 0.0f); }
-
-void glTexCoord2f(GLfloat s, GLfloat t)
+// Vertices are stored with w = 1: homogeneous positions are divided (exact unless w <= 0)
+void glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w)
 {
-    gl.current.uv[0] = s;
-    gl.current.uv[1] = t;
+    if (w == 0.0f) { WARN_ONCE("glVertex4: w = 0 (point at infinity) not supported\n"); return; }
+    glVertex3f(x/w, y/w, z/w);
+}
+
+// The first texcoord with q != 1 switches texturing to projection mode (for good, it is exact with q = 1 too)
+static void markTexQ(void)
+{
+    if (gl.texQUsed) return;
+    gl.texQUsed = true;
+    if (gl.inBegin) prepareDraw(gl.batch.clipSpace);    // The batch of the current primitive needs it already
+}
+
+void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q)
+{
+    gl.current.tex[0] = s;
+    gl.current.tex[1] = t;
+    gl.current.tex[2] = q;
+    gl.currentTexR = r;
+    if (q != 1.0f) markTexQ();
 }
 
 void glEdgeFlag(GLboolean flag) { gl.currentEdge = flag; }
@@ -1845,52 +1892,6 @@ void glColor4f(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
     glColor4ub(colorByte(red), colorByte(green), colorByte(blue), colorByte(alpha));
 }
 
-void glColor3f(GLfloat red, GLfloat green, GLfloat blue) { glColor4f(red, green, blue, 1.0f); }
-
-// Variants of the calls above
-void glVertex2d(GLdouble x, GLdouble y) { glVertex3f((float)x, (float)y, 0.0f); }
-void glVertex2s(GLshort x, GLshort y) { glVertex3f(x, y, 0.0f); }
-void glVertex2fv(const GLfloat *v) { glVertex3f(v[0], v[1], 0.0f); }
-void glVertex2dv(const GLdouble *v) { glVertex3f((float)v[0], (float)v[1], 0.0f); }
-void glVertex2iv(const GLint *v) { glVertex3f((float)v[0], (float)v[1], 0.0f); }
-void glVertex2sv(const GLshort *v) { glVertex3f(v[0], v[1], 0.0f); }
-void glVertex3d(GLdouble x, GLdouble y, GLdouble z) { glVertex3f((float)x, (float)y, (float)z); }
-void glVertex3i(GLint x, GLint y, GLint z) { glVertex3f((float)x, (float)y, (float)z); }
-void glVertex3s(GLshort x, GLshort y, GLshort z) { glVertex3f(x, y, z); }
-void glVertex3fv(const GLfloat *v) { glVertex3f(v[0], v[1], v[2]); }
-void glVertex3dv(const GLdouble *v) { glVertex3f((float)v[0], (float)v[1], (float)v[2]); }
-void glVertex3iv(const GLint *v) { glVertex3f((float)v[0], (float)v[1], (float)v[2]); }
-void glVertex3sv(const GLshort *v) { glVertex3f(v[0], v[1], v[2]); }
-
-// Vertices are stored with w = 1: homogeneous positions are divided (exact unless w <= 0)
-void glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w)
-{
-    if (w == 0.0f) { WARN_ONCE("glVertex4: w = 0 (point at infinity) not supported\n"); return; }
-    glVertex3f(x/w, y/w, z/w);
-}
-void glVertex4fv(const GLfloat *v) { glVertex4f(v[0], v[1], v[2], v[3]); }
-void glVertex4d(GLdouble x, GLdouble y, GLdouble z, GLdouble w) { glVertex4f((float)x, (float)y, (float)z, (float)w); }
-
-void glTexCoord1f(GLfloat s) { glTexCoord2f(s, 0.0f); }
-void glTexCoord2d(GLdouble s, GLdouble t) { glTexCoord2f((float)s, (float)t); }
-void glTexCoord2i(GLint s, GLint t) { glTexCoord2f((float)s, (float)t); }
-void glTexCoord2s(GLshort s, GLshort t) { glTexCoord2f(s, t); }
-void glTexCoord2fv(const GLfloat *v) { glTexCoord2f(v[0], v[1]); }
-void glTexCoord2dv(const GLdouble *v) { glTexCoord2f((float)v[0], (float)v[1]); }
-
-void glNormal3d(GLdouble nx, GLdouble ny, GLdouble nz) { glNormal3f((float)nx, (float)ny, (float)nz); }
-void glNormal3fv(const GLfloat *v) { glNormal3f(v[0], v[1], v[2]); }
-void glNormal3dv(const GLdouble *v) { glNormal3f((float)v[0], (float)v[1], (float)v[2]); }
-
-void glColor3ub(GLubyte red, GLubyte green, GLubyte blue) { glColor4ub(red, green, blue, 255); }
-void glColor3ubv(const GLubyte *v) { glColor4ub(v[0], v[1], v[2], 255); }
-void glColor4ubv(const GLubyte *v) { glColor4ub(v[0], v[1], v[2], v[3]); }
-void glColor3fv(const GLfloat *v) { glColor4f(v[0], v[1], v[2], 1.0f); }
-void glColor4fv(const GLfloat *v) { glColor4f(v[0], v[1], v[2], v[3]); }
-void glColor3d(GLdouble red, GLdouble green, GLdouble blue) { glColor4f((float)red, (float)green, (float)blue, 1.0f); }
-void glColor4d(GLdouble red, GLdouble green, GLdouble blue, GLdouble alpha) { glColor4f((float)red, (float)green, (float)blue, (float)alpha); }
-void glColor3dv(const GLdouble *v) { glColor4f((float)v[0], (float)v[1], (float)v[2], 1.0f); }
-void glColor4dv(const GLdouble *v) { glColor4f((float)v[0], (float)v[1], (float)v[2], (float)v[3]); }
 
 // glRect: counter-clockwise quad from (x1, y1) to (x2, y2) at z = 0
 void glRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2)
@@ -1902,85 +1903,332 @@ void glRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2)
     glVertex2f(x1, y2);
     glEnd();
 }
+// All other GL 1.1 variants of glVertex, glTexCoord, glNormal, glColor, glRect, generated: integer colors and
+// normals are normalized ((2c + 1)/(2^b - 1) for signed types), vertices and texcoords are not
+void glVertex2d(GLdouble x, GLdouble y) { glVertex3f((float)x, (float)y, 0.0f); }
+void glVertex2dv(const GLdouble *v) { glVertex3f((float)v[0], (float)v[1], 0.0f); }
+void glVertex2f(GLfloat x, GLfloat y) { glVertex3f(x, y, 0.0f); }
+void glVertex2fv(const GLfloat *v) { glVertex3f(v[0], v[1], 0.0f); }
+void glVertex2i(GLint x, GLint y) { glVertex3f((float)x, (float)y, 0.0f); }
+void glVertex2iv(const GLint *v) { glVertex3f((float)v[0], (float)v[1], 0.0f); }
+void glVertex2s(GLshort x, GLshort y) { glVertex3f(x, y, 0.0f); }
+void glVertex2sv(const GLshort *v) { glVertex3f(v[0], v[1], 0.0f); }
+void glVertex3d(GLdouble x, GLdouble y, GLdouble z) { glVertex3f((float)x, (float)y, (float)z); }
+void glVertex3dv(const GLdouble *v) { glVertex3f((float)v[0], (float)v[1], (float)v[2]); }
+void glVertex3fv(const GLfloat *v) { glVertex3f(v[0], v[1], v[2]); }
+void glVertex3i(GLint x, GLint y, GLint z) { glVertex3f((float)x, (float)y, (float)z); }
+void glVertex3iv(const GLint *v) { glVertex3f((float)v[0], (float)v[1], (float)v[2]); }
+void glVertex3s(GLshort x, GLshort y, GLshort z) { glVertex3f(x, y, z); }
+void glVertex3sv(const GLshort *v) { glVertex3f(v[0], v[1], v[2]); }
+void glVertex4d(GLdouble x, GLdouble y, GLdouble z, GLdouble w) { glVertex4f((float)x, (float)y, (float)z, (float)w); }
+void glVertex4dv(const GLdouble *v) { glVertex4f((float)v[0], (float)v[1], (float)v[2], (float)v[3]); }
+void glVertex4fv(const GLfloat *v) { glVertex4f(v[0], v[1], v[2], v[3]); }
+void glVertex4i(GLint x, GLint y, GLint z, GLint w) { glVertex4f((float)x, (float)y, (float)z, (float)w); }
+void glVertex4iv(const GLint *v) { glVertex4f((float)v[0], (float)v[1], (float)v[2], (float)v[3]); }
+void glVertex4s(GLshort x, GLshort y, GLshort z, GLshort w) { glVertex4f(x, y, z, w); }
+void glVertex4sv(const GLshort *v) { glVertex4f(v[0], v[1], v[2], v[3]); }
+void glTexCoord1d(GLdouble s) { glTexCoord4f((float)s, 0.0f, 0.0f, 1.0f); }
+void glTexCoord1dv(const GLdouble *v) { glTexCoord4f((float)v[0], 0.0f, 0.0f, 1.0f); }
+void glTexCoord1f(GLfloat s) { glTexCoord4f(s, 0.0f, 0.0f, 1.0f); }
+void glTexCoord1fv(const GLfloat *v) { glTexCoord4f(v[0], 0.0f, 0.0f, 1.0f); }
+void glTexCoord1i(GLint s) { glTexCoord4f((float)s, 0.0f, 0.0f, 1.0f); }
+void glTexCoord1iv(const GLint *v) { glTexCoord4f((float)v[0], 0.0f, 0.0f, 1.0f); }
+void glTexCoord1s(GLshort s) { glTexCoord4f(s, 0.0f, 0.0f, 1.0f); }
+void glTexCoord1sv(const GLshort *v) { glTexCoord4f(v[0], 0.0f, 0.0f, 1.0f); }
+void glTexCoord2d(GLdouble s, GLdouble t) { glTexCoord4f((float)s, (float)t, 0.0f, 1.0f); }
+void glTexCoord2dv(const GLdouble *v) { glTexCoord4f((float)v[0], (float)v[1], 0.0f, 1.0f); }
+void glTexCoord2f(GLfloat s, GLfloat t) { glTexCoord4f(s, t, 0.0f, 1.0f); }
+void glTexCoord2fv(const GLfloat *v) { glTexCoord4f(v[0], v[1], 0.0f, 1.0f); }
+void glTexCoord2i(GLint s, GLint t) { glTexCoord4f((float)s, (float)t, 0.0f, 1.0f); }
+void glTexCoord2iv(const GLint *v) { glTexCoord4f((float)v[0], (float)v[1], 0.0f, 1.0f); }
+void glTexCoord2s(GLshort s, GLshort t) { glTexCoord4f(s, t, 0.0f, 1.0f); }
+void glTexCoord2sv(const GLshort *v) { glTexCoord4f(v[0], v[1], 0.0f, 1.0f); }
+void glTexCoord3d(GLdouble s, GLdouble t, GLdouble r) { glTexCoord4f((float)s, (float)t, (float)r, 1.0f); }
+void glTexCoord3dv(const GLdouble *v) { glTexCoord4f((float)v[0], (float)v[1], (float)v[2], 1.0f); }
+void glTexCoord3f(GLfloat s, GLfloat t, GLfloat r) { glTexCoord4f(s, t, r, 1.0f); }
+void glTexCoord3fv(const GLfloat *v) { glTexCoord4f(v[0], v[1], v[2], 1.0f); }
+void glTexCoord3i(GLint s, GLint t, GLint r) { glTexCoord4f((float)s, (float)t, (float)r, 1.0f); }
+void glTexCoord3iv(const GLint *v) { glTexCoord4f((float)v[0], (float)v[1], (float)v[2], 1.0f); }
+void glTexCoord3s(GLshort s, GLshort t, GLshort r) { glTexCoord4f(s, t, r, 1.0f); }
+void glTexCoord3sv(const GLshort *v) { glTexCoord4f(v[0], v[1], v[2], 1.0f); }
+void glTexCoord4d(GLdouble s, GLdouble t, GLdouble r, GLdouble q) { glTexCoord4f((float)s, (float)t, (float)r, (float)q); }
+void glTexCoord4dv(const GLdouble *v) { glTexCoord4f((float)v[0], (float)v[1], (float)v[2], (float)v[3]); }
+void glTexCoord4fv(const GLfloat *v) { glTexCoord4f(v[0], v[1], v[2], v[3]); }
+void glTexCoord4i(GLint s, GLint t, GLint r, GLint q) { glTexCoord4f((float)s, (float)t, (float)r, (float)q); }
+void glTexCoord4iv(const GLint *v) { glTexCoord4f((float)v[0], (float)v[1], (float)v[2], (float)v[3]); }
+void glTexCoord4s(GLshort s, GLshort t, GLshort r, GLshort q) { glTexCoord4f(s, t, r, q); }
+void glTexCoord4sv(const GLshort *v) { glTexCoord4f(v[0], v[1], v[2], v[3]); }
+void glNormal3b(GLbyte nx, GLbyte ny, GLbyte nz) { glNormal3f((2.0f*nx + 1.0f)/255.0f, (2.0f*ny + 1.0f)/255.0f, (2.0f*nz + 1.0f)/255.0f); }
+void glNormal3bv(const GLbyte *v) { glNormal3f((2.0f*v[0] + 1.0f)/255.0f, (2.0f*v[1] + 1.0f)/255.0f, (2.0f*v[2] + 1.0f)/255.0f); }
+void glNormal3d(GLdouble nx, GLdouble ny, GLdouble nz) { glNormal3f((float)nx, (float)ny, (float)nz); }
+void glNormal3dv(const GLdouble *v) { glNormal3f((float)v[0], (float)v[1], (float)v[2]); }
+void glNormal3fv(const GLfloat *v) { glNormal3f(v[0], v[1], v[2]); }
+void glNormal3i(GLint nx, GLint ny, GLint nz) { glNormal3f((float)((2.0*nx + 1.0)/4294967295.0), (float)((2.0*ny + 1.0)/4294967295.0), (float)((2.0*nz + 1.0)/4294967295.0)); }
+void glNormal3iv(const GLint *v) { glNormal3f((float)((2.0*v[0] + 1.0)/4294967295.0), (float)((2.0*v[1] + 1.0)/4294967295.0), (float)((2.0*v[2] + 1.0)/4294967295.0)); }
+void glNormal3s(GLshort nx, GLshort ny, GLshort nz) { glNormal3f((2.0f*nx + 1.0f)/65535.0f, (2.0f*ny + 1.0f)/65535.0f, (2.0f*nz + 1.0f)/65535.0f); }
+void glNormal3sv(const GLshort *v) { glNormal3f((2.0f*v[0] + 1.0f)/65535.0f, (2.0f*v[1] + 1.0f)/65535.0f, (2.0f*v[2] + 1.0f)/65535.0f); }
+void glColor3b(GLbyte red, GLbyte green, GLbyte blue) { glColor4f((2.0f*red + 1.0f)/255.0f, (2.0f*green + 1.0f)/255.0f, (2.0f*blue + 1.0f)/255.0f, 1.0f); }
+void glColor3bv(const GLbyte *v) { glColor4f((2.0f*v[0] + 1.0f)/255.0f, (2.0f*v[1] + 1.0f)/255.0f, (2.0f*v[2] + 1.0f)/255.0f, 1.0f); }
+void glColor3d(GLdouble red, GLdouble green, GLdouble blue) { glColor4f((float)red, (float)green, (float)blue, 1.0f); }
+void glColor3dv(const GLdouble *v) { glColor4f((float)v[0], (float)v[1], (float)v[2], 1.0f); }
+void glColor3f(GLfloat red, GLfloat green, GLfloat blue) { glColor4f(red, green, blue, 1.0f); }
+void glColor3fv(const GLfloat *v) { glColor4f(v[0], v[1], v[2], 1.0f); }
+void glColor3i(GLint red, GLint green, GLint blue) { glColor4f((float)((2.0*red + 1.0)/4294967295.0), (float)((2.0*green + 1.0)/4294967295.0), (float)((2.0*blue + 1.0)/4294967295.0), 1.0f); }
+void glColor3iv(const GLint *v) { glColor4f((float)((2.0*v[0] + 1.0)/4294967295.0), (float)((2.0*v[1] + 1.0)/4294967295.0), (float)((2.0*v[2] + 1.0)/4294967295.0), 1.0f); }
+void glColor3s(GLshort red, GLshort green, GLshort blue) { glColor4f((2.0f*red + 1.0f)/65535.0f, (2.0f*green + 1.0f)/65535.0f, (2.0f*blue + 1.0f)/65535.0f, 1.0f); }
+void glColor3sv(const GLshort *v) { glColor4f((2.0f*v[0] + 1.0f)/65535.0f, (2.0f*v[1] + 1.0f)/65535.0f, (2.0f*v[2] + 1.0f)/65535.0f, 1.0f); }
+void glColor3ub(GLubyte red, GLubyte green, GLubyte blue) { glColor4ub(red, green, blue, 255); }
+void glColor3ubv(const GLubyte *v) { glColor4ub(v[0], v[1], v[2], 255); }
+void glColor3ui(GLuint red, GLuint green, GLuint blue) { glColor4f((float)(red/4294967295.0), (float)(green/4294967295.0), (float)(blue/4294967295.0), 1.0f); }
+void glColor3uiv(const GLuint *v) { glColor4f((float)(v[0]/4294967295.0), (float)(v[1]/4294967295.0), (float)(v[2]/4294967295.0), 1.0f); }
+void glColor3us(GLushort red, GLushort green, GLushort blue) { glColor4f(red/65535.0f, green/65535.0f, blue/65535.0f, 1.0f); }
+void glColor3usv(const GLushort *v) { glColor4f(v[0]/65535.0f, v[1]/65535.0f, v[2]/65535.0f, 1.0f); }
+void glColor4b(GLbyte red, GLbyte green, GLbyte blue, GLbyte alpha) { glColor4f((2.0f*red + 1.0f)/255.0f, (2.0f*green + 1.0f)/255.0f, (2.0f*blue + 1.0f)/255.0f, (2.0f*alpha + 1.0f)/255.0f); }
+void glColor4bv(const GLbyte *v) { glColor4f((2.0f*v[0] + 1.0f)/255.0f, (2.0f*v[1] + 1.0f)/255.0f, (2.0f*v[2] + 1.0f)/255.0f, (2.0f*v[3] + 1.0f)/255.0f); }
+void glColor4d(GLdouble red, GLdouble green, GLdouble blue, GLdouble alpha) { glColor4f((float)red, (float)green, (float)blue, (float)alpha); }
+void glColor4dv(const GLdouble *v) { glColor4f((float)v[0], (float)v[1], (float)v[2], (float)v[3]); }
+void glColor4fv(const GLfloat *v) { glColor4f(v[0], v[1], v[2], v[3]); }
+void glColor4i(GLint red, GLint green, GLint blue, GLint alpha) { glColor4f((float)((2.0*red + 1.0)/4294967295.0), (float)((2.0*green + 1.0)/4294967295.0), (float)((2.0*blue + 1.0)/4294967295.0), (float)((2.0*alpha + 1.0)/4294967295.0)); }
+void glColor4iv(const GLint *v) { glColor4f((float)((2.0*v[0] + 1.0)/4294967295.0), (float)((2.0*v[1] + 1.0)/4294967295.0), (float)((2.0*v[2] + 1.0)/4294967295.0), (float)((2.0*v[3] + 1.0)/4294967295.0)); }
+void glColor4s(GLshort red, GLshort green, GLshort blue, GLshort alpha) { glColor4f((2.0f*red + 1.0f)/65535.0f, (2.0f*green + 1.0f)/65535.0f, (2.0f*blue + 1.0f)/65535.0f, (2.0f*alpha + 1.0f)/65535.0f); }
+void glColor4sv(const GLshort *v) { glColor4f((2.0f*v[0] + 1.0f)/65535.0f, (2.0f*v[1] + 1.0f)/65535.0f, (2.0f*v[2] + 1.0f)/65535.0f, (2.0f*v[3] + 1.0f)/65535.0f); }
+void glColor4ubv(const GLubyte *v) { glColor4ub(v[0], v[1], v[2], v[3]); }
+void glColor4ui(GLuint red, GLuint green, GLuint blue, GLuint alpha) { glColor4f((float)(red/4294967295.0), (float)(green/4294967295.0), (float)(blue/4294967295.0), (float)(alpha/4294967295.0)); }
+void glColor4uiv(const GLuint *v) { glColor4f((float)(v[0]/4294967295.0), (float)(v[1]/4294967295.0), (float)(v[2]/4294967295.0), (float)(v[3]/4294967295.0)); }
+void glColor4us(GLushort red, GLushort green, GLushort blue, GLushort alpha) { glColor4f(red/65535.0f, green/65535.0f, blue/65535.0f, alpha/65535.0f); }
+void glColor4usv(const GLushort *v) { glColor4f(v[0]/65535.0f, v[1]/65535.0f, v[2]/65535.0f, v[3]/65535.0f); }
 void glRectd(GLdouble x1, GLdouble y1, GLdouble x2, GLdouble y2) { glRectf((float)x1, (float)y1, (float)x2, (float)y2); }
-void glRecti(GLint x1, GLint y1, GLint x2, GLint y2) { glRectf((float)x1, (float)y1, (float)x2, (float)y2); }
-void glRects(GLshort x1, GLshort y1, GLshort x2, GLshort y2) { glRectf(x1, y1, x2, y2); }
+void glRectdv(const GLdouble *v1, const GLdouble *v2) { glRectf((float)v1[0], (float)v1[1], (float)v2[0], (float)v2[1]); }
 void glRectfv(const GLfloat *v1, const GLfloat *v2) { glRectf(v1[0], v1[1], v2[0], v2[1]); }
+void glRecti(GLint x1, GLint y1, GLint x2, GLint y2) { glRectf((float)x1, (float)y1, (float)x2, (float)y2); }
 void glRectiv(const GLint *v1, const GLint *v2) { glRectf((float)v1[0], (float)v1[1], (float)v2[0], (float)v2[1]); }
+void glRects(GLshort x1, GLshort y1, GLshort x2, GLshort y2) { glRectf(x1, y1, x2, y2); }
+void glRectsv(const GLshort *v1, const GLshort *v2) { glRectf(v1[0], v1[1], v2[0], v2[1]); }
 
 //----------------------------------------------------------------------------------
 // OpenGL: client-side vertex arrays
 //----------------------------------------------------------------------------------
-static void setArray(int index, GLint size, GLenum type, GLsizei stride, const GLvoid *pointer)
+static int typeSize(GLenum type)
 {
+    switch (type)
+    {
+        case GL_BYTE: case GL_UNSIGNED_BYTE: return 1;
+        case GL_SHORT: case GL_UNSIGNED_SHORT: return 2;
+        case GL_INT: case GL_UNSIGNED_INT: case GL_FLOAT: case GL_FIXED: return 4;
+        case GL_DOUBLE: return 8;
+        default: return 0;
+    }
+}
+
+// Validate and set a client array. sizes: bit n set = size n allowed; types: zero-terminated list
+static void setArray(int index, GLint size, GLenum type, GLsizei stride, const GLvoid *pointer, unsigned sizes, const GLenum *types)
+{
+    if (((sizes >> size) & 1) == 0) { setError(GL_INVALID_VALUE); return; }
+    if (stride < 0) { setError(GL_INVALID_VALUE); return; }
+
+    bool valid = false;
+    for (const GLenum *t = types; *t != 0; t++) valid = valid || (*t == type);
+    if (!valid) { setError(GL_INVALID_ENUM); return; }
+
     gl.arrays[index].pointer = pointer;
     gl.arrays[index].size = size;
     gl.arrays[index].type = type;
     gl.arrays[index].stride = stride;
 }
 
-void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { setArray(ARRAY_VERTEX, size, type, stride, pointer); }
-void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { setArray(ARRAY_TEXCOORD, size, type, stride, pointer); }
-void glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer) { setArray(ARRAY_COLOR, size, type, stride, pointer); }
-void glEdgeFlagPointer(GLsizei stride, const GLvoid *pointer) { setArray(ARRAY_EDGEFLAG, 1, GL_UNSIGNED_BYTE, stride, pointer); }
-void glNormalPointer(GLenum type, GLsizei stride, const GLvoid *pointer) { (void)type; (void)stride; (void)pointer; }
+// Types of GL 1.1 and ES 1.1 together (GL_BYTE and GL_FIXED from ES, GL_INT and GL_DOUBLE from GL)
+static const GLenum positionTypes[] = { GL_BYTE, GL_SHORT, GL_INT, GL_FLOAT, GL_DOUBLE, GL_FIXED, 0 };
+static const GLenum colorTypes[] = { GL_BYTE, GL_UNSIGNED_BYTE, GL_SHORT, GL_UNSIGNED_SHORT, GL_INT, GL_UNSIGNED_INT,
+                                     GL_FLOAT, GL_DOUBLE, GL_FIXED, 0 };
+static const GLenum edgeFlagTypes[] = { GL_UNSIGNED_BYTE, 0 };
 
-static const u8 *arrayElement(const ClientArray *a, int index, int componentSize)
+void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer)
 {
-    int stride = a->stride? a->stride : a->size*componentSize;
-    return (const u8 *)a->pointer + (size_t)index*stride;
+    setArray(ARRAY_VERTEX, size, type, stride, pointer, (1 << 2) | (1 << 3) | (1 << 4), positionTypes);
 }
 
+void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer)
+{
+    setArray(ARRAY_TEXCOORD, size, type, stride, pointer, (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4), positionTypes);
+}
+
+void glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer)
+{
+    setArray(ARRAY_COLOR, size, type, stride, pointer, (1 << 3) | (1 << 4), colorTypes);
+}
+
+void glNormalPointer(GLenum type, GLsizei stride, const GLvoid *pointer)
+{
+    if (type == GL_UNSIGNED_BYTE) { setError(GL_INVALID_ENUM); return; }
+    setArray(ARRAY_NORMAL, 3, type, stride, pointer, 1 << 3, positionTypes);
+}
+
+void glEdgeFlagPointer(GLsizei stride, const GLvoid *pointer)
+{
+    setArray(ARRAY_EDGEFLAG, 1, GL_UNSIGNED_BYTE, stride, pointer, 1 << 1, edgeFlagTypes);
+}
+
+void glGetPointerv(GLenum pname, GLvoid **params)
+{
+    switch (pname)
+    {
+        case GL_VERTEX_ARRAY_POINTER: *params = (GLvoid *)gl.arrays[ARRAY_VERTEX].pointer; break;
+        case GL_NORMAL_ARRAY_POINTER: *params = (GLvoid *)gl.arrays[ARRAY_NORMAL].pointer; break;
+        case GL_COLOR_ARRAY_POINTER: *params = (GLvoid *)gl.arrays[ARRAY_COLOR].pointer; break;
+        case GL_TEXTURE_COORD_ARRAY_POINTER: *params = (GLvoid *)gl.arrays[ARRAY_TEXCOORD].pointer; break;
+        case GL_EDGE_FLAG_ARRAY_POINTER: *params = (GLvoid *)gl.arrays[ARRAY_EDGEFLAG].pointer; break;
+        default: setError(GL_INVALID_ENUM); break;
+    }
+}
+
+// Components of element `index` as floats. normalized: integer types map to [0, 1] / [-1, 1] like glColor
+static void readArray(const ClientArray *a, int index, float out[4], bool normalized)
+{
+    int size = typeSize(a->type);
+    const u8 *p = (const u8 *)a->pointer + (size_t)index*(a->stride? a->stride : a->size*size);
+
+    for (int i = 0; i < a->size; i++, p += size)
+    {
+        switch (a->type)
+        {
+            case GL_BYTE: { s8 v = *(const s8 *)p; out[i] = normalized? (2.0f*v + 1.0f)/255.0f : v; break; }
+            case GL_UNSIGNED_BYTE: out[i] = normalized? *p/255.0f : *p; break;
+            case GL_SHORT: { s16 v; memcpy(&v, p, 2); out[i] = normalized? (2.0f*v + 1.0f)/65535.0f : v; break; }
+            case GL_UNSIGNED_SHORT: { u16 v; memcpy(&v, p, 2); out[i] = normalized? v/65535.0f : v; break; }
+            case GL_INT: { s32 v; memcpy(&v, p, 4); out[i] = normalized? (float)((2.0*v + 1.0)/4294967295.0) : (float)v; break; }
+            case GL_UNSIGNED_INT: { u32 v; memcpy(&v, p, 4); out[i] = normalized? (float)(v/4294967295.0) : (float)v; break; }
+            case GL_FIXED: { s32 v; memcpy(&v, p, 4); out[i] = v/65536.0f; break; }
+            case GL_DOUBLE: { double v; memcpy(&v, p, 8); out[i] = (float)v; break; }
+            default: memcpy(&out[i], p, 4); break;     // GL_FLOAT
+        }
+    }
+}
+
+static bool arrayActive(int index)
+{
+    return gl.arrays[index].enabled && (gl.arrays[index].pointer != NULL);
+}
+
+// Vertex `index` from the enabled arrays; attributes without an array come from the current values.
+// Without a vertex array only the current values are updated (glArrayElement)
 static void submitArrayVertex(int index)
 {
     Vertex v = gl.current;
-
-    const ClientArray *pos = &gl.arrays[ARRAY_VERTEX];
-    const float *p = (const float *)arrayElement(pos, index, sizeof(float));
-    v.pos[0] = p[0];
-    v.pos[1] = (pos->size > 1)? p[1] : 0.0f;
-    v.pos[2] = (pos->size > 2)? p[2] : 0.0f;
-
-    const ClientArray *tc = &gl.arrays[ARRAY_TEXCOORD];
-    if (tc->enabled && (tc->pointer != NULL))
-    {
-        const float *t = (const float *)arrayElement(tc, index, sizeof(float));
-        v.uv[0] = t[0];
-        v.uv[1] = t[1];
-    }
-
-    const ClientArray *col = &gl.arrays[ARRAY_COLOR];
-    if (col->enabled && (col->pointer != NULL))
-    {
-        if (col->type == GL_UNSIGNED_BYTE)
-        {
-            const u8 *c = arrayElement(col, index, 1);
-            for (int i = 0; i < 4; i++) v.color[i] = (i < col->size)? c[i] : 255;
-        }
-        else
-        {
-            const float *c = (const float *)arrayElement(col, index, sizeof(float));
-            for (int i = 0; i < 4; i++) v.color[i] = (i < col->size)? colorByte(c[i]) : 255;
-        }
-    }
-
     bool edge = gl.currentEdge;
-    const ClientArray *ef = &gl.arrays[ARRAY_EDGEFLAG];
-    if (ef->enabled && (ef->pointer != NULL)) edge = *arrayElement(ef, index, 1) != 0;
 
+    if (arrayActive(ARRAY_TEXCOORD))
+    {
+        float t[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+        readArray(&gl.arrays[ARRAY_TEXCOORD], index, t, false);
+        v.tex[0] = t[0];
+        v.tex[1] = t[1];
+        v.tex[2] = t[3];
+    }
+    if (arrayActive(ARRAY_COLOR))
+    {
+        float c[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+        readArray(&gl.arrays[ARRAY_COLOR], index, c, true);
+        for (int i = 0; i < 4; i++) v.color[i] = colorByte(c[i]);
+    }
+    if (arrayActive(ARRAY_NORMAL))
+    {
+        float n[4];
+        readArray(&gl.arrays[ARRAY_NORMAL], index, n, true);
+        memcpy(gl.currentNormal, n, sizeof(gl.currentNormal));
+    }
+    if (arrayActive(ARRAY_EDGEFLAG)) edge = *((const u8 *)gl.arrays[ARRAY_EDGEFLAG].pointer +
+                                              (size_t)index*(gl.arrays[ARRAY_EDGEFLAG].stride? gl.arrays[ARRAY_EDGEFLAG].stride : 1)) != 0;
+
+    if (!arrayActive(ARRAY_VERTEX))
+    {
+        gl.current.tex[0] = v.tex[0];
+        gl.current.tex[1] = v.tex[1];
+        gl.current.tex[2] = v.tex[2];
+        memcpy(gl.current.color, v.color, 4);
+        gl.currentEdge = edge;
+        return;
+    }
+
+    float p[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    readArray(&gl.arrays[ARRAY_VERTEX], index, p, false);
+    if (p[3] != 1.0f)
+    {
+        if (p[3] == 0.0f) { WARN_ONCE("Vertex array: w = 0 (point at infinity) not supported\n"); return; }
+        for (int i = 0; i < 3; i++) p[i] /= p[3];
+    }
+    memcpy(v.pos, p, sizeof(v.pos));
     submitVertex(&v, edge);
 }
 
+// Before drawing from arrays: a vertex array is needed, size 4 texcoords may need projection mode
 static bool arraysReady(void)
 {
-    const ClientArray *pos = &gl.arrays[ARRAY_VERTEX];
-    if (!pos->enabled || (pos->pointer == NULL)) return false;
-    if (pos->type != GL_FLOAT) { WARN_ONCE("Only GL_FLOAT vertex arrays are supported\n"); return false; }
+    if (!arrayActive(ARRAY_VERTEX)) return false;
+    if (arrayActive(ARRAY_TEXCOORD) && (gl.arrays[ARRAY_TEXCOORD].size == 4)) markTexQ();
     return true;
+}
+
+void glArrayElement(GLint i)
+{
+    if (arrayActive(ARRAY_TEXCOORD) && (gl.arrays[ARRAY_TEXCOORD].size == 4)) markTexQ();
+    if (!gl.inBegin && arrayActive(ARRAY_VERTEX)) return;    // A vertex outside glBegin/glEnd is ignored
+    submitArrayVertex(i);
+}
+
+// glInterleavedArrays formats: which arrays, their sizes/types and byte offsets, the default stride
+typedef struct {
+    GLenum format;
+    int texSize, colorSize, normal, vertexSize;
+    GLenum colorType;
+    int colorOffset, normalOffset, vertexOffset, stride;
+} InterleavedFormat;
+
+#define F_ sizeof(GLfloat)
+#define C_ 4            // 4 GLubytes rounded up to a multiple of sizeof(GLfloat)
+static const InterleavedFormat interleavedFormats[] = {
+    { GL_V2F,             0, 0, 0, 2, 0,                0,     0,     0,      2*F_ },
+    { GL_V3F,             0, 0, 0, 3, 0,                0,     0,     0,      3*F_ },
+    { GL_C4UB_V2F,        0, 4, 0, 2, GL_UNSIGNED_BYTE, 0,     0,     C_,     C_ + 2*F_ },
+    { GL_C4UB_V3F,        0, 4, 0, 3, GL_UNSIGNED_BYTE, 0,     0,     C_,     C_ + 3*F_ },
+    { GL_C3F_V3F,         0, 3, 0, 3, GL_FLOAT,         0,     0,     3*F_,   6*F_ },
+    { GL_N3F_V3F,         0, 0, 1, 3, 0,                0,     0,     3*F_,   6*F_ },
+    { GL_C4F_N3F_V3F,     0, 4, 1, 3, GL_FLOAT,         0,     4*F_,  7*F_,   10*F_ },
+    { GL_T2F_V3F,         2, 0, 0, 3, 0,                0,     0,     2*F_,   5*F_ },
+    { GL_T4F_V4F,         4, 0, 0, 4, 0,                0,     0,     4*F_,   8*F_ },
+    { GL_T2F_C4UB_V3F,    2, 4, 0, 3, GL_UNSIGNED_BYTE, 2*F_,  0,     C_ + 2*F_, C_ + 5*F_ },
+    { GL_T2F_C3F_V3F,     2, 3, 0, 3, GL_FLOAT,         2*F_,  0,     5*F_,   8*F_ },
+    { GL_T2F_N3F_V3F,     2, 0, 1, 3, 0,                0,     2*F_,  5*F_,   8*F_ },
+    { GL_T2F_C4F_N3F_V3F, 2, 4, 1, 3, GL_FLOAT,         2*F_,  6*F_,  9*F_,   12*F_ },
+    { GL_T4F_C4F_N3F_V4F, 4, 4, 1, 4, GL_FLOAT,         4*F_,  8*F_,  11*F_,  15*F_ },
+};
+#undef F_
+#undef C_
+
+void glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer)
+{
+    const InterleavedFormat *f = NULL;
+    for (size_t i = 0; i < sizeof(interleavedFormats)/sizeof(interleavedFormats[0]); i++)
+        if (interleavedFormats[i].format == format) f = &interleavedFormats[i];
+    if (f == NULL) { setError(GL_INVALID_ENUM); return; }
+    if (stride < 0) { setError(GL_INVALID_VALUE); return; }
+
+    if (stride == 0) stride = f->stride;
+    const u8 *base = pointer;
+
+    gl.arrays[ARRAY_EDGEFLAG].enabled = false;
+    gl.arrays[ARRAY_TEXCOORD].enabled = (f->texSize > 0);
+    if (f->texSize > 0) glTexCoordPointer(f->texSize, GL_FLOAT, stride, base);
+    gl.arrays[ARRAY_COLOR].enabled = (f->colorSize > 0);
+    if (f->colorSize > 0) glColorPointer(f->colorSize, f->colorType, stride, base + f->colorOffset);
+    gl.arrays[ARRAY_NORMAL].enabled = f->normal;
+    if (f->normal) glNormalPointer(GL_FLOAT, stride, base + f->normalOffset);
+    gl.arrays[ARRAY_VERTEX].enabled = true;
+    glVertexPointer(f->vertexSize, GL_FLOAT, stride, base + f->vertexOffset);
 }
 
 void glDrawArrays(GLenum mode, GLint first, GLsizei count)
 {
+    if (count < 0) { setError(GL_INVALID_VALUE); return; }
     if (!arraysReady() || !beginPrimitive(mode)) return;
 
     for (int i = 0; i < count; i++) submitArrayVertex(first + i);
@@ -1989,6 +2237,8 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
 
 void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices)
 {
+    if ((type != GL_UNSIGNED_BYTE) && (type != GL_UNSIGNED_SHORT) && (type != GL_UNSIGNED_INT)) { setError(GL_INVALID_ENUM); return; }
+    if (count < 0) { setError(GL_INVALID_VALUE); return; }
     if (!arraysReady() || !beginPrimitive(mode)) return;
 
     for (int i = 0; i < count; i++)
@@ -1996,7 +2246,7 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indic
         int index = 0;
         if (type == GL_UNSIGNED_SHORT) index = ((const GLushort *)indices)[i];
         else if (type == GL_UNSIGNED_INT) index = (int)((const GLuint *)indices)[i];
-        else index = ((const GLubyte *)indices)[i];
+        else index = ((const GLubyte *)indices)[i];     // GL_UNSIGNED_BYTE, checked above
         submitArrayVertex(index);
     }
     endPrimitive();
@@ -2457,4 +2707,90 @@ void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format
     (void)x; (void)y; (void)format; (void)type;
     WARN_ONCE("glReadPixels not supported, returning black\n");
     memset(pixels, 0, (size_t)width*height*4);
+}
+
+//----------------------------------------------------------------------------------
+// OpenGL ES 1.1: float variants of the double functions and the fixed-point (16.16) API.
+// Enum-valued parameters are passed unscaled in the x functions, like in ES
+//----------------------------------------------------------------------------------
+void glOrthof(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat zNear, GLfloat zFar) { glOrtho(left, right, bottom, top, zNear, zFar); }
+void glFrustumf(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat zNear, GLfloat zFar) { glFrustum(left, right, bottom, top, zNear, zFar); }
+void glDepthRangef(GLclampf zNear, GLclampf zFar) { glDepthRange(zNear, zFar); }
+void glClearDepthf(GLclampf depth) { glClearDepth(depth); }
+
+static float fixedToFloat(GLfixed x) { return x/65536.0f; }
+
+static GLfixed floatToFixed(double f)
+{
+    double v = f*65536.0;
+    if (v >= 2147483647.0) return 0x7FFFFFFF;
+    if (v <= -2147483648.0) return (GLfixed)0x80000000;
+    return (GLfixed)lround(v);
+}
+
+static bool fixedParamIsEnum(GLenum pname)
+{
+    return (pname == GL_TEXTURE_ENV_MODE) || (pname == GL_TEXTURE_MIN_FILTER) || (pname == GL_TEXTURE_MAG_FILTER) ||
+           (pname == GL_TEXTURE_WRAP_S) || (pname == GL_TEXTURE_WRAP_T);
+}
+
+void glAlphaFuncx(GLenum func, GLclampx ref) { glAlphaFunc(func, fixedToFloat(ref)); }
+void glClearColorx(GLclampx red, GLclampx green, GLclampx blue, GLclampx alpha) { glClearColor(fixedToFloat(red), fixedToFloat(green), fixedToFloat(blue), fixedToFloat(alpha)); }
+void glClearDepthx(GLclampx depth) { glClearDepth(fixedToFloat(depth)); }
+void glColor4x(GLfixed red, GLfixed green, GLfixed blue, GLfixed alpha) { glColor4f(fixedToFloat(red), fixedToFloat(green), fixedToFloat(blue), fixedToFloat(alpha)); }
+void glDepthRangex(GLclampx zNear, GLclampx zFar) { glDepthRange(fixedToFloat(zNear), fixedToFloat(zFar)); }
+void glLineWidthx(GLfixed width) { glLineWidth(fixedToFloat(width)); }
+void glNormal3x(GLfixed nx, GLfixed ny, GLfixed nz) { glNormal3f(fixedToFloat(nx), fixedToFloat(ny), fixedToFloat(nz)); }
+void glPointSizex(GLfixed size) { glPointSize(fixedToFloat(size)); }
+void glPolygonOffsetx(GLfixed factor, GLfixed units) { glPolygonOffset(fixedToFloat(factor), fixedToFloat(units)); }
+void glRotatex(GLfixed angle, GLfixed x, GLfixed y, GLfixed z) { glRotatef(fixedToFloat(angle), fixedToFloat(x), fixedToFloat(y), fixedToFloat(z)); }
+void glScalex(GLfixed x, GLfixed y, GLfixed z) { glScalef(fixedToFloat(x), fixedToFloat(y), fixedToFloat(z)); }
+void glTranslatex(GLfixed x, GLfixed y, GLfixed z) { glTranslatef(fixedToFloat(x), fixedToFloat(y), fixedToFloat(z)); }
+
+void glOrthox(GLfixed left, GLfixed right, GLfixed bottom, GLfixed top, GLfixed zNear, GLfixed zFar)
+{
+    glOrtho(fixedToFloat(left), fixedToFloat(right), fixedToFloat(bottom), fixedToFloat(top), fixedToFloat(zNear), fixedToFloat(zFar));
+}
+
+void glFrustumx(GLfixed left, GLfixed right, GLfixed bottom, GLfixed top, GLfixed zNear, GLfixed zFar)
+{
+    glFrustum(fixedToFloat(left), fixedToFloat(right), fixedToFloat(bottom), fixedToFloat(top), fixedToFloat(zNear), fixedToFloat(zFar));
+}
+
+void glLoadMatrixx(const GLfixed *m)
+{
+    GLfloat f[16];
+    for (int i = 0; i < 16; i++) f[i] = fixedToFloat(m[i]);
+    glLoadMatrixf(f);
+}
+
+void glMultMatrixx(const GLfixed *m)
+{
+    GLfloat f[16];
+    for (int i = 0; i < 16; i++) f[i] = fixedToFloat(m[i]);
+    glMultMatrixf(f);
+}
+
+void glTexEnvx(GLenum target, GLenum pname, GLfixed param) { glTexEnvi(target, pname, fixedParamIsEnum(pname)? param : (GLint)fixedToFloat(param)); }
+
+void glTexEnvxv(GLenum target, GLenum pname, const GLfixed *params)
+{
+    if (pname == GL_TEXTURE_ENV_COLOR)
+    {
+        GLfloat color[4];
+        for (int i = 0; i < 4; i++) color[i] = fixedToFloat(params[i]);
+        glTexEnvfv(target, pname, color);
+    }
+    else glTexEnvx(target, pname, params[0]);
+}
+
+void glTexParameterx(GLenum target, GLenum pname, GLfixed param) { glTexParameteri(target, pname, fixedParamIsEnum(pname)? param : (GLint)fixedToFloat(param)); }
+void glTexParameterxv(GLenum target, GLenum pname, const GLfixed *params) { glTexParameterx(target, pname, params[0]); }
+
+void glGetFixedv(GLenum pname, GLfixed *params)
+{
+    double v[16];
+    bool normalized;
+    int n = getState(pname, v, &normalized);
+    for (int i = 0; i < n; i++) params[i] = floatToFixed(v[i]);
 }
