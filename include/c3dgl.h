@@ -24,6 +24,8 @@
 //   - glClear of color/depth/stencil honors scissor and write masks
 //   - glGetError, glGet*v, glIsEnabled; common glVertex/glColor/glTexCoord/glRect/matrix variants
 //   - GL_FLAT, glPolygonMode (with edge flags), glPolygonOffset, glDepthRange
+//   - Pixel store modes, texture borders, proxy textures, glGetTexLevelParameter
+//   - GLU: Mesa GLU as c3dgl::glu (<GL/glu.h>), see README
 //
 // Not supported: lighting, fog, display lists, mipmaps, glReadPixels. Points are always square (no GL_POINT_SMOOTH).
 //

@@ -13,7 +13,7 @@ are covered by the cube example but not verified yet. Issues and pull requests a
 ```c
 #include <3ds.h>
 #include <GL/gl.h>
-#include <c3dgl.h>
+#include <c3dgl.h>              // and <GL/glu.h> for GLU
 
 int main(void)
 {
@@ -64,8 +64,16 @@ git submodule add https://github.com/SomeRandoLameo/c3dgl.git third_party/c3dgl
 
 ```cmake
 add_subdirectory(third_party/c3dgl)
-target_link_libraries(my_app PRIVATE c3dgl::c3dgl)
+target_link_libraries(my_app PRIVATE c3dgl::c3dgl)  # c3dgl::glu as well for <GL/glu.h>
 ```
+
+### GLU
+
+`c3dgl::glu` is [Mesa GLU](https://gitlab.freedesktop.org/mesa/glu) 9.0.3, vendored unmodified in `external/glu`
+(SGI Free Software License B 2.0, MIT style; see `external/glu/README.md`). Everything works except what needs GL
+features c3dgl does not have yet: NURBS rendering through evaluators (`GLU_NURBS_TESSELLATOR` mode works),
+`gluBuild1DMipmaps` (1D textures) and `gluBuild3DMipmaps` (GL 1.2). Mipmap levels above 0 are accepted but not used yet.
+Turn it off with `-DC3DGL_BUILD_GLU=OFF`.
 
 ## Building the examples
 
@@ -78,6 +86,7 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `primitives`: every primitive mode with culling on to catch wrong winding; page 2: flat shading, polygon modes,
   edge flags, polygon offset, depth range
 - `api` (C): self-check of queries, errors and entry point variants; green screen = all checks passed
+- `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `fragment`: per-fragment operations (alpha test, texture environment, stencil, `glClear`); A switches pages
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
@@ -109,6 +118,9 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - `glGetError`, `glGet{Boolean,Integer,Float,Double}v` for the common state, `glIsEnabled`, `glIsTexture`
 - The common variants of the immediate mode calls (`glVertex2/3/4{f,d,i,s}[v]`, `glColor3/4{f,d,ub}[v]`, ...),
   `glRect*`, `glLoadMatrix*`, `glTranslated`/`glRotated`/`glScaled`
+- Pixel store modes (alignment, row length, skip rows/pixels, byte swapping), texture borders, proxy textures,
+  `glGetTexLevelParameter`
+- GLU: the complete Mesa GLU 9.0.3 (`c3dgl::glu`, `<GL/glu.h>`), see [GLU](#glu)
 - Lighting, fog, dithering and smoothing can be enabled and queried but have no effect yet
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 

@@ -11,6 +11,17 @@
 extern "C" {
 #endif
 
+// Calling convention macros as defined by every gl.h (empty on the 3DS)
+#ifndef APIENTRY
+#define APIENTRY
+#endif
+#ifndef GLAPIENTRY
+#define GLAPIENTRY APIENTRY
+#endif
+#ifndef GLAPI
+#define GLAPI extern
+#endif
+
 typedef unsigned int    GLenum;
 typedef unsigned int    GLbitfield;
 typedef unsigned int    GLuint;
@@ -52,10 +63,31 @@ typedef void            GLvoid;
 #define GL_QUAD_STRIP                       0x0008
 #define GL_POLYGON                          0x0009
 
-// Clear buffer bits
+// Clear buffer bits, also attribute bits (glPushAttrib)
+#define GL_CURRENT_BIT                      0x00000001
+#define GL_POINT_BIT                        0x00000002
+#define GL_LINE_BIT                         0x00000004
+#define GL_POLYGON_BIT                      0x00000008
+#define GL_POLYGON_STIPPLE_BIT              0x00000010
+#define GL_PIXEL_MODE_BIT                   0x00000020
+#define GL_LIGHTING_BIT                     0x00000040
+#define GL_FOG_BIT                          0x00000080
 #define GL_DEPTH_BUFFER_BIT                 0x00000100
+#define GL_ACCUM_BUFFER_BIT                 0x00000200
 #define GL_STENCIL_BUFFER_BIT               0x00000400
+#define GL_VIEWPORT_BIT                     0x00000800
+#define GL_TRANSFORM_BIT                    0x00001000
+#define GL_ENABLE_BIT                       0x00002000
 #define GL_COLOR_BUFFER_BIT                 0x00004000
+#define GL_HINT_BIT                         0x00008000
+#define GL_EVAL_BIT                         0x00010000
+#define GL_LIST_BIT                         0x00020000
+#define GL_TEXTURE_BIT                      0x00040000
+#define GL_SCISSOR_BIT                      0x00080000
+#define GL_ALL_ATTRIB_BITS                  0x000FFFFF
+#define GL_CLIENT_PIXEL_STORE_BIT           0x00000001
+#define GL_CLIENT_VERTEX_ARRAY_BIT          0x00000002
+#define GL_CLIENT_ALL_ATTRIB_BITS           0xFFFFFFFF
 
 // Depth/compare functions
 #define GL_NEVER                            0x0200
@@ -207,8 +239,22 @@ typedef void            GLvoid;
 #define GL_TEXTURE                          0x1702
 
 // Pixel store
+#define GL_UNPACK_SWAP_BYTES                0x0CF0
+#define GL_UNPACK_LSB_FIRST                 0x0CF1
+#define GL_UNPACK_ROW_LENGTH                0x0CF2
+#define GL_UNPACK_SKIP_ROWS                 0x0CF3
+#define GL_UNPACK_SKIP_PIXELS               0x0CF4
 #define GL_UNPACK_ALIGNMENT                 0x0CF5
+#define GL_PACK_SWAP_BYTES                  0x0D00
+#define GL_PACK_LSB_FIRST                   0x0D01
+#define GL_PACK_ROW_LENGTH                  0x0D02
+#define GL_PACK_SKIP_ROWS                   0x0D03
+#define GL_PACK_SKIP_PIXELS                 0x0D04
 #define GL_PACK_ALIGNMENT                   0x0D05
+#define GL_PACK_SKIP_IMAGES                 0x806B      // GL 1.2, accepted for GLU
+#define GL_PACK_IMAGE_HEIGHT                0x806C
+#define GL_UNPACK_SKIP_IMAGES               0x806D
+#define GL_UNPACK_IMAGE_HEIGHT              0x806E
 
 // Data types
 #define GL_BYTE                             0x1400
@@ -221,13 +267,33 @@ typedef void            GLvoid;
 #define GL_UNSIGNED_SHORT_4_4_4_4           0x8033
 #define GL_UNSIGNED_SHORT_5_5_5_1           0x8034
 #define GL_UNSIGNED_SHORT_5_6_5             0x8363
+#define GL_BITMAP                           0x1A00
+
+// GL 1.2 packed pixel types: not accepted by c3dgl, defined for code like GLU that handles them itself
+#define GL_UNSIGNED_BYTE_3_3_2              0x8032
+#define GL_UNSIGNED_INT_8_8_8_8             0x8035
+#define GL_UNSIGNED_INT_10_10_10_2          0x8036
+#define GL_UNSIGNED_BYTE_2_3_3_REV          0x8362
+#define GL_UNSIGNED_SHORT_5_6_5_REV         0x8364
+#define GL_UNSIGNED_SHORT_4_4_4_4_REV       0x8365
+#define GL_UNSIGNED_SHORT_1_5_5_5_REV       0x8366
+#define GL_UNSIGNED_INT_8_8_8_8_REV         0x8367
+#define GL_UNSIGNED_INT_2_10_10_10_REV      0x8368
 
 // Pixel formats
+#define GL_COLOR_INDEX                      0x1900
+#define GL_STENCIL_INDEX                    0x1901
+#define GL_DEPTH_COMPONENT                  0x1902
+#define GL_RED                              0x1903
+#define GL_GREEN                            0x1904
+#define GL_BLUE                             0x1905
 #define GL_ALPHA                            0x1906
 #define GL_RGB                              0x1907
 #define GL_RGBA                             0x1908
 #define GL_LUMINANCE                        0x1909
 #define GL_LUMINANCE_ALPHA                  0x190A
+#define GL_BGR                              0x80E0      // GL 1.2, defined for GLU
+#define GL_BGRA                             0x80E1
 
 // Texture environment
 #define GL_TEXTURE_ENV                      0x2300
@@ -237,6 +303,47 @@ typedef void            GLvoid;
 #define GL_DECAL                            0x2101
 #define GL_REPLACE                          0x1E01
 #define GL_ADD                              0x0104
+
+// Texture targets
+#define GL_TEXTURE_1D                       0x0DE0
+#define GL_PROXY_TEXTURE_1D                 0x8063
+#define GL_PROXY_TEXTURE_2D                 0x8064
+#define GL_TEXTURE_3D                       0x806F      // GL 1.2, defined for GLU
+#define GL_PROXY_TEXTURE_3D                 0x8070
+
+// Texture level parameters (glGetTexLevelParameter)
+#define GL_TEXTURE_WIDTH                    0x1000
+#define GL_TEXTURE_HEIGHT                   0x1001
+#define GL_TEXTURE_INTERNAL_FORMAT          0x1003
+#define GL_TEXTURE_COMPONENTS               0x1003
+#define GL_TEXTURE_BORDER                   0x1005
+#define GL_TEXTURE_RED_SIZE                 0x805C
+#define GL_TEXTURE_GREEN_SIZE               0x805D
+#define GL_TEXTURE_BLUE_SIZE                0x805E
+#define GL_TEXTURE_ALPHA_SIZE               0x805F
+#define GL_TEXTURE_LUMINANCE_SIZE           0x8060
+#define GL_TEXTURE_INTENSITY_SIZE           0x8061
+
+// Evaluators
+#define GL_AUTO_NORMAL                      0x0D80
+#define GL_MAP1_COLOR_4                     0x0D90
+#define GL_MAP1_INDEX                       0x0D91
+#define GL_MAP1_NORMAL                      0x0D92
+#define GL_MAP1_TEXTURE_COORD_1             0x0D93
+#define GL_MAP1_TEXTURE_COORD_2             0x0D94
+#define GL_MAP1_TEXTURE_COORD_3             0x0D95
+#define GL_MAP1_TEXTURE_COORD_4             0x0D96
+#define GL_MAP1_VERTEX_3                    0x0D97
+#define GL_MAP1_VERTEX_4                    0x0D98
+#define GL_MAP2_COLOR_4                     0x0DB0
+#define GL_MAP2_INDEX                       0x0DB1
+#define GL_MAP2_NORMAL                      0x0DB2
+#define GL_MAP2_TEXTURE_COORD_1             0x0DB3
+#define GL_MAP2_TEXTURE_COORD_2             0x0DB4
+#define GL_MAP2_TEXTURE_COORD_3             0x0DB5
+#define GL_MAP2_TEXTURE_COORD_4             0x0DB6
+#define GL_MAP2_VERTEX_3                    0x0DB7
+#define GL_MAP2_VERTEX_4                    0x0DB8
 
 // Texture parameters
 #define GL_TEXTURE_MAG_FILTER               0x2800
@@ -262,6 +369,7 @@ void glDisableClientState(GLenum array);
 void glHint(GLenum target, GLenum mode);
 void glShadeModel(GLenum mode);
 void glPixelStorei(GLenum pname, GLint param);
+void glPixelStoref(GLenum pname, GLfloat param);
 void glGetBooleanv(GLenum pname, GLboolean *params);
 void glGetIntegerv(GLenum pname, GLint *params);
 void glGetFloatv(GLenum pname, GLfloat *params);
@@ -397,6 +505,30 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei widt
 void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
                      GLenum format, GLenum type, const GLvoid *pixels);
 void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid *pixels);
+void glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint *params);
+void glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat *params);
+
+// Not implemented yet: these log a warning and set GL_INVALID_OPERATION
+void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border,
+                  GLenum format, GLenum type, const GLvoid *pixels);
+void glPushAttrib(GLbitfield mask);
+void glPopAttrib(void);
+void glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat *points);
+void glMap2f(GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLint uorder,
+             GLfloat v1, GLfloat v2, GLint vstride, GLint vorder, const GLfloat *points);
+void glMapGrid1f(GLint un, GLfloat u1, GLfloat u2);
+void glMapGrid2f(GLint un, GLfloat u1, GLfloat u2, GLint vn, GLfloat v1, GLfloat v2);
+void glMapGrid2d(GLint un, GLdouble u1, GLdouble u2, GLint vn, GLdouble v1, GLdouble v2);
+void glEvalCoord1f(GLfloat u);
+void glEvalCoord2f(GLfloat u, GLfloat v);
+void glEvalMesh1(GLenum mode, GLint i1, GLint i2);
+void glEvalMesh2(GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2);
+void glEvalPoint1(GLint i);
+void glEvalPoint2(GLint i, GLint j);
+
+// GL 1.2, only so that GLU links: always fails with GL_INVALID_ENUM (no 3D textures)
+void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth,
+                  GLint border, GLenum format, GLenum type, const GLvoid *pixels);
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels);
 
 #ifdef __cplusplus

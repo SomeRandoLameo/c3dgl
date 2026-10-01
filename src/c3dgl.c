@@ -73,14 +73,29 @@ typedef struct {
     GPU_TEXCOLOR format;
     int bpp;                    // Bytes per pixel
     bool reverse;               // Byte order within a pixel is reversed on PICA (RGBA -> ABGR, ...)
+    bool packed16;              // One 16-bit element per pixel (GL_UNSIGNED_SHORT_*): affected by *_SWAP_BYTES
 } TexFormat;
+
+// glPixelStore state for one direction (unpack: GL -> c3dgl, pack: c3dgl -> GL)
+typedef struct {
+    GLint alignment, rowLength, skipRows, skipPixels, imageHeight, skipImages;
+    bool swapBytes, lsbFirst;
+} PixelStore;
+
+// Result of a glTexImage2D on GL_PROXY_TEXTURE_2D (all zero if the image would not fit)
+typedef struct {
+    GLint width, height, border, internalFormat;
+    GPU_TEXCOLOR format;
+} ProxyLevel;
 
 typedef struct {
     bool used;                  // Id handed out by glGenTextures
     bool loaded;                // tex is initialized
     C3D_Tex tex;
     TexFormat format;
-    int width, height;          // Image size; tex is padded to power-of-two
+    int width, height;          // Image size without border; tex is padded to power-of-two
+    int border;                 // As given to glTexImage2D (the border texels are dropped)
+    GLint internalFormat;       // As given to glTexImage2D, for glGetTexLevelParameter
     GLenum minFilter, magFilter, wrapS, wrapT;
 } Texture;
 
@@ -146,7 +161,8 @@ static struct {
     DrawState state;
     bool texture2D;
     GLuint boundTexture;
-    GLint unpackAlignment, packAlignment;
+    PixelStore unpack, pack;
+    ProxyLevel proxy2D[11];             // Per level, 1024 >> 10 = 1
     float lineWidth, pointSize;
     u32 clearColor;                     // 0xRRGGBBAA
     float clearDepth;
@@ -371,19 +387,19 @@ static bool texFormat(GLenum format, GLenum type, TexFormat *out)
     {
         switch (format)
         {
-            case GL_RGBA: *out = (TexFormat){ GPU_RGBA8, 4, true }; return true;
-            case GL_RGB: *out = (TexFormat){ GPU_RGB8, 3, true }; return true;
-            case GL_LUMINANCE_ALPHA: *out = (TexFormat){ GPU_LA8, 2, true }; return true;
-            case GL_LUMINANCE: *out = (TexFormat){ GPU_L8, 1, false }; return true;
-            case GL_ALPHA: *out = (TexFormat){ GPU_A8, 1, false }; return true;
+            case GL_RGBA: *out = (TexFormat){ GPU_RGBA8, 4, true, false }; return true;
+            case GL_RGB: *out = (TexFormat){ GPU_RGB8, 3, true, false }; return true;
+            case GL_LUMINANCE_ALPHA: *out = (TexFormat){ GPU_LA8, 2, true, false }; return true;
+            case GL_LUMINANCE: *out = (TexFormat){ GPU_L8, 1, false, false }; return true;
+            case GL_ALPHA: *out = (TexFormat){ GPU_A8, 1, false, false }; return true;
             default: return false;
         }
     }
 
     // Packed 16-bit formats have the same bit layout on PICA
-    if ((format == GL_RGB) && (type == GL_UNSIGNED_SHORT_5_6_5)) { *out = (TexFormat){ GPU_RGB565, 2, false }; return true; }
-    if ((format == GL_RGBA) && (type == GL_UNSIGNED_SHORT_5_5_5_1)) { *out = (TexFormat){ GPU_RGBA5551, 2, false }; return true; }
-    if ((format == GL_RGBA) && (type == GL_UNSIGNED_SHORT_4_4_4_4)) { *out = (TexFormat){ GPU_RGBA4, 2, false }; return true; }
+    if ((format == GL_RGB) && (type == GL_UNSIGNED_SHORT_5_6_5)) { *out = (TexFormat){ GPU_RGB565, 2, false, true }; return true; }
+    if ((format == GL_RGBA) && (type == GL_UNSIGNED_SHORT_5_5_5_1)) { *out = (TexFormat){ GPU_RGBA5551, 2, false, true }; return true; }
+    if ((format == GL_RGBA) && (type == GL_UNSIGNED_SHORT_4_4_4_4)) { *out = (TexFormat){ GPU_RGBA4, 2, false, true }; return true; }
 
     return false;
 }
@@ -1069,7 +1085,7 @@ bool c3dglInit(void)
     gl.state.colorMask = GPU_WRITE_COLOR;
     gl.state.cullFace = GL_BACK;
     gl.state.frontFace = GL_CCW;
-    gl.unpackAlignment = gl.packAlignment = 4;
+    gl.unpack.alignment = gl.pack.alignment = 4;
     gl.lineWidth = gl.pointSize = 1.0f;
     gl.clearColor = 0x000000FF;
     gl.clearDepth = 1.0f;
@@ -1265,11 +1281,34 @@ void glShadeModel(GLenum mode)
 
 void glPixelStorei(GLenum pname, GLint param)
 {
-    if ((param != 1) && (param != 2) && (param != 4) && (param != 8)) { setError(GL_INVALID_VALUE); return; }
+    bool unpack = (pname >= GL_UNPACK_SWAP_BYTES) && (pname <= GL_UNPACK_ALIGNMENT);
+    if ((pname == GL_UNPACK_IMAGE_HEIGHT) || (pname == GL_UNPACK_SKIP_IMAGES)) unpack = true;
+    PixelStore *ps = unpack? &gl.unpack : &gl.pack;
 
-    if (pname == GL_UNPACK_ALIGNMENT) gl.unpackAlignment = param;
-    else if (pname == GL_PACK_ALIGNMENT) gl.packAlignment = param;
+    switch (pname)
+    {
+        case GL_UNPACK_ALIGNMENT: case GL_PACK_ALIGNMENT:
+            if ((param != 1) && (param != 2) && (param != 4) && (param != 8)) { setError(GL_INVALID_VALUE); return; }
+            ps->alignment = param;
+            return;
+        case GL_UNPACK_SWAP_BYTES: case GL_PACK_SWAP_BYTES: ps->swapBytes = (param != 0); return;
+        case GL_UNPACK_LSB_FIRST: case GL_PACK_LSB_FIRST: ps->lsbFirst = (param != 0); return;     // Only for GL_BITMAP
+        default: break;
+    }
+
+    if (param < 0) { setError(GL_INVALID_VALUE); return; }
+    switch (pname)
+    {
+        case GL_UNPACK_ROW_LENGTH: case GL_PACK_ROW_LENGTH: ps->rowLength = param; break;
+        case GL_UNPACK_SKIP_ROWS: case GL_PACK_SKIP_ROWS: ps->skipRows = param; break;
+        case GL_UNPACK_SKIP_PIXELS: case GL_PACK_SKIP_PIXELS: ps->skipPixels = param; break;
+        case GL_UNPACK_IMAGE_HEIGHT: case GL_PACK_IMAGE_HEIGHT: ps->imageHeight = param; break;     // GL 1.2, no 3D textures
+        case GL_UNPACK_SKIP_IMAGES: case GL_PACK_SKIP_IMAGES: ps->skipImages = param; break;
+        default: setError(GL_INVALID_ENUM); break;
+    }
 }
+
+void glPixelStoref(GLenum pname, GLfloat param) { glPixelStorei(pname, (GLint)lroundf(param)); }
 
 // State for glGet*: fills v and returns the number of values (0: unknown pname).
 // *normalized: the values are colors/depths in [0, 1], which integer queries scale to [0, INT_MAX]
@@ -1340,8 +1379,22 @@ static int getState(GLenum pname, double v[16], bool *normalized)
 
         case GL_LINE_WIDTH: v[0] = gl.lineWidth; return 1;
         case GL_POINT_SIZE: v[0] = gl.pointSize; return 1;
-        case GL_UNPACK_ALIGNMENT: v[0] = gl.unpackAlignment; return 1;
-        case GL_PACK_ALIGNMENT: v[0] = gl.packAlignment; return 1;
+        case GL_UNPACK_ALIGNMENT: v[0] = gl.unpack.alignment; return 1;
+        case GL_UNPACK_ROW_LENGTH: v[0] = gl.unpack.rowLength; return 1;
+        case GL_UNPACK_SKIP_ROWS: v[0] = gl.unpack.skipRows; return 1;
+        case GL_UNPACK_SKIP_PIXELS: v[0] = gl.unpack.skipPixels; return 1;
+        case GL_UNPACK_SWAP_BYTES: v[0] = gl.unpack.swapBytes; return 1;
+        case GL_UNPACK_LSB_FIRST: v[0] = gl.unpack.lsbFirst; return 1;
+        case GL_UNPACK_IMAGE_HEIGHT: v[0] = gl.unpack.imageHeight; return 1;
+        case GL_UNPACK_SKIP_IMAGES: v[0] = gl.unpack.skipImages; return 1;
+        case GL_PACK_ALIGNMENT: v[0] = gl.pack.alignment; return 1;
+        case GL_PACK_ROW_LENGTH: v[0] = gl.pack.rowLength; return 1;
+        case GL_PACK_SKIP_ROWS: v[0] = gl.pack.skipRows; return 1;
+        case GL_PACK_SKIP_PIXELS: v[0] = gl.pack.skipPixels; return 1;
+        case GL_PACK_SWAP_BYTES: v[0] = gl.pack.swapBytes; return 1;
+        case GL_PACK_LSB_FIRST: v[0] = gl.pack.lsbFirst; return 1;
+        case GL_PACK_IMAGE_HEIGHT: v[0] = gl.pack.imageHeight; return 1;
+        case GL_PACK_SKIP_IMAGES: v[0] = gl.pack.skipImages; return 1;
         case GL_TEXTURE_BINDING_2D: v[0] = gl.boundTexture; return 1;
         case GL_MAX_TEXTURE_SIZE: v[0] = C3DGL_MAX_TEXTURE_SIZE; return 1;
 
@@ -1953,12 +2006,17 @@ static u32 tiledOffset(const C3D_Tex *tex, int x, int y, int bpp)
     return (tile*64 + morton)*bpp;
 }
 
-// Copy a rectangle between linear GL pixel data and the swizzled texture (in either direction)
-static void transferPixels(Texture *t, int x0, int y0, int w, int h, u8 *pixels, int alignment, bool upload)
+// Copy a rectangle between GL pixel data (laid out as described by ps) and the swizzled texture,
+// in either direction
+static void transferPixels(Texture *t, int x0, int y0, int w, int h, u8 *pixels, const PixelStore *ps, bool upload)
 {
     const TexFormat *f = &t->format;
-    int rowBytes = w*f->bpp;
-    if (alignment > 1) rowBytes = (rowBytes + alignment - 1)/alignment*alignment;
+    size_t rowBytes = (size_t)((ps->rowLength > 0)? ps->rowLength : w)*f->bpp;
+    if (ps->alignment > 1) rowBytes = (rowBytes + ps->alignment - 1)/ps->alignment*ps->alignment;
+    pixels += (size_t)ps->skipRows*rowBytes + (size_t)ps->skipPixels*f->bpp;
+
+    // Byte order within a pixel: PICA reversal, and GL byte swapping of 16-bit elements
+    bool reverse = f->reverse != (f->packed16 && ps->swapBytes);
 
     u8 *texData = (u8 *)t->tex.data;
     for (int y = 0; y < h; y++)
@@ -1970,7 +2028,7 @@ static void transferPixels(Texture *t, int x0, int y0, int w, int h, u8 *pixels,
             u8 *dst = texData + tiledOffset(&t->tex, x0 + x, y0 + y, f->bpp);
             for (int i = 0; i < f->bpp; i++)
             {
-                int j = f->reverse? (f->bpp - 1 - i) : i;
+                int j = reverse? (f->bpp - 1 - i) : i;
                 if (upload) dst[j] = src[i];
                 else src[i] = dst[j];
             }
@@ -2114,24 +2172,58 @@ void glTexParameterf(GLenum target, GLenum pname, GLfloat param) { glTexParamete
 void glTexParameteriv(GLenum target, GLenum pname, const GLint *params) { glTexParameteri(target, pname, params[0]); }
 void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params) { glTexParameteri(target, pname, (GLint)params[0]); }
 
+#define MAX_TEXTURE_LEVEL   10      // log2(C3DGL_MAX_TEXTURE_SIZE)
+
+// Size check shared by real and proxy textures. Non-power-of-two sizes are accepted (padded internally)
+static bool textureSizeValid(GLint level, GLsizei width, GLsizei height, GLint border)
+{
+    if ((level < 0) || (level > MAX_TEXTURE_LEVEL) || ((border != 0) && (border != 1))) return false;
+    return (width - 2*border >= 0) && (height - 2*border >= 0);
+}
+
+static bool textureSizeFits(GLint level, GLsizei width, GLsizei height, GLint border)
+{
+    int max = C3DGL_MAX_TEXTURE_SIZE >> level;
+    return (nextPow2(width - 2*border) <= max) && (nextPow2(height - 2*border) <= max);
+}
+
 void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
                   GLint border, GLenum format, GLenum type, const GLvoid *pixels)
 {
-    (void)internalformat; (void)border;
-
-    Texture *t = boundTexture(target);
-    if ((t == NULL) || (level != 0)) return;     // Mipmaps are not supported, only level 0 is used
+    if (!textureSizeValid(level, width, height, border)) { setError(GL_INVALID_VALUE); return; }
 
     TexFormat f;
     if (!texFormat(format, type, &f)) { LOG("glTexImage2D: format 0x%x/0x%x not supported\n", format, type); setError(GL_INVALID_ENUM); return; }
 
-    int texWidth = nextPow2(width), texHeight = nextPow2(height);
-    if ((texWidth > C3DGL_MAX_TEXTURE_SIZE) || (texHeight > C3DGL_MAX_TEXTURE_SIZE))
+    // Proxy: only record whether the image would be accepted
+    if (target == GL_PROXY_TEXTURE_2D)
+    {
+        ProxyLevel *p = &gl.proxy2D[level];
+        memset(p, 0, sizeof(*p));
+        if (textureSizeFits(level, width, height, border))
+        {
+            p->width = width;
+            p->height = height;
+            p->border = border;
+            p->internalFormat = internalformat;
+            p->format = f.format;
+        }
+        return;
+    }
+
+    Texture *t = boundTexture(target);
+    if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
+    if (level != 0) return;     // Mipmaps are not supported, only level 0 is used
+
+    if (!textureSizeFits(level, width, height, border))
     {
         LOG("glTexImage2D: %ix%i exceeds the maximum of %i\n", width, height, C3DGL_MAX_TEXTURE_SIZE);
         setError(GL_INVALID_VALUE);
         return;
     }
+
+    int imageWidth = width - 2*border, imageHeight = height - 2*border;
+    int texWidth = nextPow2(imageWidth), texHeight = nextPow2(imageHeight);
 
     textureModified(gl.boundTexture);
     if (t->loaded)
@@ -2150,11 +2242,24 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei widt
 
     t->loaded = true;
     t->format = f;
-    t->width = width;
-    t->height = height;
+    t->width = imageWidth;
+    t->height = imageHeight;
+    t->border = border;
+    t->internalFormat = internalformat;
 
     memset(t->tex.data, 0, t->tex.size);
-    if (pixels != NULL) transferPixels(t, 0, 0, width, height, (u8 *)pixels, gl.unpackAlignment, true);
+    if (pixels != NULL)
+    {
+        // The border texels are not stored (PICA has no texture borders): skip them
+        PixelStore ps = gl.unpack;
+        if (border)
+        {
+            if (ps.rowLength == 0) ps.rowLength = width;
+            ps.skipRows += border;
+            ps.skipPixels += border;
+        }
+        transferPixels(t, 0, 0, imageWidth, imageHeight, (u8 *)pixels, &ps, true);
+    }
     C3D_TexFlush(&t->tex);
     applyTextureParams(t);
 }
@@ -2170,7 +2275,7 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
     if ((xoffset < 0) || (yoffset < 0) || (xoffset + width > t->width) || (yoffset + height > t->height)) { setError(GL_INVALID_VALUE); return; }
 
     textureModified(gl.boundTexture);
-    transferPixels(t, xoffset, yoffset, width, height, (u8 *)pixels, gl.unpackAlignment, true);
+    transferPixels(t, xoffset, yoffset, width, height, (u8 *)pixels, &gl.unpack, true);
     C3D_TexFlush(&t->tex);
 }
 
@@ -2182,7 +2287,152 @@ void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoi
     TexFormat f;
     if (!texFormat(format, type, &f) || (f.format != t->format.format)) { LOG("glGetTexImage: format mismatch\n"); setError(GL_INVALID_OPERATION); return; }
 
-    transferPixels(t, 0, 0, t->width, t->height, (u8 *)pixels, gl.packAlignment, false);
+    transferPixels(t, 0, 0, t->width, t->height, (u8 *)pixels, &gl.pack, false);
+}
+
+// Bits per component of a PICA format: R, G, B, A, L
+static void formatBits(GPU_TEXCOLOR format, int bits[5])
+{
+    memset(bits, 0, 5*sizeof(int));
+    switch (format)
+    {
+        case GPU_RGBA8: bits[0] = bits[1] = bits[2] = bits[3] = 8; break;
+        case GPU_RGB8: bits[0] = bits[1] = bits[2] = 8; break;
+        case GPU_RGBA5551: bits[0] = bits[1] = bits[2] = 5; bits[3] = 1; break;
+        case GPU_RGB565: bits[0] = 5; bits[1] = 6; bits[2] = 5; break;
+        case GPU_RGBA4: bits[0] = bits[1] = bits[2] = bits[3] = 4; break;
+        case GPU_LA8: bits[3] = bits[4] = 8; break;
+        case GPU_L8: bits[4] = 8; break;
+        case GPU_A8: bits[3] = 8; break;
+        default: break;
+    }
+}
+
+void glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint *params)
+{
+    if ((level < 0) || (level > MAX_TEXTURE_LEVEL)) { setError(GL_INVALID_VALUE); return; }
+
+    // Width, height, border, internal format, format of the level; zero if it has no image
+    GLint width = 0, height = 0, border = 0, internalFormat = 0;
+    GPU_TEXCOLOR format = 0;
+    bool hasImage = false;
+    switch (target)
+    {
+        case GL_TEXTURE_2D:
+        {
+            Texture *t = boundTexture(target);
+            if ((t != NULL) && t->loaded && (level == 0))
+            {
+                width = t->width + 2*t->border;
+                height = t->height + 2*t->border;
+                border = t->border;
+                internalFormat = t->internalFormat;
+                format = t->format.format;
+                hasImage = true;
+            }
+            break;
+        }
+        case GL_PROXY_TEXTURE_2D:
+        {
+            const ProxyLevel *p = &gl.proxy2D[level];
+            width = p->width;
+            height = p->height;
+            border = p->border;
+            internalFormat = p->internalFormat;
+            format = p->format;
+            hasImage = (p->width > 0);
+            break;
+        }
+        case GL_TEXTURE_1D: case GL_PROXY_TEXTURE_1D: break;    // No 1D textures yet
+        default: setError(GL_INVALID_ENUM); return;
+    }
+
+    int bits[5] = { 0 };
+    if (hasImage) formatBits(format, bits);
+    switch (pname)
+    {
+        case GL_TEXTURE_WIDTH: *params = width; break;
+        case GL_TEXTURE_HEIGHT: *params = height; break;
+        case GL_TEXTURE_BORDER: *params = border; break;
+        case GL_TEXTURE_INTERNAL_FORMAT: *params = hasImage? internalFormat : 1; break;     // GL default: 1 component
+        case GL_TEXTURE_RED_SIZE: *params = bits[0]; break;
+        case GL_TEXTURE_GREEN_SIZE: *params = bits[1]; break;
+        case GL_TEXTURE_BLUE_SIZE: *params = bits[2]; break;
+        case GL_TEXTURE_ALPHA_SIZE: *params = bits[3]; break;
+        case GL_TEXTURE_LUMINANCE_SIZE: *params = bits[4]; break;
+        case GL_TEXTURE_INTENSITY_SIZE: *params = 0; break;
+        default: setError(GL_INVALID_ENUM); break;
+    }
+}
+
+void glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat *params)
+{
+    GLint value = 0;
+    glGetTexLevelParameteriv(target, level, pname, &value);
+    *params = (GLfloat)value;
+}
+
+//----------------------------------------------------------------------------------
+// Not implemented yet (declared so that code like GLU links; see gl.h)
+//----------------------------------------------------------------------------------
+#define NOT_IMPLEMENTED(name) do { WARN_ONCE(name " not implemented yet\n"); setError(GL_INVALID_OPERATION); } while (0)
+
+void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border,
+                  GLenum format, GLenum type, const GLvoid *pixels)
+{
+    (void)target; (void)level; (void)internalformat; (void)width; (void)border; (void)format; (void)type; (void)pixels;
+    NOT_IMPLEMENTED("glTexImage1D");
+}
+
+void glPushAttrib(GLbitfield mask) { (void)mask; NOT_IMPLEMENTED("glPushAttrib"); }
+void glPopAttrib(void) { NOT_IMPLEMENTED("glPopAttrib"); }
+
+void glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat *points)
+{
+    (void)target; (void)u1; (void)u2; (void)stride; (void)order; (void)points;
+    NOT_IMPLEMENTED("glMap1f");
+}
+
+void glMap2f(GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLint uorder,
+             GLfloat v1, GLfloat v2, GLint vstride, GLint vorder, const GLfloat *points)
+{
+    (void)target; (void)u1; (void)u2; (void)ustride; (void)uorder; (void)v1; (void)v2; (void)vstride; (void)vorder; (void)points;
+    NOT_IMPLEMENTED("glMap2f");
+}
+
+void glMapGrid1f(GLint un, GLfloat u1, GLfloat u2) { (void)un; (void)u1; (void)u2; NOT_IMPLEMENTED("glMapGrid1f"); }
+
+void glMapGrid2f(GLint un, GLfloat u1, GLfloat u2, GLint vn, GLfloat v1, GLfloat v2)
+{
+    (void)un; (void)u1; (void)u2; (void)vn; (void)v1; (void)v2;
+    NOT_IMPLEMENTED("glMapGrid2f");
+}
+
+void glMapGrid2d(GLint un, GLdouble u1, GLdouble u2, GLint vn, GLdouble v1, GLdouble v2)
+{
+    glMapGrid2f(un, (GLfloat)u1, (GLfloat)u2, vn, (GLfloat)v1, (GLfloat)v2);
+}
+
+void glEvalCoord1f(GLfloat u) { (void)u; NOT_IMPLEMENTED("glEvalCoord1f"); }
+void glEvalCoord2f(GLfloat u, GLfloat v) { (void)u; (void)v; NOT_IMPLEMENTED("glEvalCoord2f"); }
+void glEvalMesh1(GLenum mode, GLint i1, GLint i2) { (void)mode; (void)i1; (void)i2; NOT_IMPLEMENTED("glEvalMesh1"); }
+
+void glEvalMesh2(GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2)
+{
+    (void)mode; (void)i1; (void)i2; (void)j1; (void)j2;
+    NOT_IMPLEMENTED("glEvalMesh2");
+}
+
+void glEvalPoint1(GLint i) { (void)i; NOT_IMPLEMENTED("glEvalPoint1"); }
+void glEvalPoint2(GLint i, GLint j) { (void)i; (void)j; NOT_IMPLEMENTED("glEvalPoint2"); }
+
+// GL 1.2: no 3D textures
+void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth,
+                  GLint border, GLenum format, GLenum type, const GLvoid *pixels)
+{
+    (void)target; (void)level; (void)internalformat; (void)width; (void)height; (void)depth; (void)border;
+    (void)format; (void)type; (void)pixels;
+    setError(GL_INVALID_ENUM);
 }
 
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels)
