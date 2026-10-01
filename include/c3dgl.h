@@ -21,6 +21,7 @@
 //   - Textures: RGBA8, RGB8, LA8, L8, A8, RGB565, RGBA5551, RGBA4; any size up to 1024x1024
 //   - Texture environment: GL_MODULATE, GL_REPLACE, GL_DECAL, GL_BLEND, GL_ADD, GL_COMBINE (incl. DOT3)
 //   - Mipmaps (all levels, mipmap filters, GL_GENERATE_MIPMAP)
+//   - Attribute stacks (glPushAttrib, glPushClientAttrib)
 //   - Multitexturing: 3 units (glActiveTexture, glClientActiveTexture, glMultiTexCoord)
 //   - Blending, alpha test, stencil, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
 //   - glClear of color/depth/stencil honors scissor and write masks

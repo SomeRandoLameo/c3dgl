@@ -42,6 +42,7 @@
 #define C3DGL_MAX_TEXTURES      512         // Texture ids 1..C3DGL_MAX_TEXTURES-1
 #define C3DGL_MATRIX_STACK      32
 #define C3DGL_TEXTURE_UNITS     3           // PICA texture units 0..2 (unit 3 is procedural only)
+#define C3DGL_ATTRIB_STACK      16          // glPushAttrib / glPushClientAttrib depth (GL minimum)
 #define C3DGL_MAX_TEXTURE_SIZE  1024
 #define MAX_TEXTURE_LEVEL       10          // log2(C3DGL_MAX_TEXTURE_SIZE)
 
@@ -198,6 +199,7 @@ static struct {
     // Frame and vertex batching
     bool frameActive;
     bool drawnThisFrame;
+    C3D_Tex dummyTexture;               // 8x8, bound to units 1/2 while they are unused (see applyState)
     u8 *vbo;                            // Vertex buffer 0, GPU_VERTEX_SIZE per vertex; linear memory, rewritten every frame
     float (*vboExtra)[C3DGL_TEXTURE_UNITS - 1][3];  // Vertex buffer 1: texcoords of units 1, 2
     int vertexCount;
@@ -257,6 +259,7 @@ static struct {
     Buffer *buffers;                    // Index = buffer id, grows as needed (id 0 unused)
     GLuint bufferCount;
     GLuint arrayBuffer, elementArrayBuffer;     // Bindings
+    int attribDepth, clientAttribDepth;         // glPushAttrib / glPushClientAttrib stacks (see attribStack)
     Texture textures[C3DGL_MAX_TEXTURES];
 
     // Textures deleted during a frame are freed once the GPU is done with that frame
@@ -753,7 +756,11 @@ static void applyState(const DrawState *s)
             // Pass the previous color through (stage 0: the vertex color)
             C3D_TexEnvSrc(env, C3D_Both, previousSource(unit), GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
             C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
-            C3D_TexBind(unit, NULL);
+
+            // Unit 0 is switched off with NULL. C3D_TexBind reads the texture type for units 1/2 (only 2D allowed
+            // there), so NULL would be dereferenced: they get a dummy texture instead (never sampled, the stage
+            // does not use it)
+            C3D_TexBind(unit, unit? &gl.dummyTexture : NULL);
             continue;
         }
 
@@ -1224,6 +1231,10 @@ bool c3dglInit(void)
     gl.screen = C3DGL_SCREEN_TOP;
     linkTarget();
 
+    if (!C3D_TexInit(&gl.dummyTexture, 8, 8, GPU_L8)) { LOG("Failed to allocate texture\n"); c3dglClose(); return false; }
+    memset(gl.dummyTexture.data, 0, gl.dummyTexture.size);
+    C3D_TexFlush(&gl.dummyTexture);
+
     gl.vbo = linearAlloc(C3DGL_MAX_VERTICES*GPU_VERTEX_SIZE);
     gl.vboExtra = linearAlloc(C3DGL_MAX_VERTICES*GPU_EXTRA_SIZE);
     if ((gl.vbo == NULL) || (gl.vboExtra == NULL)) { LOG("Failed to allocate vertex buffer\n"); c3dglClose(); return false; }
@@ -1332,6 +1343,7 @@ void c3dglClose(void)
     free(gl.buffers);
 
     if (gl.dvlb != NULL) { shaderProgramFree(&gl.program); DVLB_Free(gl.dvlb); }
+    if (gl.dummyTexture.data != NULL) C3D_TexDelete(&gl.dummyTexture);
     if (gl.vbo != NULL) linearFree(gl.vbo);
     if (gl.vboExtra != NULL) linearFree(gl.vboExtra);
     for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) if (gl.targets[i] != NULL) C3D_RenderTargetDelete(gl.targets[i]);
@@ -1571,6 +1583,9 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_ACTIVE_TEXTURE: v[0] = GL_TEXTURE0 + gl.activeTexture; return 1;
         case GL_CLIENT_ACTIVE_TEXTURE: v[0] = GL_TEXTURE0 + gl.clientActiveTexture; return 1;
         case GL_MAX_TEXTURE_UNITS: v[0] = C3DGL_TEXTURE_UNITS; return 1;
+        case GL_ATTRIB_STACK_DEPTH: v[0] = gl.attribDepth; return 1;
+        case GL_CLIENT_ATTRIB_STACK_DEPTH: v[0] = gl.clientAttribDepth; return 1;
+        case GL_MAX_ATTRIB_STACK_DEPTH: case GL_MAX_CLIENT_ATTRIB_STACK_DEPTH: v[0] = C3DGL_ATTRIB_STACK; return 1;
 
         // Client arrays
         case GL_VERTEX_ARRAY_SIZE: v[0] = gl.arrays[ARRAY_VERTEX].size; return 1;
@@ -3391,6 +3406,279 @@ void glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat 
 }
 
 //----------------------------------------------------------------------------------
+// OpenGL: attribute stacks (glPushAttrib, glPushClientAttrib)
+//
+// A push saves a snapshot of everything; a pop restores only the groups of the pushed mask (GL 1.1 tables
+// 6.x). Groups of features that do not exist yet (stipple, pixel transfer, evaluators, lists, accumulation)
+// save nothing so far. When a feature moves out of ignoredCaps, its state has to be added here.
+//----------------------------------------------------------------------------------
+typedef struct {
+    GLuint id;                  // Texture bound to the unit at push time
+    GLenum minFilter, magFilter, wrapS, wrapT;
+    bool generateMipmap;
+} SavedTexParams;
+
+typedef struct {
+    GLbitfield mask;
+    DrawState state;
+    Vertex current;
+    bool currentEdge;
+    float currentNormal[3], currentTexR[C3DGL_TEXTURE_UNITS];
+    float lineWidth, pointSize;
+    GLenum shadeModel, polygonMode[2];
+    bool offsetFill, offsetLine, offsetPoint;
+    float offsetFactor, offsetUnits;
+    u32 ignoredCaps, clearColor;
+    float clearDepth;
+    u8 clearStencil;
+    bool texture2D[C3DGL_TEXTURE_UNITS];
+    GLuint boundTexture[C3DGL_TEXTURE_UNITS];
+    SavedTexParams texParams[C3DGL_TEXTURE_UNITS];
+    int activeTexture, matrixMode;
+} AttribState;
+
+typedef struct {
+    GLbitfield mask;
+    PixelStore unpack, pack;
+    ClientArray arrays[ARRAY_COUNT];
+    GLuint arrayBuffer, elementArrayBuffer;
+    int clientActiveTexture;
+} ClientAttribState;
+
+static AttribState attribStack[C3DGL_ATTRIB_STACK];
+static ClientAttribState clientAttribStack[C3DGL_ATTRIB_STACK];
+
+// Bits of ignoredCaps (stored-only capabilities) that belong to an attribute group
+static u32 capBits(const GLenum *caps, int count)
+{
+    u32 bits = 0;
+    for (int i = 0; i < count; i++) bits |= 1u << ignoredCapBit(caps[i]);
+    return bits;
+}
+
+void glPushAttrib(GLbitfield mask)
+{
+    if (gl.attribDepth == C3DGL_ATTRIB_STACK) { setError(GL_STACK_OVERFLOW); return; }
+
+    AttribState *a = &attribStack[gl.attribDepth++];
+    a->mask = mask;
+    a->state = gl.state;
+    a->current = gl.current;
+    a->currentEdge = gl.currentEdge;
+    memcpy(a->currentNormal, gl.currentNormal, sizeof(a->currentNormal));
+    memcpy(a->currentTexR, gl.currentTexR, sizeof(a->currentTexR));
+    a->lineWidth = gl.lineWidth;
+    a->pointSize = gl.pointSize;
+    a->shadeModel = gl.shadeModel;
+    memcpy(a->polygonMode, gl.polygonMode, sizeof(a->polygonMode));
+    a->offsetFill = gl.offsetFill;
+    a->offsetLine = gl.offsetLine;
+    a->offsetPoint = gl.offsetPoint;
+    a->offsetFactor = gl.offsetFactor;
+    a->offsetUnits = gl.offsetUnits;
+    a->ignoredCaps = gl.ignoredCaps;
+    a->clearColor = gl.clearColor;
+    a->clearDepth = gl.clearDepth;
+    a->clearStencil = gl.clearStencil;
+    memcpy(a->texture2D, gl.texture2D, sizeof(a->texture2D));
+    memcpy(a->boundTexture, gl.boundTexture, sizeof(a->boundTexture));
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+    {
+        GLuint id = gl.boundTexture[unit];
+        SavedTexParams *p = &a->texParams[unit];
+        p->id = id;
+        if ((id > 0) && (id < C3DGL_MAX_TEXTURES))
+        {
+            const Texture *t = &gl.textures[id];
+            p->minFilter = t->minFilter;
+            p->magFilter = t->magFilter;
+            p->wrapS = t->wrapS;
+            p->wrapT = t->wrapT;
+            p->generateMipmap = t->generateMipmap;
+        }
+    }
+    a->activeTexture = gl.activeTexture;
+    a->matrixMode = gl.matrixMode;
+}
+
+void glPopAttrib(void)
+{
+    if (gl.attribDepth == 0) { setError(GL_STACK_UNDERFLOW); return; }
+
+    const AttribState *a = &attribStack[--gl.attribDepth];
+    GLbitfield mask = a->mask;
+    DrawState *st = &gl.state;
+    const DrawState *sv = &a->state;
+    u32 caps = 0;   // ignoredCaps bits to restore
+
+    if (mask & GL_CURRENT_BIT)
+    {
+        gl.current = a->current;
+        gl.currentEdge = a->currentEdge;
+        memcpy(gl.currentNormal, a->currentNormal, sizeof(gl.currentNormal));
+        memcpy(gl.currentTexR, a->currentTexR, sizeof(gl.currentTexR));
+    }
+    if (mask & GL_POINT_BIT)
+    {
+        gl.pointSize = a->pointSize;
+        caps |= capBits((const GLenum[]){ GL_POINT_SMOOTH }, 1);
+    }
+    if (mask & GL_LINE_BIT)
+    {
+        gl.lineWidth = a->lineWidth;
+        caps |= capBits((const GLenum[]){ GL_LINE_SMOOTH }, 1);
+    }
+    if (mask & GL_POLYGON_BIT)
+    {
+        st->cull = sv->cull;
+        st->cullFace = sv->cullFace;
+        st->frontFace = sv->frontFace;
+        memcpy(gl.polygonMode, a->polygonMode, sizeof(gl.polygonMode));
+        gl.offsetFill = a->offsetFill;
+        gl.offsetLine = a->offsetLine;
+        gl.offsetPoint = a->offsetPoint;
+        gl.offsetFactor = a->offsetFactor;
+        gl.offsetUnits = a->offsetUnits;
+        caps |= capBits((const GLenum[]){ GL_POLYGON_SMOOTH }, 1);
+    }
+    if (mask & GL_LIGHTING_BIT)
+    {
+        gl.shadeModel = a->shadeModel;
+        caps |= capBits((const GLenum[]){ GL_LIGHTING, GL_COLOR_MATERIAL, GL_LIGHT0, GL_LIGHT1, GL_LIGHT2, GL_LIGHT3,
+                                          GL_LIGHT4, GL_LIGHT5, GL_LIGHT6, GL_LIGHT7 }, 10);
+    }
+    if (mask & GL_FOG_BIT) caps |= capBits((const GLenum[]){ GL_FOG }, 1);
+    if (mask & GL_DEPTH_BUFFER_BIT)
+    {
+        st->depthTest = sv->depthTest;
+        st->depthFunc = sv->depthFunc;
+        st->depthMask = sv->depthMask;
+        gl.clearDepth = a->clearDepth;
+    }
+    if (mask & GL_STENCIL_BUFFER_BIT)
+    {
+        st->stencilTest = sv->stencilTest;
+        st->stencilFunc = sv->stencilFunc;
+        st->stencilRef = sv->stencilRef;
+        st->stencilFuncMask = sv->stencilFuncMask;
+        st->stencilWriteMask = sv->stencilWriteMask;
+        st->stencilFail = sv->stencilFail;
+        st->stencilDepthFail = sv->stencilDepthFail;
+        st->stencilPass = sv->stencilPass;
+        gl.clearStencil = a->clearStencil;
+    }
+    if (mask & GL_VIEWPORT_BIT)
+    {
+        memcpy(st->viewport, sv->viewport, sizeof(st->viewport));
+        st->depthNear = sv->depthNear;
+        st->depthFar = sv->depthFar;
+    }
+    if (mask & GL_TRANSFORM_BIT)
+    {
+        gl.matrixMode = a->matrixMode;
+        caps |= capBits((const GLenum[]){ GL_NORMALIZE }, 1);
+    }
+    if (mask & GL_ENABLE_BIT)
+    {
+        st->alphaTest = sv->alphaTest;
+        st->blend = sv->blend;
+        st->cull = sv->cull;
+        st->depthTest = sv->depthTest;
+        st->scissor = sv->scissor;
+        st->stencilTest = sv->stencilTest;
+        gl.offsetFill = a->offsetFill;
+        gl.offsetLine = a->offsetLine;
+        gl.offsetPoint = a->offsetPoint;
+        memcpy(gl.texture2D, a->texture2D, sizeof(gl.texture2D));
+        caps = 0xFFFFFFFFu;     // All stored-only capabilities
+    }
+    if (mask & GL_COLOR_BUFFER_BIT)
+    {
+        st->alphaTest = sv->alphaTest;
+        st->alphaFunc = sv->alphaFunc;
+        st->alphaRef = sv->alphaRef;
+        st->blend = sv->blend;
+        st->blendSrc = sv->blendSrc;
+        st->blendDst = sv->blendDst;
+        st->colorMask = sv->colorMask;
+        gl.clearColor = a->clearColor;
+        caps |= capBits((const GLenum[]){ GL_DITHER }, 1);
+    }
+    if (mask & GL_TEXTURE_BIT)
+    {
+        // Enables, environments, bindings and the active unit, then the parameters of the textures bound at push time
+        for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) st->units[unit].env = sv->units[unit].env;
+        memcpy(gl.texture2D, a->texture2D, sizeof(gl.texture2D));
+        for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+        {
+            const SavedTexParams *p = &a->texParams[unit];
+            gl.boundTexture[unit] = (p->id < C3DGL_MAX_TEXTURES) && gl.textures[p->id].used? p->id : 0;
+            if ((p->id == 0) || (gl.boundTexture[unit] != p->id)) continue;
+
+            Texture *t = &gl.textures[p->id];
+            t->minFilter = p->minFilter;
+            t->magFilter = p->magFilter;
+            t->wrapS = p->wrapS;
+            t->wrapT = p->wrapT;
+            t->generateMipmap = p->generateMipmap;
+            if (t->loaded)
+            {
+                textureModified(p->id);
+                applyTextureParams(t);
+            }
+        }
+        gl.activeTexture = a->activeTexture;
+    }
+    if (mask & GL_SCISSOR_BIT)
+    {
+        st->scissor = sv->scissor;
+        memcpy(st->scissorBox, sv->scissorBox, sizeof(st->scissorBox));
+    }
+
+    gl.ignoredCaps = (gl.ignoredCaps & ~caps) | (a->ignoredCaps & caps);
+}
+
+void glPushClientAttrib(GLbitfield mask)
+{
+    if (gl.clientAttribDepth == C3DGL_ATTRIB_STACK) { setError(GL_STACK_OVERFLOW); return; }
+
+    ClientAttribState *a = &clientAttribStack[gl.clientAttribDepth++];
+    a->mask = mask;
+    a->unpack = gl.unpack;
+    a->pack = gl.pack;
+    memcpy(a->arrays, gl.arrays, sizeof(a->arrays));
+    a->arrayBuffer = gl.arrayBuffer;
+    a->elementArrayBuffer = gl.elementArrayBuffer;
+    a->clientActiveTexture = gl.clientActiveTexture;
+}
+
+void glPopClientAttrib(void)
+{
+    if (gl.clientAttribDepth == 0) { setError(GL_STACK_UNDERFLOW); return; }
+
+    const ClientAttribState *a = &clientAttribStack[--gl.clientAttribDepth];
+    if (a->mask & GL_CLIENT_PIXEL_STORE_BIT)
+    {
+        gl.unpack = a->unpack;
+        gl.pack = a->pack;
+    }
+    if (a->mask & GL_CLIENT_VERTEX_ARRAY_BIT)
+    {
+        // Buffers deleted since the push are not restored (their arrays are cleared, like glDeleteBuffers does)
+        memcpy(gl.arrays, a->arrays, sizeof(gl.arrays));
+        for (int i = 0; i < ARRAY_COUNT; i++)
+        {
+            if ((gl.arrays[i].buffer == 0) || bufferValid(gl.arrays[i].buffer)) continue;
+            gl.arrays[i].buffer = 0;
+            gl.arrays[i].pointer = NULL;
+        }
+        gl.arrayBuffer = bufferValid(a->arrayBuffer)? a->arrayBuffer : 0;
+        gl.elementArrayBuffer = bufferValid(a->elementArrayBuffer)? a->elementArrayBuffer : 0;
+        gl.clientActiveTexture = a->clientActiveTexture;
+    }
+}
+
+//----------------------------------------------------------------------------------
 // Not implemented yet (declared so that code like GLU links; see gl.h)
 //----------------------------------------------------------------------------------
 #define NOT_IMPLEMENTED(name) do { WARN_ONCE(name " not implemented yet\n"); setError(GL_INVALID_OPERATION); } while (0)
@@ -3402,8 +3690,6 @@ void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei widt
     NOT_IMPLEMENTED("glTexImage1D");
 }
 
-void glPushAttrib(GLbitfield mask) { (void)mask; NOT_IMPLEMENTED("glPushAttrib"); }
-void glPopAttrib(void) { NOT_IMPLEMENTED("glPopAttrib"); }
 
 void glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat *points)
 {

@@ -85,7 +85,7 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `cube`: 3D, depth test, culling, textures (NPOT and PNG), scissor, sub-viewports
 - `primitives`: every primitive mode with culling on to catch wrong winding; page 2: flat shading, polygon modes,
   edge flags, polygon offset, depth range
-- `api` (C): self-check of queries, errors, entry point variants, array types, VBOs and the ES API; green screen = all passed
+- `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks and the ES API; green screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
   page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps
@@ -130,6 +130,7 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - The common variants of the immediate mode calls (`glVertex2/3/4{f,d,i,s}[v]`, `glColor3/4{f,d,ub}[v]`, ...),
   `glRect*`, `glLoadMatrix*`, `glTranslated`/`glRotated`/`glScaled`
 - Mipmaps: all levels, mipmap filters, `GL_GENERATE_MIPMAP`; `glGetTexParameter`
+- Attribute stacks: `glPushAttrib`/`glPopAttrib`, `glPushClientAttrib`/`glPopClientAttrib`
 - Pixel store modes (alignment, row length, skip rows/pixels, byte swapping), texture borders, proxy textures,
   `glGetTexLevelParameter`
 - GLU: the complete Mesa GLU 9.0.3 (`c3dgl::glu`, `<GL/glu.h>`), see [GLU](#glu)

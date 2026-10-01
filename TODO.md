@@ -154,7 +154,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 ## Desktop GL 1.1 Only
 
 * [ ] Display lists: `glNewList`, `glEndList`, `glCallList(s)`, `glGenLists`, `glDeleteLists`, `glIsList`, `glListBase`
-* [ ] Attribute stacks: `glPushAttrib`/`glPopAttrib` (stub, used by GLU NURBS), `glPushClientAttrib`/`glPopClientAttrib`
+* [x] Attribute stacks: `glPushAttrib`/`glPopAttrib`, `glPushClientAttrib`/`glPopClientAttrib` (16 deep, all groups of the
+  implemented state; groups of missing features fill in with them)
 * [ ] Evaluators: `glMap1/2`, `glMapGrid*`, `glEvalCoord*`, `glEvalMesh*`, `glEvalPoint*` (stubs), `glGetMap*`, `GL_AUTO_NORMAL`
 * [ ] Feedback and selection: `glRenderMode`, `glFeedbackBuffer`, `glSelectBuffer`, `glInitNames`, `glPushName`, `glPopName`, `glLoadName`, `glPassThrough`
 * [ ] Accumulation buffer: `glAccum`, `glClearAccum`
@@ -179,7 +180,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 ## GLU (`c3dgl::glu`, Mesa GLU 9.0.3)
 
 * [x] Matrices, `gluProject`/`gluUnProject`, `gluScaleImage`, quadrics, tessellator, NURBS in `GLU_NURBS_TESSELLATOR` mode
-* [ ] NURBS rendering through GL (needs evaluators and `glPushAttrib`)
+* [ ] NURBS rendering through GL (needs evaluators)
 * [ ] `gluBuild1DMipmaps` (needs 1D textures); `gluBuild3DMipmaps` fails by design (GL 1.2)
 
 ## c3dgl Platform
@@ -200,14 +201,13 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 ```text
 [ ] Lighting                          [ ] Display lists (GL)
-[ ] Fog                               [ ] Attribute stacks (GL)
+[ ] Fog                               [ ] Texture copies, glReadPixels
 [ ] Compressed / paletted textures    [ ] Evaluators (GL)
 [ ] Clip planes                       [ ] Feedback / selection (GL)
 [ ] Smooth points/lines               [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
-[ ] glReadPixels, texture copies      [ ] Accumulation buffer (GL)
-[ ] Point parameters + sprites (ES)   [ ] 1D textures, texgen (GL)
-[ ] Logic op, sample coverage         [ ] Stipple (GL)
-                                      [ ] Complete state queries
+[ ] Point parameters + sprites (ES)   [ ] Accumulation buffer (GL)
+[ ] Logic op, sample coverage         [ ] 1D textures, texgen (GL)
+[ ] Complete state queries            [ ] Stipple (GL)
 ```
 
 # Already Solid
@@ -221,5 +221,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Blending                          [x] Error handling, state queries
 [x] GLU (Mesa)                       [x] ES fixed-point API (implemented features)
 [x] VBOs (ES)                         [x] Multitexturing + GL_COMBINE (ES)
-[x] Mipmapping (+ GL_GENERATE_MIPMAP)
+[x] Mipmapping (+ GL_GENERATE_MIPMAP) [x] Attribute stacks (GL)
 ```

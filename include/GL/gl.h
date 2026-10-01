@@ -272,6 +272,10 @@ typedef void            GLvoid;
 #define GL_MAX_PROJECTION_STACK_DEPTH       0x0D38
 #define GL_MAX_TEXTURE_STACK_DEPTH          0x0D39
 #define GL_MAX_VIEWPORT_DIMS                0x0D3A
+#define GL_ATTRIB_STACK_DEPTH               0x0BB0
+#define GL_CLIENT_ATTRIB_STACK_DEPTH        0x0BB1
+#define GL_MAX_ATTRIB_STACK_DEPTH           0x0D35
+#define GL_MAX_CLIENT_ATTRIB_STACK_DEPTH    0x0D3B
 #define GL_RED_BITS                         0x0D52
 #define GL_GREEN_BITS                       0x0D53
 #define GL_BLUE_BITS                        0x0D54
@@ -722,11 +726,15 @@ void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoi
 void glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint *params);
 void glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat *params);
 
+// Attribute stacks (GL), 16 deep
+void glPushAttrib(GLbitfield mask);
+void glPopAttrib(void);
+void glPushClientAttrib(GLbitfield mask);
+void glPopClientAttrib(void);
+
 // Not implemented yet: these log a warning and set GL_INVALID_OPERATION
 void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border,
                   GLenum format, GLenum type, const GLvoid *pixels);
-void glPushAttrib(GLbitfield mask);
-void glPopAttrib(void);
 void glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat *points);
 void glMap2f(GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLint uorder,
              GLfloat v1, GLfloat v2, GLint vstride, GLint vorder, const GLfloat *points);

@@ -312,6 +312,137 @@ static void testBuffers(void)
     CHECK(glGetError() == GL_INVALID_ENUM);
 }
 
+static void testAttribStacks(void)
+{
+    GLint v = 0;
+    GLfloat f[4];
+
+    // ENABLE | COLOR_BUFFER: enables, blend func, clear color come back; depth func (DEPTH_BUFFER) does not
+    glDisable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ZERO);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glDepthFunc(GL_LESS);
+    glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT);
+    glGetIntegerv(GL_ATTRIB_STACK_DEPTH, &v);
+    CHECK(v == 1);
+    glEnable(GL_BLEND);
+    glEnable(GL_LIGHTING);                      // Stored-only capability, also restored
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+    glDepthFunc(GL_GREATER);
+    glPopAttrib();
+    CHECK(!glIsEnabled(GL_BLEND) && !glIsEnabled(GL_LIGHTING));
+    glGetIntegerv(GL_BLEND_SRC, &v);
+    CHECK(v == GL_ONE);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, f);
+    CHECK(f[0] == 0.0f);
+    glGetIntegerv(GL_DEPTH_FUNC, &v);
+    CHECK(v == GL_GREATER);                     // Not in the pushed groups
+    glDepthFunc(GL_LESS);
+
+    // Nested: CURRENT inside VIEWPORT
+    glColor3f(1, 1, 1);
+    glViewport(0, 0, 400, 240);
+    glPushAttrib(GL_VIEWPORT_BIT);
+    glViewport(1, 2, 3, 4);
+    glPushAttrib(GL_CURRENT_BIT);
+    glColor3f(0, 1, 0);
+    glGetIntegerv(GL_ATTRIB_STACK_DEPTH, &v);
+    CHECK(v == 2);
+    glPopAttrib();
+    glGetFloatv(GL_CURRENT_COLOR, f);
+    CHECK(f[0] == 1.0f && f[1] == 1.0f);
+    GLint vp[4];
+    glGetIntegerv(GL_VIEWPORT, vp);
+    CHECK(vp[0] == 1 && vp[3] == 4);            // Still the inner value
+    glPopAttrib();
+    glGetIntegerv(GL_VIEWPORT, vp);
+    CHECK(vp[0] == 0 && vp[2] == 400);
+
+    // TEXTURE: binding, environment and the bound texture's parameters
+    GLuint tex[2];
+    glGenTextures(2, tex);
+    glBindTexture(GL_TEXTURE_2D, tex[0]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glPushAttrib(GL_TEXTURE_BIT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    glBindTexture(GL_TEXTURE_2D, tex[1]);
+    glActiveTexture(GL_TEXTURE1);
+    glPopAttrib();
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &v);
+    CHECK(v == GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &v);
+    CHECK(v == (GLint)tex[0]);
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &v);
+    CHECK(v == GL_NEAREST);
+    glGetTexEnviv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &v);
+    CHECK(v == GL_MODULATE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDeleteTextures(2, tex);
+
+    // POLYGON, STENCIL, SCISSOR
+    glPushAttrib(GL_POLYGON_BIT | GL_STENCIL_BUFFER_BIT | GL_SCISSOR_BIT);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    glCullFace(GL_FRONT);
+    glStencilFunc(GL_EQUAL, 7, 0xFF);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(5, 5, 5, 5);
+    glPopAttrib();
+    GLint modes[2];
+    glGetIntegerv(GL_POLYGON_MODE, modes);
+    CHECK(modes[0] == GL_FILL && modes[1] == GL_FILL);
+    glGetIntegerv(GL_CULL_FACE_MODE, &v);
+    CHECK(v == GL_BACK);
+    glGetIntegerv(GL_STENCIL_REF, &v);
+    CHECK(v == 0);
+    CHECK(!glIsEnabled(GL_SCISSOR_TEST));
+
+    // Errors
+    glPopAttrib();
+    CHECK(glGetError() == GL_STACK_UNDERFLOW);
+    GLint max = 0;
+    glGetIntegerv(GL_MAX_ATTRIB_STACK_DEPTH, &max);
+    CHECK(max >= 16);
+    for (int i = 0; i <= max; i++) glPushAttrib(GL_CURRENT_BIT);
+    CHECK(glGetError() == GL_STACK_OVERFLOW);
+    for (int i = 0; i < max; i++) glPopAttrib();
+    glGetIntegerv(GL_ATTRIB_STACK_DEPTH, &v);
+    CHECK(v == 0);
+
+    // Client: vertex arrays (with buffer binding) and pixel store
+    static const GLfloat data[4] = {0};
+    GLuint buf;
+    glGenBuffers(1, &buf);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glVertexPointer(2, GL_FLOAT, 0, data);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glPushClientAttrib(GL_CLIENT_ALL_ATTRIB_BITS);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glBindBuffer(GL_ARRAY_BUFFER, buf);
+    glVertexPointer(3, GL_SHORT, 6, (const GLvoid *)0);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glClientActiveTexture(GL_TEXTURE2);
+    glGetIntegerv(GL_CLIENT_ATTRIB_STACK_DEPTH, &v);
+    CHECK(v == 1);
+    glPopClientAttrib();
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &v);
+    CHECK(v == 4);
+    glGetIntegerv(GL_VERTEX_ARRAY_SIZE, &v);
+    CHECK(v == 2);
+    GLvoid *ptr = NULL;
+    glGetPointerv(GL_VERTEX_ARRAY_POINTER, &ptr);
+    CHECK(ptr == data && !glIsEnabled(GL_VERTEX_ARRAY));
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &v);
+    CHECK(v == 0);
+    glGetIntegerv(GL_CLIENT_ACTIVE_TEXTURE, &v);
+    CHECK(v == GL_TEXTURE0);
+    glPopClientAttrib();
+    CHECK(glGetError() == GL_STACK_UNDERFLOW);
+    glDeleteBuffers(1, &buf);
+}
+
 // Four white 60x60 squares with different vertex calls, pixel coordinates y down
 static void drawSquares(void)
 {
@@ -494,6 +625,7 @@ int main(void)
     testMatrices();
     testArraysAndEs();
     testBuffers();
+    testAttribStacks();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 
