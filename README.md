@@ -81,6 +81,12 @@ Run the `.3dsx` in an emulator or send it to a 3DS with `3dslink`. The bottom sc
 expected picture. Examples are built by default only when c3dgl is the top-level project
 (`-DC3DGL_BUILD_EXAMPLES=ON/OFF`).
 
+`cmake -P scripts/dev.cmake run [app.3dsx]` builds and launches the example in the first emulator it
+finds (Azahar, Lime3DS, Mandarine, Citra; override with `C3DGL_EMULATOR=/path/to/emu`); `build` and
+`launch` do one step each. It works on macOS, Linux and Windows. On Windows it builds through
+devkitPro's msys2 (`C:/devkitPro/msys2`, or set `C3DGL_MSYS2`), which needs `pacman -S cmake` there,
+plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.json` wrap these commands.
+
 ## Supported
 
 - `glBegin`/`glEnd` and client arrays (`glDrawArrays`, `glDrawElements`) with `GL_TRIANGLES`, `GL_QUADS`, `GL_LINES`

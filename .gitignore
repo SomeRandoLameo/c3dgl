@@ -1,8 +1,54 @@
+# Build trees
 build/
 build-*/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CMakeUserPresets.json
+*.ninja
+.ninja_*
+
+# Tooling
 compile_commands.json
 .cache/
+.clangd/
+
+# Compiled objects and libraries
+*.o
+*.obj
+*.d
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exp
+*.pdb
+
+# 3DS outputs
 *.3dsx
 *.smdh
 *.elf
+*.map
 *.shbin
+*.t3x
+*.cia
+*.3ds
+*.cci
+
+# Vendored portlibs / third-party installs (use dkp-pacman instead)
+portlibs/
+third_party/
+vendor/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Claude Code: personal settings stay local; shared .claude/settings.json may be committed
+.claude/settings.local.json
+CLAUDE.local.md
