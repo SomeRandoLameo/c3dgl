@@ -27,13 +27,14 @@
 //   - glClear of color/depth/stencil honors scissor and write masks
 //   - glGetError, glGet*v, glIsEnabled; common glVertex/glColor/glTexCoord/glRect/matrix variants
 //   - Lighting: 8 lights, materials, glColorMaterial, two-sided, GL_NORMALIZE/GL_RESCALE_NORMAL (per vertex, on the CPU)
+//   - Fog: GL_LINEAR, GL_EXP, GL_EXP2 per pixel (PICA fog table, eye distance |z_eye|)
 //   - GL_FLAT, glPolygonMode (with edge flags), glPolygonOffset, glDepthRange
 //   - Pixel store modes, texture borders, proxy textures, glGetTexLevelParameter
 //   - GLU: Mesa GLU as c3dgl::glu (<GL/glu.h>), see README
 //   - Buffer objects (VBOs) for vertex arrays and indices
 //   - OpenGL ES 1.1: <GLES/gl.h>, fixed-point x functions, glOrthof/glFrustumf/... for the implemented features
 //
-// Not supported: fog, display lists, glReadPixels.
+// Not supported: display lists, glReadPixels.
 // Mipmaps work down to 8x8; smaller levels are accepted but PICA cannot sample them. Points are always square (no GL_POINT_SMOOTH).
 //
 // Screens: rendering goes to the top screen (400x240) by default. c3dglSetScreen() switches to the

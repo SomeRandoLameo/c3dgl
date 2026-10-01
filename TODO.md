@@ -56,7 +56,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   `glDepthRangex`, `glFrustumx`, `glGetFixedv`, `glLineWidthx`, `glLoadMatrixx`, `glMultMatrixx`, `glNormal3x`,
   `glOrthox`, `glPointSizex`, `glPolygonOffsetx`, `glRotatex`, `glScalex`, `glTexEnvx(v)`, `glTexParameterx(v)`, `glTranslatex`
 * [x] `glLightx(v)`, `glLightModelx(v)`, `glMaterialx(v)`, `glGetLightxv`, `glGetMaterialxv`, `glMultiTexCoord4x`
-* [ ] `x` entry points that come with their features: `glClipPlanex`, `glFogx(v)`, `glPointParameterx(v)`,
+* [x] `glFogx(v)`
+* [ ] `x` entry points that come with their features: `glClipPlanex`, `glPointParameterx(v)`,
   `glSampleCoveragex`, `glGetClipPlanex`
 
 ## Lighting
@@ -73,8 +74,12 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 ## Fog
 
-* [ ] `glFog*` (linear, exp, exp2), `GL_FOG`
-* [ ] Actual fog rendering (PICA fog LUT)
+* [x] `glFog*` (`f`/`fv`/`i`/`iv`/`x`/`xv`; linear, exp, exp2), `GL_FOG`, fog queries, `GL_FOG_BIT`
+* [x] Fog rendering per pixel on PICA's fog unit: the 128-entry table over window depth maps each entry back to the eye
+  distance |z_eye| through the projection's z/w rows and glDepthRange (exact for glFrustum/glOrtho style projections;
+  rebuilt only when projection, depth range or fog parameters change). Also applies to lines and points
+* [~] Precision: with perspective most of the depth range is near 1, so far fog is interpolated over few table entries
+  (the floor in the fog example shows no banding)
 
 ## Textures
 
@@ -207,7 +212,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 # Main Remaining Work
 
 ```text
-[ ] Fog                               [ ] Display lists (GL)
+[ ] Lighting in the vertex shader     [ ] Display lists (GL)
 [ ] Compressed / paletted textures    [ ] Texture copies, glReadPixels
 [ ] Clip planes                       [ ] Feedback / selection (GL)
 [ ] Smooth points/lines               [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
@@ -229,4 +234,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] VBOs (ES)                         [x] Multitexturing + GL_COMBINE (ES)
 [x] Mipmapping (+ GL_GENERATE_MIPMAP) [x] Attribute stacks (GL)
 [x] Lighting (CPU, per vertex)        [x] Evaluators (GL)
+[x] Fog (PICA fog table)
 ```

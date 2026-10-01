@@ -147,6 +147,7 @@ typedef void            GLvoid;
 #define GL_POLYGON_OFFSET_LINE              0x2A02
 #define GL_POLYGON_OFFSET_FILL              0x8037
 #define GL_LIGHTING                         0x0B50
+#define GL_FOG                              0x0B60
 #define GL_COLOR_MATERIAL                   0x0B57
 #define GL_NORMALIZE                        0x0BA1
 #define GL_RESCALE_NORMAL                   0x803A      // ES, GL 1.2
@@ -163,8 +164,18 @@ typedef void            GLvoid;
 // non-cosmetic ones logs a warning)
 #define GL_POINT_SMOOTH                     0x0B10
 #define GL_POLYGON_SMOOTH                   0x0B41
-#define GL_FOG                              0x0B60
 #define GL_DITHER                           0x0BD0
+
+// Fog (glFog)
+#define GL_FOG_INDEX                        0x0B61      // Color index mode: stored only
+#define GL_FOG_DENSITY                      0x0B62
+#define GL_FOG_START                        0x0B63
+#define GL_FOG_END                          0x0B64
+#define GL_FOG_MODE                         0x0B65
+#define GL_FOG_COLOR                        0x0B66
+#define GL_EXP                              0x0800
+#define GL_EXP2                             0x0801
+#define GL_FOG_HINT                         0x0C54
 
 // Lighting (glLight, glLightModel, glMaterial, glColorMaterial)
 #define GL_AMBIENT                          0x1200
@@ -783,6 +794,13 @@ void glGetLightiv(GLenum light, GLenum pname, GLint *params);
 void glGetMaterialfv(GLenum face, GLenum pname, GLfloat *params);
 void glGetMaterialiv(GLenum face, GLenum pname, GLint *params);
 
+// Fog: GL_LINEAR, GL_EXP, GL_EXP2 per pixel (PICA fog table over the depth buffer), with the eye distance |z_eye|.
+// iv: the color is mapped like glColor*i
+void glFogf(GLenum pname, GLfloat param);
+void glFogfv(GLenum pname, const GLfloat *params);
+void glFogi(GLenum pname, GLint param);
+void glFogiv(GLenum pname, const GLint *params);
+
 // Evaluators (GL): order up to 30
 void glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat *points);
 void glMap1d(GLenum target, GLdouble u1, GLdouble u2, GLint stride, GLint order, const GLdouble *points);
@@ -856,6 +874,8 @@ void glMaterialx(GLenum face, GLenum pname, GLfixed param);
 void glMaterialxv(GLenum face, GLenum pname, const GLfixed *params);
 void glGetLightxv(GLenum light, GLenum pname, GLfixed *params);
 void glGetMaterialxv(GLenum face, GLenum pname, GLfixed *params);
+void glFogx(GLenum pname, GLfixed param);
+void glFogxv(GLenum pname, const GLfixed *params);
 
 #ifdef __cplusplus
 }

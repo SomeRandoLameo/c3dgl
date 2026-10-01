@@ -326,12 +326,12 @@ static void testAttribStacks(void)
     glGetIntegerv(GL_ATTRIB_STACK_DEPTH, &v);
     CHECK(v == 1);
     glEnable(GL_BLEND);
-    glEnable(GL_FOG);                           // Stored-only capability, also restored
+    glEnable(GL_LINE_SMOOTH);                   // Stored-only capability, also restored
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
     glDepthFunc(GL_GREATER);
     glPopAttrib();
-    CHECK(!glIsEnabled(GL_BLEND) && !glIsEnabled(GL_FOG));
+    CHECK(!glIsEnabled(GL_BLEND) && !glIsEnabled(GL_LINE_SMOOTH));
     glGetIntegerv(GL_BLEND_SRC, &v);
     CHECK(v == GL_ONE);
     glGetFloatv(GL_COLOR_CLEAR_VALUE, f);

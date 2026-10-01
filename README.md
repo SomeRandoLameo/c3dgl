@@ -92,6 +92,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `fragment`: per-fragment operations (alpha test, texture environment, stencil, `glClear`); A switches pages
 - `lighting`: directional, point and spot lights, specular, several lights, color material, two-sided lighting,
   flat shading with `GL_NORMALIZE`/`GL_RESCALE_NORMAL`; self-checks of the lighting API on the bottom screen
+- `fog`: linear/exp/exp2 fog with perspective and orthographic projections, depth range, lines/points and blending,
+  each next to a reference square in the expected color; self-checks of the fog API on the bottom screen
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
 c3dgl itself does not.
@@ -138,14 +140,15 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - GLU: the complete Mesa GLU 9.0.3 (`c3dgl::glu`, `<GL/glu.h>`), see [GLU](#glu)
 - Lighting: 8 lights (directional, positional with attenuation, spot), materials per face, `glColorMaterial`,
   two-sided lighting, local viewer, `GL_NORMALIZE`, `GL_RESCALE_NORMAL`; `glGetLight`, `glGetMaterial`
-- Fog, dithering and smoothing can be enabled and queried but have no effect yet
+- Fog: `GL_LINEAR`, `GL_EXP`, `GL_EXP2`, per pixel; `glFog*` and the fog queries
+- Dithering and smoothing can be enabled and queried but have no effect yet
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
 
 ## Not supported
 
-Fog, display lists, `glReadPixels`, round points (`GL_POINT_SMOOTH`) and stereoscopic 3D. Mipmap levels
+Display lists, `glReadPixels`, round points (`GL_POINT_SMOOTH`) and stereoscopic 3D. Mipmap levels
 below 8x8 are accepted but not sampled (PICA stops at 8x8).
 `GL_REPEAT` on non-power-of-two textures samples the padding.
 
@@ -164,6 +167,10 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
 - Assembling primitives on the CPU also gives flat shading (the provoking vertex's color on every vertex),
   `glPolygonMode` (outlines and vertices per polygon, culled on the CPU) and the slope part of `glPolygonOffset`
   (computed per polygon, passed as a per-vertex depth bias that the vertex shader adds).
+- Fog runs on PICA's fog unit, which takes the fog factor from a 128-entry table indexed by the depth buffer value.
+  GL's factor depends on the eye distance, so each entry maps its window depth back through the projection to
+  `z_eye` (exact for `glFrustum`/`glOrtho`-style projections). The table is rebuilt only when the projection,
+  depth range or fog parameters change.
 - Depth and stencil share one D24S8 buffer. `glClear` uses a memory fill when it can; clearing only depth or
   only stencil (once stencil is in use), or clearing with a scissor box or color mask, draws a full-screen quad.
 - Textures are padded to power-of-two sizes and Morton-swizzled on upload; the shader applies the texture matrix

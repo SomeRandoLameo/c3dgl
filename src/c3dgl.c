@@ -20,6 +20,8 @@
 //   - One render target per screen, sharing the vertex buffer and GL state; c3dglSetScreen() flushes the
 //     batch and switches the target (C3D_FrameDrawOn), citro3d presents every target drawn on in the frame.
 //
+//   - Fog uses PICA's fog unit, which looks the fog factor up in a 128 entry table indexed by window depth. GL's factor
+//     depends on the eye distance, so the table inverts the projection per entry (see updateFogLut()).
 //   - Depth and stencil share one D24S8 buffer that a memory fill can only clear as a whole. glClear uses the
 //     fill when that is equivalent, otherwise it draws a full-screen quad (scissor, masks, depth or stencil only).
 //
@@ -185,6 +187,10 @@ typedef struct {
     bool alphaTest;
     GLenum alphaFunc;
     u8 alphaRef;                // 0..255
+    bool fog;                   // Fog parameters are only set when fog is on (filled in by prepareDraw)
+    GLenum fogMode;
+    float fogDensity, fogStart, fogEnd;
+    u32 fogColor;               // 0x00BBGGRR like the PICA
     bool stencilTest;
     GLenum stencilFunc;
     u8 stencilRef, stencilFuncMask, stencilWriteMask;
@@ -307,6 +313,14 @@ static struct {
     int grid1n, grid2un, grid2vn;       // glMapGrid
     float grid1u1, grid1u2, grid2u1, grid2u2, grid2v1, grid2v2;
 
+    // Fog (glFog); the PICA table is rebuilt only when its inputs change, see updateFogLut()
+    bool fog;
+    GLenum fogMode;
+    float fogDensity, fogStart, fogEnd, fogColor[4], fogIndex;
+    C3D_FogLut fogLut;
+    float fogLutInputs[10];
+    bool fogLutValid;
+
     // Lighting, see lightVertex()
     LightingState lighting;
     bool lightingEnabled, colorMaterial, normalize, rescaleNormal;
@@ -326,6 +340,13 @@ static struct {
 static void setError(GLenum error)
 {
     if (gl.error == GL_NO_ERROR) gl.error = error;
+}
+
+static u8 colorByte(float c)
+{
+    if (c <= 0.0f) return 0;
+    if (c >= 1.0f) return 255;
+    return (u8)(c*255.0f + 0.5f);
 }
 
 //----------------------------------------------------------------------------------
@@ -760,6 +781,43 @@ static void applyTextureMatrix(int unit, const Texture *t, bool *projective)
     *projective = (tm->m[3] != 0.0f) || (tm->m[7] != 0.0f) || (tm->m[15] != 1.0f);
 }
 
+// GL fog factor for eye distance c (clamped, 1 = no fog)
+static float fogFactor(const DrawState *s, float c)
+{
+    float f;
+    if (s->fogMode == GL_LINEAR) f = (s->fogEnd != s->fogStart)? (s->fogEnd - c)/(s->fogEnd - s->fogStart) : 1.0f;
+    else if (s->fogMode == GL_EXP2) f = expf(-(s->fogDensity*c)*(s->fogDensity*c));
+    else f = expf(-s->fogDensity*c);
+    return (f < 0.0f)? 0.0f : (f > 1.0f)? 1.0f : f;
+}
+
+// PICA fog: factor = table[window depth*128], linearly interpolated between entries. Each entry goes back from window
+// depth through NDC z to the eye z with the projection's z and w rows (z_ndc = (a*z + b)/(c*z + d), exact for
+// glFrustum/glOrtho style projections); the fog distance is |z_eye| like most GL implementations
+static void updateFogLut(const DrawState *s)
+{
+    const float *m = gl.stack[1][gl.stackDepth[1]].m;
+    float a = m[10], b = m[14], c = m[11], d = m[15];
+    float in[10] = { a, b, c, d, s->depthNear, s->depthFar, (float)s->fogMode, s->fogDensity, s->fogStart, s->fogEnd };
+    if (gl.fogLutValid && (memcmp(in, gl.fogLutInputs, sizeof(in)) == 0)) return;
+    memcpy(gl.fogLutInputs, in, sizeof(in));
+    gl.fogLutValid = true;
+
+    // data[0..127]: factor at the entry, data[128..255]: difference to the next entry
+    float data[256], range = s->depthFar - s->depthNear;
+    for (int i = 0; i <= 128; i++)
+    {
+        float zNdc = (range != 0.0f)? 2.0f*(i/128.0f - s->depthNear)/range - 1.0f : 0.0f;
+        float den = c*zNdc - a;
+        float zEye = (fabsf(den) > 1e-12f)? (b - d*zNdc)/den : 1e30f;
+        float f = fogFactor(s, fabsf(zEye));
+        if (i < 128) data[i] = f;
+        if (i > 0) data[127 + i] = f - data[i - 1];
+    }
+    FogLut_FromArray(&gl.fogLut, data);
+    C3D_FogLutBind(&gl.fogLut);     // Marks the table dirty: citro3d copies it into the command list at the next draw
+}
+
 static void applyState(const DrawState *s)
 {
     int x, y, w, h;
@@ -799,6 +857,14 @@ static void applyState(const DrawState *s)
     else C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
 
     C3D_CullFace(cullMode(s));
+
+    if (s->fog)
+    {
+        updateFogLut(s);
+        C3D_FogGasMode(GPU_FOG, GPU_PLAIN_DENSITY, true);   // Flipped: the table is indexed by window depth
+        C3D_FogColor(s->fogColor);
+    }
+    else C3D_FogGasMode(GPU_NO_FOG, GPU_PLAIN_DENSITY, false);
 
     // Fragment stage: TexEnv stage n combines texture unit n with the result of stage n - 1 (glTexEnv per unit)
     for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
@@ -885,6 +951,15 @@ static void prepareDraw(bool clipSpace)
     }
     key.texMatrixSerial = textured? gl.texMatrixSerial : 0;
     key.texQ = (key.units[0].texture != 0) && gl.texQUsed;
+    key.fog = gl.fog;
+    if (gl.fog)
+    {
+        key.fogMode = gl.fogMode;
+        key.fogDensity = gl.fogDensity;
+        key.fogStart = gl.fogStart;
+        key.fogEnd = gl.fogEnd;
+        key.fogColor = colorByte(gl.fogColor[0]) | (colorByte(gl.fogColor[1]) << 8) | (colorByte(gl.fogColor[2]) << 16);
+    }
     if (!key.stencilTest)
     {
         key.stencilFunc = key.stencilFail = key.stencilDepthFail = key.stencilPass = 0;
@@ -1275,13 +1350,6 @@ static void endPrimitive(void)
 //----------------------------------------------------------------------------------
 // Lighting (GL 1.1 section 2.13): per vertex on the CPU, when the vertex is submitted
 //----------------------------------------------------------------------------------
-static u8 colorByte(float c)
-{
-    if (c <= 0.0f) return 0;
-    if (c >= 1.0f) return 255;
-    return (u8)(c*255.0f + 0.5f);
-}
-
 static void setColor4(float out[4], float r, float g, float b, float a)
 {
     out[0] = r; out[1] = g; out[2] = b; out[3] = a;
@@ -1594,6 +1662,8 @@ bool c3dglInit(void)
     gl.shadeModel = GL_SMOOTH;
     gl.currentNormal[2] = 1.0f;
     initLighting();
+    gl.fogMode = GL_EXP;
+    gl.fogDensity = gl.fogEnd = 1.0f;
     gl.ignoredCaps = 1u << 0;     // GL_DITHER is enabled by default
     memset(gl.current.color, 255, 4);
     gl.current.tex[2] = 1.0f;
@@ -1686,7 +1756,7 @@ void c3dglSwapBuffers(void)
 // Capabilities that programs commonly toggle but c3dgl does not implement: stored for glIsEnabled,
 // enabling the ones that change the picture warns once
 static const GLenum ignoredCaps[] = {
-    GL_DITHER, GL_LINE_SMOOTH, GL_POINT_SMOOTH, GL_POLYGON_SMOOTH, GL_FOG,
+    GL_DITHER, GL_LINE_SMOOTH, GL_POINT_SMOOTH, GL_POLYGON_SMOOTH,
 };
 
 static int ignoredCapBit(GLenum cap)
@@ -1720,6 +1790,7 @@ static void setCapability(GLenum cap, bool enable)
             break;
         case GL_CULL_FACE: gl.state.cull = enable; break;
         case GL_SCISSOR_TEST: gl.state.scissor = enable; break;
+        case GL_FOG: gl.fog = enable; break;
         case GL_LIGHTING: gl.lightingEnabled = enable; break;
         case GL_LIGHT0: case GL_LIGHT1: case GL_LIGHT2: case GL_LIGHT3:
         case GL_LIGHT4: case GL_LIGHT5: case GL_LIGHT6: case GL_LIGHT7:
@@ -1786,6 +1857,7 @@ GLboolean glIsEnabled(GLenum cap)
         case GL_STENCIL_TEST: return gl.state.stencilTest;
         case GL_CULL_FACE: return gl.state.cull;
         case GL_SCISSOR_TEST: return gl.state.scissor;
+        case GL_FOG: return gl.fog;
         case GL_LIGHTING: return gl.lightingEnabled;
         case GL_LIGHT0: case GL_LIGHT1: case GL_LIGHT2: case GL_LIGHT3:
         case GL_LIGHT4: case GL_LIGHT5: case GL_LIGHT6: case GL_LIGHT7:
@@ -1969,6 +2041,12 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_FRONT_FACE: v[0] = gl.state.frontFace; return 1;
         case GL_SHADE_MODEL: v[0] = gl.shadeModel; return 1;
         case GL_MAX_LIGHTS: v[0] = C3DGL_MAX_LIGHTS; return 1;
+        case GL_FOG_MODE: v[0] = gl.fogMode; return 1;
+        case GL_FOG_DENSITY: v[0] = gl.fogDensity; return 1;
+        case GL_FOG_START: v[0] = gl.fogStart; return 1;
+        case GL_FOG_END: v[0] = gl.fogEnd; return 1;
+        case GL_FOG_INDEX: v[0] = gl.fogIndex; return 1;
+        case GL_FOG_COLOR: for (int i = 0; i < 4; i++) v[i] = gl.fogColor[i]; *normalized = true; return 4;
         case GL_LIGHT_MODEL_AMBIENT: for (int i = 0; i < 4; i++) v[i] = gl.lighting.modelAmbient[i]; *normalized = true; return 4;
         case GL_LIGHT_MODEL_LOCAL_VIEWER: v[0] = gl.lighting.localViewer; return 1;
         case GL_LIGHT_MODEL_TWO_SIDE: v[0] = gl.lighting.twoSide; return 1;
@@ -2007,7 +2085,7 @@ static int getState(GLenum pname, double v[16], bool *normalized)
                 (pname == GL_ALPHA_TEST) || (pname == GL_STENCIL_TEST) || (pname == GL_CULL_FACE) || (pname == GL_SCISSOR_TEST) ||
                 (pname == GL_VERTEX_ARRAY) || (pname == GL_TEXTURE_COORD_ARRAY) || (pname == GL_COLOR_ARRAY) || (pname == GL_NORMAL_ARRAY) ||
                 (pname == GL_EDGE_FLAG_ARRAY) || (pname == GL_POLYGON_OFFSET_FILL) || (pname == GL_POLYGON_OFFSET_LINE) ||
-                (pname == GL_POLYGON_OFFSET_POINT) || (pname == GL_AUTO_NORMAL) || (pname == GL_LIGHTING) ||
+                (pname == GL_POLYGON_OFFSET_POINT) || (pname == GL_AUTO_NORMAL) || (pname == GL_LIGHTING) || (pname == GL_FOG) ||
                 ((pname >= GL_LIGHT0) && (pname <= GL_LIGHT7)) || (pname == GL_COLOR_MATERIAL) ||
                 (pname == GL_NORMALIZE) || (pname == GL_RESCALE_NORMAL) ||
                 ((pname >= GL_MAP1_COLOR_4) && (pname <= GL_MAP1_VERTEX_4)) || ((pname >= GL_MAP2_COLOR_4) && (pname <= GL_MAP2_VERTEX_4)))
@@ -2836,6 +2914,57 @@ void glGetMaterialiv(GLenum face, GLenum pname, GLint *params)
     bool color;
     int n = getMaterial(face, pname, v, &color);
     for (int i = 0; i < n; i++) params[i] = color? normalizedToInt(v[i]) : (GLint)lroundf(v[i]);
+}
+
+//----------------------------------------------------------------------------------
+// OpenGL: fog (rendered in applyState(), see updateFogLut())
+//----------------------------------------------------------------------------------
+// p holds 4 values for GL_FOG_COLOR, 1 otherwise; GL_FOG_MODE is the enum value
+static void setFog(GLenum pname, const float *p)
+{
+    switch (pname)
+    {
+        case GL_FOG_MODE:
+        {
+            GLenum mode = (GLenum)p[0];
+            if ((mode != GL_LINEAR) && (mode != GL_EXP) && (mode != GL_EXP2)) { setError(GL_INVALID_ENUM); return; }
+            gl.fogMode = mode;
+            break;
+        }
+        case GL_FOG_DENSITY:
+            if (p[0] < 0.0f) { setError(GL_INVALID_VALUE); return; }
+            gl.fogDensity = p[0];
+            break;
+        case GL_FOG_START: gl.fogStart = p[0]; break;
+        case GL_FOG_END: gl.fogEnd = p[0]; break;
+        case GL_FOG_INDEX: gl.fogIndex = p[0]; break;
+        case GL_FOG_COLOR:      // Clamped, like all GLclampf colors
+            for (int i = 0; i < 4; i++) gl.fogColor[i] = (p[i] < 0.0f)? 0.0f : (p[i] > 1.0f)? 1.0f : p[i];
+            break;
+        default: setError(GL_INVALID_ENUM); break;
+    }
+}
+
+void glFogfv(GLenum pname, const GLfloat *params) { setFog(pname, params); }
+
+void glFogf(GLenum pname, GLfloat param)
+{
+    if (pname == GL_FOG_COLOR) { setError(GL_INVALID_ENUM); return; }
+    setFog(pname, &param);
+}
+
+void glFogiv(GLenum pname, const GLint *params)
+{
+    float f[4];
+    if (pname == GL_FOG_COLOR) for (int i = 0; i < 4; i++) f[i] = (float)((2.0*params[i] + 1.0)/4294967295.0);
+    else f[0] = (float)params[0];
+    setFog(pname, f);
+}
+
+void glFogi(GLenum pname, GLint param)
+{
+    if (pname == GL_FOG_COLOR) { setError(GL_INVALID_ENUM); return; }
+    glFogiv(pname, &param);
 }
 
 //----------------------------------------------------------------------------------
@@ -4407,6 +4536,9 @@ typedef struct {
     LightingState lighting;
     bool lightingEnabled, colorMaterial, normalize, rescaleNormal;
     u8 lightEnabled;
+    bool fog;
+    GLenum fogMode;
+    float fogDensity, fogStart, fogEnd, fogColor[4], fogIndex;
 } AttribState;
 
 typedef struct {
@@ -4484,6 +4616,13 @@ void glPushAttrib(GLbitfield mask)
     a->colorMaterial = gl.colorMaterial;
     a->normalize = gl.normalize;
     a->rescaleNormal = gl.rescaleNormal;
+    a->fog = gl.fog;
+    a->fogMode = gl.fogMode;
+    a->fogDensity = gl.fogDensity;
+    a->fogStart = gl.fogStart;
+    a->fogEnd = gl.fogEnd;
+    a->fogIndex = gl.fogIndex;
+    memcpy(a->fogColor, gl.fogColor, sizeof(a->fogColor));
 }
 
 void glPopAttrib(void)
@@ -4534,7 +4673,16 @@ void glPopAttrib(void)
         gl.lightEnabled = a->lightEnabled;
         gl.colorMaterial = a->colorMaterial;
     }
-    if (mask & GL_FOG_BIT) caps |= capBits((const GLenum[]){ GL_FOG }, 1);
+    if (mask & GL_FOG_BIT)
+    {
+        gl.fog = a->fog;
+        gl.fogMode = a->fogMode;
+        gl.fogDensity = a->fogDensity;
+        gl.fogStart = a->fogStart;
+        gl.fogEnd = a->fogEnd;
+        gl.fogIndex = a->fogIndex;
+        memcpy(gl.fogColor, a->fogColor, sizeof(gl.fogColor));
+    }
     if (mask & GL_DEPTH_BUFFER_BIT)
     {
         st->depthTest = sv->depthTest;
@@ -4583,6 +4731,7 @@ void glPopAttrib(void)
         gl.colorMaterial = a->colorMaterial;
         gl.normalize = a->normalize;
         gl.rescaleNormal = a->rescaleNormal;
+        gl.fog = a->fog;
         caps = 0xFFFFFFFFu;     // All stored-only capabilities
     }
     if (mask & GL_COLOR_BUFFER_BIT)
@@ -4859,6 +5008,21 @@ void glGetMaterialxv(GLenum face, GLenum pname, GLfixed *params)
     bool color;
     int n = getMaterial(face, pname, v, &color);
     for (int i = 0; i < n; i++) params[i] = floatToFixed(v[i]);
+}
+
+void glFogx(GLenum pname, GLfixed param)
+{
+    if (pname == GL_FOG_COLOR) { setError(GL_INVALID_ENUM); return; }
+    float f = (pname == GL_FOG_MODE)? (float)param : fixedToFloat(param);    // The mode is an enum, passed unscaled
+    setFog(pname, &f);
+}
+
+void glFogxv(GLenum pname, const GLfixed *params)
+{
+    float f[4];
+    if (pname == GL_FOG_COLOR) for (int i = 0; i < 4; i++) f[i] = fixedToFloat(params[i]);
+    else f[0] = (pname == GL_FOG_MODE)? (float)params[0] : fixedToFloat(params[0]);
+    setFog(pname, f);
 }
 
 void glGetFixedv(GLenum pname, GLfixed *params)
