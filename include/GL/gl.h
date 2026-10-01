@@ -142,6 +142,15 @@ typedef void            GLvoid;
 #define GL_LUMINANCE                        0x1909
 #define GL_LUMINANCE_ALPHA                  0x190A
 
+// Texture environment
+#define GL_TEXTURE_ENV                      0x2300
+#define GL_TEXTURE_ENV_MODE                 0x2200
+#define GL_TEXTURE_ENV_COLOR                0x2201
+#define GL_MODULATE                         0x2100
+#define GL_DECAL                            0x2101
+#define GL_REPLACE                          0x1E01
+#define GL_ADD                              0x0104
+
 // Texture parameters
 #define GL_TEXTURE_MAG_FILTER               0x2800
 #define GL_TEXTURE_MIN_FILTER               0x2801
@@ -221,6 +230,10 @@ void glGenTextures(GLsizei n, GLuint *textures);
 void glDeleteTextures(GLsizei n, const GLuint *textures);
 void glBindTexture(GLenum target, GLuint texture);
 void glTexParameteri(GLenum target, GLenum pname, GLint param);
+void glTexEnvi(GLenum target, GLenum pname, GLint param);
+void glTexEnvf(GLenum target, GLenum pname, GLfloat param);
+void glTexEnviv(GLenum target, GLenum pname, const GLint *params);
+void glTexEnvfv(GLenum target, GLenum pname, const GLfloat *params);
 void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
                   GLint border, GLenum format, GLenum type, const GLvoid *pixels);
 void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,

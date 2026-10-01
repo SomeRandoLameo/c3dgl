@@ -76,7 +76,7 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 
 - `cube`: 3D, depth test, culling, textures (NPOT and PNG), scissor, sub-viewports
 - `primitives`: every primitive mode, one cell each, with culling on to catch wrong winding
-- `fragment`: per-fragment operations (alpha test)
+- `fragment`: per-fragment operations (alpha test, texture environment)
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
 c3dgl itself does not.
@@ -98,17 +98,18 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - Modelview/projection matrix stacks, `glOrtho`, `glFrustum`, `glTranslatef`, `glRotatef`, `glScalef`, `glMultMatrixf`
 - Textures of any size up to 1024x1024: RGBA8, RGB8, luminance/alpha, luminance, alpha, RGB565, RGBA5551, RGBA4;
   `glTexSubImage2D`, `glGetTexImage`, nearest/linear filtering, repeat/clamp/mirror wrapping
-- Blending (`glBlendFunc`), alpha test (`glAlphaFunc`), depth test/function/mask, color mask, face culling, scissor, viewport, line width,
-  point size
+- Texture environment (`glTexEnv`): `GL_MODULATE`, `GL_REPLACE`, `GL_DECAL`, `GL_BLEND`, `GL_ADD`, `GL_TEXTURE_ENV_COLOR`
+- Blending (`glBlendFunc`), alpha test (`glAlphaFunc`), depth test/function/mask, color mask, face culling, scissor,
+  viewport, line width, point size
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
 
 ## Not supported
 
-Lighting, fog, texture environment modes (always vertex color × texture), mipmaps (only level 0 is used),
-`glReadPixels`, `GL_POINTS`/strips/fans/polygons, `glPolygonMode` other than `GL_FILL` and stereoscopic 3D. `glClear` ignores scissor and color mask. `GL_REPEAT` on non-power-of-two textures samples
-the padding.
+Lighting, fog, mipmaps (only level 0 is used), `glReadPixels`, `glPolygonMode` other than `GL_FILL`, round points
+(`GL_POINT_SMOOTH`) and stereoscopic 3D. `glClear` ignores scissor and color mask. `GL_REPEAT` on non-power-of-two
+textures samples the padding.
 
 ## How it works
 

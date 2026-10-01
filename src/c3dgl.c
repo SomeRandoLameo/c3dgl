@@ -82,6 +82,8 @@ typedef struct {
 // Everything that decides how a range of vertices is rendered; see prepareDraw()
 typedef struct {
     GLuint texture;             // 0: untextured
+    GLenum texEnvMode;          // glTexEnv, only used when textured (0 otherwise)
+    u32 texEnvColor;            // GL_TEXTURE_ENV_COLOR, 0xAABBGGRR like the PICA
     bool clipSpace;             // Vertices are already in NDC (expanded lines and points)
     u32 matrixSerial;           // Matrix version (0 for clipSpace)
     bool blend;
@@ -428,6 +430,66 @@ static void physicalRect(const GLint r[4], int *x, int *y, int *w, int *h)
     *h = r[2];
 }
 
+// Texture environment: GL 1.1 table 3.22. The result depends on the texture's base format: PICA samples
+// L as (L, L, L, 1), A as (0, 0, 0, A) and formats without alpha with A = 1, which matches GL's (Lt, Ct, At)
+// except where GL takes the fragment color/alpha instead (no color in A textures, REPLACE without alpha)
+static void setupTexEnv(C3D_TexEnv *env, GLenum mode, u32 color, GPU_TEXCOLOR format)
+{
+    bool hasColor = (format != GPU_A8) && (format != GPU_A4);
+    bool hasAlpha = (format == GPU_RGBA8) || (format == GPU_RGBA5551) || (format == GPU_RGBA4) ||
+                    (format == GPU_LA8) || (format == GPU_LA4) || (format == GPU_A8) || (format == GPU_A4);
+
+    C3D_TexEnvColor(env, color);
+
+    // Color: Cf = primary color, Ct = texture, Cc = env color
+    if (!hasColor)
+    {
+        C3D_TexEnvSrc(env, C3D_RGB, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+        C3D_TexEnvFunc(env, C3D_RGB, GPU_REPLACE);
+    }
+    else switch (mode)
+    {
+        case GL_REPLACE:
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+            C3D_TexEnvFunc(env, C3D_RGB, GPU_REPLACE);
+            break;
+        case GL_DECAL:      // Cf*(1 - At) + Ct*At
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_TEXTURE0);
+            C3D_TexEnvOpRgb(env, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_ALPHA);
+            C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
+            break;
+        case GL_BLEND:      // Cf*(1 - Ct) + Cc*Ct
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, GPU_PRIMARY_COLOR, GPU_TEXTURE0);
+            C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
+            break;
+        case GL_ADD:
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_PRIMARY_COLOR, GPU_TEXTURE0, GPU_PRIMARY_COLOR);
+            C3D_TexEnvFunc(env, C3D_RGB, GPU_ADD);
+            break;
+        default:            // GL_MODULATE
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+            C3D_TexEnvFunc(env, C3D_RGB, GPU_MODULATE);
+            break;
+    }
+
+    // Alpha: REPLACE takes At, DECAL keeps Af, everything else is Af*At (At = 1 without alpha)
+    if ((mode == GL_DECAL) || ((mode == GL_REPLACE) && !hasAlpha))
+    {
+        C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+        C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+    }
+    else if (mode == GL_REPLACE)
+    {
+        C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+        C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+    }
+    else
+    {
+        C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+        C3D_TexEnvFunc(env, C3D_Alpha, GPU_MODULATE);
+    }
+}
+
 static void applyState(const DrawState *s)
 {
     int x, y, w, h;
@@ -458,15 +520,14 @@ static void applyState(const DrawState *s)
 
     C3D_CullFace(cullMode(s));
 
-    // Fragment stage: vertex color, optionally modulated by the texture
+    // Fragment stage: vertex color, combined with the texture according to glTexEnv
     C3D_TexEnv *env = C3D_GetTexEnv(0);
     C3D_TexEnvInit(env);
     if (s->texture != 0)
     {
         Texture *t = &gl.textures[s->texture];
         C3D_TexBind(0, &t->tex);
-        C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
-        C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
+        setupTexEnv(env, s->texEnvMode, s->texEnvColor, t->format.format);
         C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexScale, (float)t->width/t->tex.width, (float)t->height/t->tex.height, 1.0f, 1.0f);
     }
     else
@@ -498,6 +559,7 @@ static void prepareDraw(bool clipSpace)
     key.clipSpace = clipSpace;
     key.matrixSerial = clipSpace? 0 : gl.matrixSerial;
     key.texture = (gl.texture2D && textureValid(gl.boundTexture))? gl.boundTexture : 0;
+    if (key.texture == 0) { key.texEnvMode = 0; key.texEnvColor = 0; }     // Unused, don't split batches over it
 
     if (!gl.batchValid || (memcmp(&key, &gl.batch, sizeof(DrawState)) != 0))
     {
@@ -762,6 +824,7 @@ bool c3dglInit(void)
     gl.state.depthFunc = GL_LESS;
     gl.state.depthMask = true;
     gl.state.alphaFunc = GL_ALWAYS;
+    gl.state.texEnvMode = GL_MODULATE;
     gl.state.colorMask = GPU_WRITE_COLOR;
     gl.state.cullFace = GL_BACK;
     gl.state.frontFace = GL_CCW;
@@ -1342,6 +1405,45 @@ void glDeleteTextures(GLsizei n, const GLuint *textures)
 void glBindTexture(GLenum target, GLuint texture)
 {
     if (target == GL_TEXTURE_2D) gl.boundTexture = texture;
+}
+
+void glTexEnvi(GLenum target, GLenum pname, GLint param)
+{
+    if ((target != GL_TEXTURE_ENV) || (pname != GL_TEXTURE_ENV_MODE)) return;
+
+    switch (param)
+    {
+        case GL_MODULATE: case GL_REPLACE: case GL_DECAL: case GL_BLEND: case GL_ADD:
+            gl.state.texEnvMode = (GLenum)param;
+            break;
+        default: WARN_ONCE("glTexEnv: mode 0x%x not supported\n", param); break;
+    }
+}
+
+void glTexEnvf(GLenum target, GLenum pname, GLfloat param) { glTexEnvi(target, pname, (GLint)param); }
+
+void glTexEnvfv(GLenum target, GLenum pname, const GLfloat *params)
+{
+    if (target != GL_TEXTURE_ENV) return;
+
+    if (pname == GL_TEXTURE_ENV_COLOR)
+    {
+        gl.state.texEnvColor = ((u32)colorByte(params[3]) << 24) | ((u32)colorByte(params[2]) << 16) |
+                               ((u32)colorByte(params[1]) << 8) | colorByte(params[0]);
+    }
+    else glTexEnvi(target, pname, (GLint)params[0]);
+}
+
+void glTexEnviv(GLenum target, GLenum pname, const GLint *params)
+{
+    if (pname == GL_TEXTURE_ENV_COLOR)
+    {
+        // Integer colors map [0, INT_MAX] to [0, 1]
+        GLfloat color[4];
+        for (int i = 0; i < 4; i++) color[i] = (GLfloat)params[i]/2147483647.0f;
+        glTexEnvfv(target, pname, color);
+    }
+    else glTexEnvi(target, pname, params[0]);
 }
 
 void glTexParameteri(GLenum target, GLenum pname, GLint param)
