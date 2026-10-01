@@ -26,6 +26,7 @@
 //   - GL_FLAT, glPolygonMode (with edge flags), glPolygonOffset, glDepthRange
 //   - Pixel store modes, texture borders, proxy textures, glGetTexLevelParameter
 //   - GLU: Mesa GLU as c3dgl::glu (<GL/glu.h>), see README
+//   - Buffer objects (VBOs) for vertex arrays and indices
 //   - OpenGL ES 1.1: <GLES/gl.h>, fixed-point x functions, glOrthof/glFrustumf/... for the implemented features
 //
 // Not supported: lighting, fog, display lists, mipmaps, glReadPixels. Points are always square (no GL_POINT_SMOOTH).

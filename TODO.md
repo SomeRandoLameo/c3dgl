@@ -33,10 +33,10 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 ## Vertex Buffer Objects (ES)
 
-* [ ] `glGenBuffers`, `glDeleteBuffers`, `glBindBuffer`, `glIsBuffer`
-* [ ] `glBufferData`, `glBufferSubData`
-* [ ] `glGetBufferParameteriv`
-* [ ] Buffer offsets in `gl*Pointer` and `glDrawElements`
+* [x] `glGenBuffers`, `glDeleteBuffers`, `glBindBuffer`, `glIsBuffer`
+* [x] `glBufferData`, `glBufferSubData` (buffers live in normal memory; vertices are converted per frame anyway)
+* [x] `glGetBufferParameteriv`, buffer binding queries
+* [x] Buffer offsets in `gl*Pointer`, `glInterleavedArrays` and `glDrawElements`; out-of-range reads are skipped
 
 ## Transform / Matrix
 
@@ -160,8 +160,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 * [x] `glGetBooleanv`, `glGetIntegerv`, `glGetFloatv`, `glGetDoublev` (GL) for the implemented state
 * [x] `glGetError`, `glGetString`, `glIsEnabled`, `glIsTexture`
-* [x] `glGetFixedv` (ES), `glGetPointerv`
-* [ ] `glGetTexEnv*`, `glGetTexParameter*`, `glGetLight*`, `glGetMaterial*`, `glGetClipPlane*`, `glGetBufferParameteriv` (ES)
+* [x] `glGetFixedv` (ES), `glGetPointerv`, `glGetBufferParameteriv` (ES)
+* [ ] `glGetTexEnv*`, `glGetTexParameter*`, `glGetLight*`, `glGetMaterial*`, `glGetClipPlane*`
 * [ ] `GL_EXTENSIONS` lists nothing yet (ES 1.1 requires the point sprite / point size array / paletted texture names)
 * [~] `glHint` — accepted, hints have no effect (allowed by the spec)
 
@@ -199,10 +199,10 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [ ] Mipmapping (+ GL_GENERATE_MIPMAP) [ ] Evaluators (GL)
 [ ] Clip planes                       [ ] Feedback / selection (GL)
 [ ] Multitexturing + GL_COMBINE (ES)  [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
-[ ] VBOs (ES)                         [ ] Accumulation buffer (GL)
+[ ] glReadPixels, texture copies      [ ] Accumulation buffer (GL)
 [ ] Point parameters + sprites (ES)   [ ] 1D textures, texgen (GL)
 [ ] Logic op, sample coverage         [ ] Stipple (GL)
-[ ] glReadPixels, texture copies      [ ] Smooth points/lines
+[ ] Smooth points/lines
 [ ] Compressed / paletted textures    [ ] Complete state queries
 ```
 
@@ -216,4 +216,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Texture environment               [x] Pixel store, proxy textures
 [x] Blending                          [x] Error handling, state queries
 [x] GLU (Mesa)                       [x] ES fixed-point API (implemented features)
+[x] VBOs (ES)
 ```

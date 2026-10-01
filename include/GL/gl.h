@@ -36,6 +36,8 @@ typedef float           GLfloat;
 typedef float           GLclampf;
 typedef double          GLdouble;
 typedef double          GLclampd;
+typedef long            GLintptr;       // Buffer offsets and sizes (pointer sized)
+typedef long            GLsizeiptr;
 typedef int             GLfixed;        // OpenGL ES 16.16 fixed point
 typedef int             GLclampx;
 typedef void            GLvoid;
@@ -185,6 +187,28 @@ typedef void            GLvoid;
 #define GL_COLOR_ARRAY_POINTER              0x8090
 #define GL_TEXTURE_COORD_ARRAY_POINTER      0x8092
 #define GL_EDGE_FLAG_ARRAY_POINTER          0x8093
+
+// Buffer objects (ES 1.1, GL 1.5)
+#define GL_ARRAY_BUFFER                     0x8892
+#define GL_ELEMENT_ARRAY_BUFFER             0x8893
+#define GL_ARRAY_BUFFER_BINDING             0x8894
+#define GL_ELEMENT_ARRAY_BUFFER_BINDING     0x8895
+#define GL_VERTEX_ARRAY_BUFFER_BINDING      0x8896
+#define GL_NORMAL_ARRAY_BUFFER_BINDING      0x8897
+#define GL_COLOR_ARRAY_BUFFER_BINDING       0x8898
+#define GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING 0x889A
+#define GL_EDGE_FLAG_ARRAY_BUFFER_BINDING   0x889B
+#define GL_STREAM_DRAW                      0x88E0
+#define GL_STREAM_READ                      0x88E1
+#define GL_STREAM_COPY                      0x88E2
+#define GL_STATIC_DRAW                      0x88E4
+#define GL_STATIC_READ                      0x88E5
+#define GL_STATIC_COPY                      0x88E6
+#define GL_DYNAMIC_DRAW                     0x88E8
+#define GL_DYNAMIC_READ                     0x88E9
+#define GL_DYNAMIC_COPY                     0x88EA
+#define GL_BUFFER_SIZE                      0x8764
+#define GL_BUFFER_USAGE                     0x8765
 
 // glInterleavedArrays formats
 #define GL_V2F                              0x2A20
@@ -579,6 +603,16 @@ void glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *point
 void glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer);
 void glArrayElement(GLint i);
 void glGetPointerv(GLenum pname, GLvoid **params);
+
+// Buffer objects (ES 1.1). With a buffer bound to GL_ARRAY_BUFFER, gl*Pointer takes an offset into it; with one
+// bound to GL_ELEMENT_ARRAY_BUFFER, glDrawElements takes an offset for the indices
+void glGenBuffers(GLsizei n, GLuint *buffers);
+void glDeleteBuffers(GLsizei n, const GLuint *buffers);
+void glBindBuffer(GLenum target, GLuint buffer);
+GLboolean glIsBuffer(GLuint buffer);
+void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage);
+void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid *data);
+void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params);
 void glDrawArrays(GLenum mode, GLint first, GLsizei count);
 void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices);
 

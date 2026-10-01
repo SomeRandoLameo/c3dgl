@@ -262,6 +262,56 @@ static void testArraysAndEs(void)
     glTexEnvx(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 }
 
+static void testBuffers(void)
+{
+    GLuint ids[2] = {0, 0};
+    glGenBuffers(2, ids);
+    CHECK(ids[0] != 0 && ids[1] != 0 && ids[0] != ids[1]);
+    CHECK(glIsBuffer(ids[0]) && !glIsBuffer(0));
+
+    // Data, sub data, parameters
+    const GLubyte bytes[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    glBindBuffer(GL_ARRAY_BUFFER, ids[0]);
+    glBufferData(GL_ARRAY_BUFFER, 8, bytes, GL_DYNAMIC_DRAW);
+    GLint v = 0;
+    glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &v);
+    CHECK(v == 8);
+    glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_USAGE, &v);
+    CHECK(v == GL_DYNAMIC_DRAW);
+    glBufferSubData(GL_ARRAY_BUFFER, 6, 4, bytes);
+    CHECK(glGetError() == GL_INVALID_VALUE);    // Beyond the end
+    glBufferData(GL_ARRAY_BUFFER, 8, bytes, 0x1234);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &v);
+    CHECK(v == (GLint)ids[0]);
+
+    // Arrays remember the buffer bound when their pointer was set; the pointer is an offset
+    glVertexPointer(2, GL_SHORT, 0, (const GLvoid *)4);
+    glGetIntegerv(GL_VERTEX_ARRAY_BUFFER_BINDING, &v);
+    CHECK(v == (GLint)ids[0]);
+    GLvoid *ptr = NULL;
+    glGetPointerv(GL_VERTEX_ARRAY_POINTER, &ptr);
+    CHECK(ptr == (GLvoid *)4);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glGetIntegerv(GL_VERTEX_ARRAY_BUFFER_BINDING, &v);
+    CHECK(v == (GLint)ids[0]);                  // Unchanged by rebinding
+
+    // Deleting unbinds everywhere
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ids[0]);
+    glDeleteBuffers(2, ids);
+    CHECK(!glIsBuffer(ids[0]));
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &v);
+    CHECK(v == 0);
+    glGetIntegerv(GL_VERTEX_ARRAY_BUFFER_BINDING, &v);
+    CHECK(v == 0);
+
+    // Errors without a bound buffer, wrong target
+    glBufferData(GL_ARRAY_BUFFER, 4, bytes, GL_STATIC_DRAW);
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    glBindBuffer(0x1234, 1);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+}
+
 // Four white 60x60 squares with different vertex calls, pixel coordinates y down
 static void drawSquares(void)
 {
@@ -270,6 +320,7 @@ static void drawSquares(void)
     glOrtho(0.0, 400.0, 240.0, 0.0, -1.0, 1.0);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
+    glTranslatef(0, -35, 0);                    // Row 1 at y = 15..75
     glColor3ub(255, 255, 255);
 
     glRectf(30.0f, 50.0f, 90.0f, 110.0f);
@@ -292,6 +343,8 @@ static void drawSquares(void)
 // type. A wrong normalization shows as a different color (white/yellow), a wrong position type as a misplaced square
 static void drawArraySquares(void)
 {
+    glLoadIdentity();
+    glTranslatef(0, -80, 0);                    // Row 2 at y = 90..150
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_COLOR_ARRAY);
 
@@ -341,6 +394,81 @@ static void drawArraySquares(void)
     glColor3ub(255, 255, 255);
 }
 
+// Third row (y = 165..225): four CYAN squares from buffer objects
+typedef struct { GLshort pos[2]; GLubyte color[4]; } VboVertex;
+static GLuint vbo, ibo, vboColors;
+
+static void createBuffers(void)
+{
+    // Interleaved positions and colors of all four squares, 4 corners each
+    VboVertex vertices[16];
+    static const GLshort columns[4] = {30, 125, 215, 310};     // Same as the rows above
+    for (int q = 0; q < 4; q++) {
+        const GLshort x = columns[q], y = 165;
+        const GLshort corners[4][2] = {{x, y}, {(GLshort)(x + 60), y}, {(GLshort)(x + 60), y + 60}, {x, y + 60}};
+        for (int c = 0; c < 4; c++) {
+            VboVertex *v = &vertices[q * 4 + c];
+            v->pos[0] = corners[c][0];
+            v->pos[1] = corners[c][1];
+            v->color[0] = 0; v->color[1] = 230; v->color[2] = 230; v->color[3] = 255;
+        }
+    }
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    // Indices for square 2 (two triangles), at an offset of 4 bytes in the element buffer
+    const GLushort indices[8] = {0xDEAD, 0xBEEF, 4, 5, 6, 4, 6, 7};
+    glGenBuffers(1, &ibo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+    // Separate color buffer, rewritten every frame with glBufferSubData (square 3)
+    glGenBuffers(1, &vboColors);
+    glBindBuffer(GL_ARRAY_BUFFER, vboColors);
+    glBufferData(GL_ARRAY_BUFFER, 16 * 4, NULL, GL_DYNAMIC_DRAW);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+
+static void drawBufferSquares(void)
+{
+    glLoadIdentity();
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
+
+    // 1: glDrawArrays from the interleaved VBO
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glVertexPointer(2, GL_SHORT, sizeof(VboVertex), (const GLvoid *)0);
+    glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(VboVertex), (const GLvoid *)4);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+    // 2: glDrawElements with indices from the element buffer, at offset 4
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, (const GLvoid *)4);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+    // 3: positions from the VBO, colors from a buffer updated by glBufferSubData: cyan
+    GLubyte colors[16 * 4];
+    for (int i = 0; i < 16; i++) { colors[i * 4] = 0; colors[i * 4 + 1] = 230; colors[i * 4 + 2] = 230; colors[i * 4 + 3] = 255; }
+    glBindBuffer(GL_ARRAY_BUFFER, vboColors);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(colors), colors);
+    glColorPointer(4, GL_UNSIGNED_BYTE, 0, (const GLvoid *)0);
+    glDrawArrays(GL_TRIANGLE_FAN, 8, 4);
+
+    // 4: VBO positions mixed with a client-side color array (pointer set with no buffer bound)
+    static const GLubyte clientColors[16 * 4] = {
+        [48] = 0, 230, 230, 255, 0, 230, 230, 255, 0, 230, 230, 255, 0, 230, 230, 255 };
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glColorPointer(4, GL_UNSIGNED_BYTE, 0, clientColors);
+    glDrawArrays(GL_TRIANGLE_FAN, 12, 4);
+
+    glDisableClientState(GL_COLOR_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glColor3ub(255, 255, 255);
+}
+
 int main(void)
 {
     gfxInitDefault();
@@ -365,6 +493,8 @@ int main(void)
     testQueries();
     testMatrices();
     testArraysAndEs();
+    testBuffers();
+    createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 
     printf("\n%i/%i checks passed\n\n"
@@ -372,7 +502,8 @@ int main(void)
            "- GREEN background (all passed)\n"
            "- four identical white squares\n"
            "  in a row, below them four\n"
-           "  identical ORANGE squares\n\n"
+           "  identical ORANGE squares and\n"
+           "  four identical CYAN squares\n\n"
            "START: exit\n", checks - failures, checks);
 
     while (aptMainLoop()) {
@@ -384,6 +515,7 @@ int main(void)
         glClear(GL_COLOR_BUFFER_BIT);
         drawSquares();
         drawArraySquares();
+        drawBufferSquares();
         c3dglSwapBuffers();
     }
 

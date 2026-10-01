@@ -30,6 +30,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "c3dgl_vsh_shbin.h"
@@ -131,11 +132,20 @@ typedef struct {
 
 typedef struct {
     bool enabled;
-    const void *pointer;
+    const void *pointer;        // Offset into `buffer` if that is not 0
+    GLuint buffer;              // GL_ARRAY_BUFFER binding when the pointer was set
     GLint size;
     GLenum type;
     GLsizei stride;
 } ClientArray;
+
+// Buffer object (VBO). Kept in normal memory: vertices are converted into the per-frame vertex buffer anyway
+typedef struct {
+    bool used;                  // Id handed out by glGenBuffers or created by glBindBuffer
+    u8 *data;
+    GLsizeiptr size;
+    GLenum usage;
+} Buffer;
 
 enum { ARRAY_VERTEX, ARRAY_TEXCOORD, ARRAY_COLOR, ARRAY_NORMAL, ARRAY_EDGEFLAG, ARRAY_COUNT };
 
@@ -208,6 +218,9 @@ static struct {
     int primTotal;                      // Vertices submitted since glBegin/glDraw*
 
     ClientArray arrays[ARRAY_COUNT];
+    Buffer *buffers;                    // Index = buffer id, grows as needed (id 0 unused)
+    GLuint bufferCount;
+    GLuint arrayBuffer, elementArrayBuffer;     // Bindings
     Texture textures[C3DGL_MAX_TEXTURES];
 
     // Textures deleted during a frame are freed once the GPU is done with that frame
@@ -1149,6 +1162,8 @@ void c3dglClose(void)
     free(gl.polyVerts);
     free(gl.polyEdges);
     free(gl.polyPtrs);
+    for (GLuint i = 0; i < gl.bufferCount; i++) free(gl.buffers[i].data);
+    free(gl.buffers);
 
     if (gl.dvlb != NULL) { shaderProgramFree(&gl.program); DVLB_Free(gl.dvlb); }
     if (gl.vbo != NULL) linearFree(gl.vbo);
@@ -1394,6 +1409,13 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_TEXTURE_COORD_ARRAY_TYPE: v[0] = gl.arrays[ARRAY_TEXCOORD].type; return 1;
         case GL_TEXTURE_COORD_ARRAY_STRIDE: v[0] = gl.arrays[ARRAY_TEXCOORD].stride; return 1;
         case GL_EDGE_FLAG_ARRAY_STRIDE: v[0] = gl.arrays[ARRAY_EDGEFLAG].stride; return 1;
+        case GL_ARRAY_BUFFER_BINDING: v[0] = gl.arrayBuffer; return 1;
+        case GL_ELEMENT_ARRAY_BUFFER_BINDING: v[0] = gl.elementArrayBuffer; return 1;
+        case GL_VERTEX_ARRAY_BUFFER_BINDING: v[0] = gl.arrays[ARRAY_VERTEX].buffer; return 1;
+        case GL_NORMAL_ARRAY_BUFFER_BINDING: v[0] = gl.arrays[ARRAY_NORMAL].buffer; return 1;
+        case GL_COLOR_ARRAY_BUFFER_BINDING: v[0] = gl.arrays[ARRAY_COLOR].buffer; return 1;
+        case GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING: v[0] = gl.arrays[ARRAY_TEXCOORD].buffer; return 1;
+        case GL_EDGE_FLAG_ARRAY_BUFFER_BINDING: v[0] = gl.arrays[ARRAY_EDGEFLAG].buffer; return 1;
         case GL_CURRENT_NORMAL: for (int i = 0; i < 3; i++) v[i] = gl.currentNormal[i]; return 3;
 
         case GL_COLOR_CLEAR_VALUE:
@@ -2031,6 +2053,7 @@ static void setArray(int index, GLint size, GLenum type, GLsizei stride, const G
     if (!valid) { setError(GL_INVALID_ENUM); return; }
 
     gl.arrays[index].pointer = pointer;
+    gl.arrays[index].buffer = gl.arrayBuffer;
     gl.arrays[index].size = size;
     gl.arrays[index].type = type;
     gl.arrays[index].stride = stride;
@@ -2081,11 +2104,37 @@ void glGetPointerv(GLenum pname, GLvoid **params)
     }
 }
 
-// Components of element `index` as floats. normalized: integer types map to [0, 1] / [-1, 1] like glColor
-static void readArray(const ClientArray *a, int index, float out[4], bool normalized)
+// Data of `bytes` bytes at `offset` of a buffer object, or of client memory if buffer is 0.
+// NULL if it is outside the buffer (GL leaves that undefined; we skip the data instead of crashing)
+static const u8 *bufferRange(GLuint buffer, const void *pointer, size_t offset, size_t bytes)
+{
+    if (buffer == 0) return (const u8 *)pointer + offset;
+
+    const Buffer *b = &gl.buffers[buffer];
+    size_t start = (size_t)(uintptr_t)pointer + offset;
+    if ((b->data == NULL) || (start + bytes > (size_t)b->size))
+    {
+        WARN_ONCE("Buffer object %u read out of range, skipped\n", buffer);
+        return NULL;
+    }
+    return b->data + start;
+}
+
+// Address of element `index` of a client array (NULL if outside its buffer object)
+static const u8 *arrayElement(const ClientArray *a, int index)
 {
     int size = typeSize(a->type);
-    const u8 *p = (const u8 *)a->pointer + (size_t)index*(a->stride? a->stride : a->size*size);
+    size_t stride = a->stride? (size_t)a->stride : (size_t)(a->size*size);
+    return bufferRange(a->buffer, a->pointer, (size_t)index*stride, (size_t)(a->size*size));
+}
+
+// Components of element `index` as floats. normalized: integer types map to [0, 1] / [-1, 1] like glColor.
+// False if the element is outside its buffer object
+static bool readArray(const ClientArray *a, int index, float out[4], bool normalized)
+{
+    int size = typeSize(a->type);
+    const u8 *p = arrayElement(a, index);
+    if (p == NULL) return false;
 
     for (int i = 0; i < a->size; i++, p += size)
     {
@@ -2102,11 +2151,13 @@ static void readArray(const ClientArray *a, int index, float out[4], bool normal
             default: memcpy(&out[i], p, 4); break;     // GL_FLOAT
         }
     }
+    return true;
 }
 
+// Enabled and set; with a buffer object the pointer is an offset and may be 0
 static bool arrayActive(int index)
 {
-    return gl.arrays[index].enabled && (gl.arrays[index].pointer != NULL);
+    return gl.arrays[index].enabled && ((gl.arrays[index].pointer != NULL) || (gl.arrays[index].buffer != 0));
 }
 
 // Vertex `index` from the enabled arrays; attributes without an array come from the current values.
@@ -2119,7 +2170,7 @@ static void submitArrayVertex(int index)
     if (arrayActive(ARRAY_TEXCOORD))
     {
         float t[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-        readArray(&gl.arrays[ARRAY_TEXCOORD], index, t, false);
+        if (!readArray(&gl.arrays[ARRAY_TEXCOORD], index, t, false)) return;
         v.tex[0] = t[0];
         v.tex[1] = t[1];
         v.tex[2] = t[3];
@@ -2127,17 +2178,21 @@ static void submitArrayVertex(int index)
     if (arrayActive(ARRAY_COLOR))
     {
         float c[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-        readArray(&gl.arrays[ARRAY_COLOR], index, c, true);
+        if (!readArray(&gl.arrays[ARRAY_COLOR], index, c, true)) return;
         for (int i = 0; i < 4; i++) v.color[i] = colorByte(c[i]);
     }
     if (arrayActive(ARRAY_NORMAL))
     {
         float n[4];
-        readArray(&gl.arrays[ARRAY_NORMAL], index, n, true);
+        if (!readArray(&gl.arrays[ARRAY_NORMAL], index, n, true)) return;
         memcpy(gl.currentNormal, n, sizeof(gl.currentNormal));
     }
-    if (arrayActive(ARRAY_EDGEFLAG)) edge = *((const u8 *)gl.arrays[ARRAY_EDGEFLAG].pointer +
-                                              (size_t)index*(gl.arrays[ARRAY_EDGEFLAG].stride? gl.arrays[ARRAY_EDGEFLAG].stride : 1)) != 0;
+    if (arrayActive(ARRAY_EDGEFLAG))
+    {
+        const u8 *e = arrayElement(&gl.arrays[ARRAY_EDGEFLAG], index);
+        if (e == NULL) return;
+        edge = (*e != 0);
+    }
 
     if (!arrayActive(ARRAY_VERTEX))
     {
@@ -2150,7 +2205,7 @@ static void submitArrayVertex(int index)
     }
 
     float p[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-    readArray(&gl.arrays[ARRAY_VERTEX], index, p, false);
+    if (!readArray(&gl.arrays[ARRAY_VERTEX], index, p, false)) return;
     if (p[3] != 1.0f)
     {
         if (p[3] == 0.0f) { WARN_ONCE("Vertex array: w = 0 (point at infinity) not supported\n"); return; }
@@ -2239,17 +2294,167 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indic
 {
     if ((type != GL_UNSIGNED_BYTE) && (type != GL_UNSIGNED_SHORT) && (type != GL_UNSIGNED_INT)) { setError(GL_INVALID_ENUM); return; }
     if (count < 0) { setError(GL_INVALID_VALUE); return; }
-    if (!arraysReady() || !beginPrimitive(mode)) return;
+
+    // With an element array buffer bound, `indices` is an offset into it
+    int indexSize = typeSize(type);
+    const u8 *data = bufferRange(gl.elementArrayBuffer, indices, 0, (size_t)count*indexSize);
+    if ((data == NULL) || !arraysReady() || !beginPrimitive(mode)) return;
 
     for (int i = 0; i < count; i++)
     {
+        const u8 *p = data + (size_t)i*indexSize;
         int index = 0;
-        if (type == GL_UNSIGNED_SHORT) index = ((const GLushort *)indices)[i];
-        else if (type == GL_UNSIGNED_INT) index = (int)((const GLuint *)indices)[i];
-        else index = ((const GLubyte *)indices)[i];     // GL_UNSIGNED_BYTE, checked above
+        if (type == GL_UNSIGNED_SHORT) { GLushort v; memcpy(&v, p, 2); index = v; }
+        else if (type == GL_UNSIGNED_INT) { GLuint v; memcpy(&v, p, 4); index = (int)v; }
+        else index = *p;     // GL_UNSIGNED_BYTE, checked above
         submitArrayVertex(index);
     }
     endPrimitive();
+}
+
+//----------------------------------------------------------------------------------
+// OpenGL: buffer objects (ES 1.1, GL 1.5)
+//----------------------------------------------------------------------------------
+static bool bufferValid(GLuint id)
+{
+    return (id > 0) && (id < gl.bufferCount) && gl.buffers[id].used;
+}
+
+// Make room for ids up to `id` (table grows, there is no fixed limit)
+static bool reserveBufferId(GLuint id)
+{
+    if (id < gl.bufferCount) return true;
+
+    GLuint count = gl.bufferCount? gl.bufferCount : 16;
+    while (count <= id) count *= 2;
+    Buffer *table = realloc(gl.buffers, count*sizeof(Buffer));
+    if (table == NULL) { setError(GL_OUT_OF_MEMORY); return false; }
+    memset(table + gl.bufferCount, 0, (count - gl.bufferCount)*sizeof(Buffer));
+    gl.buffers = table;
+    gl.bufferCount = count;
+    return true;
+}
+
+void glGenBuffers(GLsizei n, GLuint *buffers)
+{
+    if (n < 0) { setError(GL_INVALID_VALUE); return; }
+
+    GLuint id = 1;
+    for (int i = 0; i < n; i++)
+    {
+        while ((id < gl.bufferCount) && gl.buffers[id].used) id++;
+        if (!reserveBufferId(id)) return;
+        memset(&gl.buffers[id], 0, sizeof(Buffer));
+        gl.buffers[id].used = true;
+        gl.buffers[id].usage = GL_STATIC_DRAW;
+        buffers[i] = id++;
+    }
+}
+
+void glDeleteBuffers(GLsizei n, const GLuint *buffers)
+{
+    if (n < 0) { setError(GL_INVALID_VALUE); return; }
+
+    for (int i = 0; i < n; i++)
+    {
+        GLuint id = buffers[i];
+        if (!bufferValid(id)) continue;
+
+        // Bindings to the deleted buffer revert to 0; arrays sourcing from it are cleared (their pointer is an offset)
+        if (gl.arrayBuffer == id) gl.arrayBuffer = 0;
+        if (gl.elementArrayBuffer == id) gl.elementArrayBuffer = 0;
+        for (int a = 0; a < ARRAY_COUNT; a++)
+        {
+            if (gl.arrays[a].buffer != id) continue;
+            gl.arrays[a].buffer = 0;
+            gl.arrays[a].pointer = NULL;
+        }
+
+        free(gl.buffers[id].data);
+        memset(&gl.buffers[id], 0, sizeof(Buffer));
+    }
+}
+
+GLboolean glIsBuffer(GLuint buffer) { return bufferValid(buffer); }
+
+static GLuint *bufferBinding(GLenum target)
+{
+    switch (target)
+    {
+        case GL_ARRAY_BUFFER: return &gl.arrayBuffer;
+        case GL_ELEMENT_ARRAY_BUFFER: return &gl.elementArrayBuffer;
+        default: setError(GL_INVALID_ENUM); return NULL;
+    }
+}
+
+void glBindBuffer(GLenum target, GLuint buffer)
+{
+    GLuint *binding = bufferBinding(target);
+    if (binding == NULL) return;
+
+    // Binding an unused name creates the buffer (like glBindTexture)
+    if ((buffer != 0) && !bufferValid(buffer))
+    {
+        if (!reserveBufferId(buffer)) return;
+        memset(&gl.buffers[buffer], 0, sizeof(Buffer));
+        gl.buffers[buffer].used = true;
+        gl.buffers[buffer].usage = GL_STATIC_DRAW;
+    }
+    *binding = buffer;
+}
+
+static bool bufferUsageValid(GLenum usage)
+{
+    // ES 1.1: STATIC_DRAW, DYNAMIC_DRAW; GL 1.5 adds the STREAM and READ/COPY variants
+    return (usage >= GL_STREAM_DRAW) && (usage <= GL_DYNAMIC_COPY) && (usage != 0x88E3) && (usage != 0x88E7);
+}
+
+void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage)
+{
+    GLuint *binding = bufferBinding(target);
+    if (binding == NULL) return;
+    if (!bufferUsageValid(usage)) { setError(GL_INVALID_ENUM); return; }
+    if (size < 0) { setError(GL_INVALID_VALUE); return; }
+    if (*binding == 0) { setError(GL_INVALID_OPERATION); return; }
+
+    Buffer *b = &gl.buffers[*binding];
+    u8 *storage = NULL;
+    if (size > 0)
+    {
+        storage = malloc((size_t)size);
+        if (storage == NULL) { setError(GL_OUT_OF_MEMORY); return; }
+        if (data != NULL) memcpy(storage, data, (size_t)size);
+    }
+    free(b->data);
+    b->data = storage;
+    b->size = size;
+    b->usage = usage;
+}
+
+void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid *data)
+{
+    GLuint *binding = bufferBinding(target);
+    if (binding == NULL) return;
+    if (*binding == 0) { setError(GL_INVALID_OPERATION); return; }
+
+    Buffer *b = &gl.buffers[*binding];
+    if ((offset < 0) || (size < 0) || (offset + size > b->size)) { setError(GL_INVALID_VALUE); return; }
+    if (size > 0) memcpy(b->data + offset, data, (size_t)size);
+}
+
+void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params)
+{
+    GLuint *binding = bufferBinding(target);
+    if (binding == NULL) return;
+    if (*binding == 0) { setError(GL_INVALID_OPERATION); return; }
+
+    const Buffer *b = &gl.buffers[*binding];
+    switch (pname)
+    {
+        case GL_BUFFER_SIZE: *params = (GLint)b->size; break;
+        case GL_BUFFER_USAGE: *params = (GLint)b->usage; break;
+        default: setError(GL_INVALID_ENUM); break;
+    }
 }
 
 //----------------------------------------------------------------------------------

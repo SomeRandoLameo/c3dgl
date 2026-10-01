@@ -85,7 +85,7 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `cube`: 3D, depth test, culling, textures (NPOT and PNG), scissor, sub-viewports
 - `primitives`: every primitive mode with culling on to catch wrong winding; page 2: flat shading, polygon modes,
   edge flags, polygon offset, depth range
-- `api` (C): self-check of queries, errors, entry point variants, array types and the ES API; green screen = all passed
+- `api` (C): self-check of queries, errors, entry point variants, array types, VBOs and the ES API; green screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types)
 - `fragment`: per-fragment operations (alpha test, texture environment, stencil, `glClear`); A switches pages
@@ -108,6 +108,8 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - `glBegin`/`glEnd` and client arrays (`glDrawArrays`, `glDrawElements`, `glArrayElement`, `glInterleavedArrays`)
   with every primitive: points, lines, line strips/loops, triangles, triangle strips/fans, quads, quad strips and
   convex polygons; arrays of every GL 1.1 / ES 1.1 type (`GL_BYTE` ... `GL_DOUBLE`, `GL_FIXED`)
+- Buffer objects (VBOs): `glGenBuffers`, `glBindBuffer`, `glBufferData`, `glBufferSubData`, ... for vertex arrays and
+  indices
 - OpenGL ES 1.1 API: `<GLES/gl.h>`, the fixed-point `x` functions and `glOrthof`/`glFrustumf`/... for everything
   implemented
 - Modelview/projection/texture matrix stacks (projective texture matrices included), `glOrtho`, `glFrustum`,
