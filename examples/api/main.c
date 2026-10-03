@@ -756,6 +756,148 @@ static void testCompressed(void)
     glDeleteTextures(1, &tex);
 }
 
+// Expected result of a GL logic op on one byte
+static GLubyte logicOpResult(GLenum op, GLubyte s, GLubyte d)
+{
+    switch (op)
+    {
+        case GL_CLEAR: return 0;
+        case GL_AND: return s & d;
+        case GL_AND_REVERSE: return s & ~d;
+        case GL_COPY: return s;
+        case GL_AND_INVERTED: return ~s & d;
+        case GL_NOOP: return d;
+        case GL_XOR: return s ^ d;
+        case GL_OR: return s | d;
+        case GL_NOR: return ~(s | d);
+        case GL_EQUIV: return ~(s ^ d);
+        case GL_INVERT: return ~d;
+        case GL_OR_REVERSE: return s | ~d;
+        case GL_COPY_INVERTED: return ~s;
+        case GL_OR_INVERTED: return ~s | d;
+        case GL_NAND: return ~(s & d);
+        default: return 0xFF;      // GL_SET
+    }
+}
+
+// glLogicOp: all 16 ops on RGBA read back with glReadPixels, precedence over blending, clears unaffected, queries,
+// attribute groups. Multisampling state (no sample buffers: stored only, drawing unchanged). Leaves a frame in progress
+static void testLogicOpAndMultisample(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, 400.0, 0.0, 240.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    GLint v = 0;
+    CHECK(!glIsEnabled(GL_COLOR_LOGIC_OP) && !glIsEnabled(GL_INDEX_LOGIC_OP));
+    glGetIntegerv(GL_LOGIC_OP_MODE, &v);
+    CHECK(v == GL_COPY);
+
+    // Destination 0x5A 0xA5 0x0F 0xF0, source 0x33 0x55 0xFF 0x00 (the clear quad, if any, ignores the logic op)
+    const GLubyte dst[4] = { 0x5A, 0xA5, 0x0F, 0xF0 }, src[4] = { 0x33, 0x55, 0xFF, 0x00 };
+    glEnable(GL_COLOR_LOGIC_OP);
+    glLogicOp(GL_SET);
+    glClearColor(dst[0]/255.0f, dst[1]/255.0f, dst[2]/255.0f, dst[3]/255.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_BLEND);                         // Ignored while the logic op is on
+    glBlendFunc(GL_ZERO, GL_ONE);
+    glColor4ub(src[0], src[1], src[2], src[3]);
+    for (int i = 0; i < 16; i++)
+    {
+        glLogicOp(GL_CLEAR + i);
+        glRecti(4*i, 0, 4*i + 4, 4);
+    }
+    CHECK(glGetError() == GL_NO_ERROR);
+    GLubyte p[4];
+    int failed = 0;
+    for (int i = 0; i < 16; i++)
+    {
+        GLubyte px[4];
+        glReadPixels(4*i + 2, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        bool ok = true;
+        for (int c = 0; c < 4; c++) ok = ok && (px[c] == logicOpResult(GL_CLEAR + i, src[c], dst[c]));
+        failed += !ok;
+        CHECK(ok);
+    }
+    // Azahar's hardware renderers on macOS (Vulkan/MoltenVK, OpenGL) skip logic ops; the software renderer has them
+    if (failed) printf("%i logic ops wrong: Azahar on macOS needs\nthe software renderer for them\n", failed);
+
+    // Disabled: blending is back (GL_ZERO, GL_ONE keeps the destination)
+    glDisable(GL_COLOR_LOGIC_OP);
+    glRecti(100, 0, 104, 4);
+    glReadPixels(102, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == dst[0] && p[1] == dst[1] && p[2] == dst[2] && p[3] == dst[3]);
+
+    // Errors, glGet, attribute groups (COLOR_BUFFER and ENABLE)
+    glLogicOp(GL_XOR);
+    glLogicOp(0x1234);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glGetIntegerv(GL_LOGIC_OP_MODE, &v);
+    CHECK(v == GL_XOR);
+    glPushAttrib(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_COLOR_LOGIC_OP);
+    glEnable(GL_INDEX_LOGIC_OP);                // Color index mode: stored only
+    glLogicOp(GL_NAND);
+    GLboolean b = GL_FALSE;
+    glGetBooleanv(GL_COLOR_LOGIC_OP, &b);
+    CHECK(b && glIsEnabled(GL_LOGIC_OP));
+    glPopAttrib();
+    glGetIntegerv(GL_LOGIC_OP_MODE, &v);
+    CHECK(v == GL_XOR && !glIsEnabled(GL_COLOR_LOGIC_OP) && !glIsEnabled(GL_INDEX_LOGIC_OP));
+    glPushAttrib(GL_ENABLE_BIT);
+    glEnable(GL_COLOR_LOGIC_OP);
+    glLogicOp(GL_NAND);
+    glPopAttrib();
+    glGetIntegerv(GL_LOGIC_OP_MODE, &v);
+    CHECK(!glIsEnabled(GL_COLOR_LOGIC_OP) && v == GL_NAND);
+
+    // Multisampling: defaults, no sample buffers
+    GLfloat f = 0.0f;
+    CHECK(glIsEnabled(GL_MULTISAMPLE) && !glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE) &&
+          !glIsEnabled(GL_SAMPLE_ALPHA_TO_ONE) && !glIsEnabled(GL_SAMPLE_COVERAGE));
+    glGetIntegerv(GL_SAMPLE_BUFFERS, &v);
+    CHECK(v == 0);
+    glGetIntegerv(GL_SAMPLES, &v);
+    CHECK(v == 0);
+    glGetFloatv(GL_SAMPLE_COVERAGE_VALUE, &f);
+    glGetBooleanv(GL_SAMPLE_COVERAGE_INVERT, &b);
+    CHECK(f == 1.0f && !b);
+    glSampleCoverage(0.25f, GL_TRUE);
+    glGetFloatv(GL_SAMPLE_COVERAGE_VALUE, &f);
+    glGetBooleanv(GL_SAMPLE_COVERAGE_INVERT, &b);
+    CHECK(f == 0.25f && b);
+    glSampleCoverage(2.0f, GL_FALSE);           // Clamped
+    glGetFloatv(GL_SAMPLE_COVERAGE_VALUE, &f);
+    CHECK(f == 1.0f);
+    glSampleCoveragex(0x8000, GL_FALSE);        // ES fixed point: 0.5
+    glGetFloatv(GL_SAMPLE_COVERAGE_VALUE, &f);
+    CHECK(f == 0.5f);
+
+    // Without sample buffers the sample operations do not change what is drawn
+    glPushAttrib(GL_MULTISAMPLE_BIT);
+    glEnable(GL_SAMPLE_ALPHA_TO_ONE);
+    glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    glEnable(GL_SAMPLE_COVERAGE);
+    glDisable(GL_MULTISAMPLE);
+    glSampleCoverage(0.0f, GL_FALSE);
+    glDisable(GL_BLEND);
+    glColor4ub(10, 20, 30, 40);
+    glRecti(110, 0, 114, 4);
+    glReadPixels(112, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 10 && p[1] == 20 && p[2] == 30 && p[3] == 40);
+    CHECK(glIsEnabled(GL_SAMPLE_ALPHA_TO_ONE) && !glIsEnabled(GL_MULTISAMPLE));
+    glPopAttrib();
+    glGetFloatv(GL_SAMPLE_COVERAGE_VALUE, &f);
+    CHECK(f == 0.5f && glIsEnabled(GL_MULTISAMPLE) && !glIsEnabled(GL_SAMPLE_ALPHA_TO_ONE) &&
+          !glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE) && !glIsEnabled(GL_SAMPLE_COVERAGE));
+    CHECK(glGetError() == GL_NO_ERROR);
+
+    glPopAttrib();
+}
+
 static void drawSquares(void)
 {
     glMatrixMode(GL_PROJECTION);
@@ -965,6 +1107,7 @@ int main(void)
     testCompressed();
     testReadPixels();
     testCopyTexImage();
+    testLogicOpAndMultisample();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

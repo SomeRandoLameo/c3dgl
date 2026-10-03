@@ -88,7 +88,8 @@ typedef void            GLvoid;
 #define GL_LIST_BIT                         0x00020000
 #define GL_TEXTURE_BIT                      0x00040000
 #define GL_SCISSOR_BIT                      0x00080000
-#define GL_ALL_ATTRIB_BITS                  0x000FFFFF
+#define GL_MULTISAMPLE_BIT                  0x20000000  // GL 1.3
+#define GL_ALL_ATTRIB_BITS                  0xFFFFFFFF
 #define GL_CLIENT_PIXEL_STORE_BIT           0x00000001
 #define GL_CLIENT_VERTEX_ARRAY_BIT          0x00000002
 #define GL_CLIENT_ALL_ATTRIB_BITS           0xFFFFFFFF
@@ -565,6 +566,42 @@ void glDepthRange(GLclampd zNear, GLclampd zFar);
 void glLineWidth(GLfloat width);
 void glPointSize(GLfloat size);
 
+// Logic operations (glEnable(GL_COLOR_LOGIC_OP)), done by PICA; while enabled, blending is off.
+// GL_INDEX_LOGIC_OP (GL_LOGIC_OP) belongs to color index mode: stored only
+#define GL_LOGIC_OP_MODE                    0x0BF0
+#define GL_INDEX_LOGIC_OP                   0x0BF1
+#define GL_LOGIC_OP                         0x0BF1
+#define GL_COLOR_LOGIC_OP                   0x0BF2
+#define GL_CLEAR                            0x1500
+#define GL_AND                              0x1501
+#define GL_AND_REVERSE                      0x1502
+#define GL_COPY                             0x1503
+#define GL_AND_INVERTED                     0x1504
+#define GL_NOOP                             0x1505
+// GL_INVERT (0x150A) is defined with the stencil operations
+#define GL_XOR                              0x1506
+#define GL_OR                               0x1507
+#define GL_NOR                              0x1508
+#define GL_EQUIV                            0x1509
+#define GL_OR_REVERSE                       0x150B
+#define GL_COPY_INVERTED                    0x150C
+#define GL_OR_INVERTED                      0x150D
+#define GL_NAND                             0x150E
+#define GL_SET                              0x150F
+void glLogicOp(GLenum opcode);
+
+// Multisampling (ES 1.1, GL 1.3): the framebuffer has no sample buffers (GL_SAMPLE_BUFFERS = 0), so as the spec
+// requires for that case, these capabilities and glSampleCoverage are stored and queried but have no effect
+#define GL_MULTISAMPLE                      0x809D
+#define GL_SAMPLE_ALPHA_TO_COVERAGE         0x809E
+#define GL_SAMPLE_ALPHA_TO_ONE              0x809F
+#define GL_SAMPLE_COVERAGE                  0x80A0
+#define GL_SAMPLE_BUFFERS                   0x80A8
+#define GL_SAMPLES                          0x80A9
+#define GL_SAMPLE_COVERAGE_VALUE            0x80AA
+#define GL_SAMPLE_COVERAGE_INVERT           0x80AB
+void glSampleCoverage(GLclampf value, GLboolean invert);
+
 // Point parameters (GL 1.4, ES 1.1): size attenuation by eye distance, clamped to GL_POINT_SIZE_MIN/MAX
 #define GL_POINT_SIZE_MIN                   0x8126
 #define GL_POINT_SIZE_MAX                   0x8127
@@ -937,6 +974,7 @@ void glMultMatrixx(const GLfixed *m);
 void glNormal3x(GLfixed nx, GLfixed ny, GLfixed nz);
 void glOrthox(GLfixed left, GLfixed right, GLfixed bottom, GLfixed top, GLfixed zNear, GLfixed zFar);
 void glPointSizex(GLfixed size);
+void glSampleCoveragex(GLclampx value, GLboolean invert);
 void glPointParameterx(GLenum pname, GLfixed param);
 void glPointParameterxv(GLenum pname, const GLfixed *params);
 void glPolygonOffsetx(GLfixed factor, GLfixed units);

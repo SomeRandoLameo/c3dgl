@@ -187,6 +187,8 @@ typedef struct {
     bool texQ;                  // Unit 0 texcoords with q != 1 were used (projection mode), only when textured
     bool blend;
     GLenum blendSrc, blendDst;
+    bool logicOp;               // GL_COLOR_LOGIC_OP, replaces blending
+    GLenum logicOpMode;
     bool depthTest, depthMask;
     GLenum depthFunc;
     float depthNear, depthFar;  // glDepthRange
@@ -280,6 +282,8 @@ static struct {
     bool stencilUsed;                   // GL_STENCIL_TEST was enabled once: glClear must preserve stencil values
     GLenum error;                       // First error since the last glGetError()
     u32 ignoredCaps;                    // Capabilities accepted but not implemented, see ignoredCapBit()
+    float sampleCoverage;               // glSampleCoverage (no effect without sample buffers)
+    bool sampleCoverageInvert;
     GLenum shadeModel;
     float currentNormal[3];
     float currentTexR[C3DGL_TEXTURE_UNITS];     // r of the current texcoords, only for glGet
@@ -500,6 +504,18 @@ static const Mat4 *projectionModelview(void)
 //----------------------------------------------------------------------------------
 // GL -> PICA enum mapping
 //----------------------------------------------------------------------------------
+// GL_CLEAR + n -> PICA logic op
+static GPU_LOGICOP logicOp(GLenum op)
+{
+    static const GPU_LOGICOP ops[16] = {
+        GPU_LOGICOP_CLEAR, GPU_LOGICOP_AND, GPU_LOGICOP_AND_REVERSE, GPU_LOGICOP_COPY,
+        GPU_LOGICOP_AND_INVERTED, GPU_LOGICOP_NOOP, GPU_LOGICOP_XOR, GPU_LOGICOP_OR,
+        GPU_LOGICOP_NOR, GPU_LOGICOP_EQUIV, GPU_LOGICOP_INVERT, GPU_LOGICOP_OR_REVERSE,
+        GPU_LOGICOP_COPY_INVERTED, GPU_LOGICOP_OR_INVERTED, GPU_LOGICOP_NAND, GPU_LOGICOP_SET,
+    };
+    return ops[(op - GL_CLEAR) & 15];
+}
+
 static GPU_BLENDFACTOR blendFactor(GLenum f)
 {
     switch (f)
@@ -961,9 +977,11 @@ static void applyState(const DrawState *s, const DrawState *prev)
         else C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0x00);
     }
 
-    if (CHANGED(blend) || CHANGED(blendSrc) || CHANGED(blendDst))
+    // PICA does either blending or a logic op; prepareDraw() zeroes the fields of the one not in use
+    if (CHANGED(blend) || CHANGED(blendSrc) || CHANGED(blendDst) || CHANGED(logicOp) || CHANGED(logicOpMode))
     {
-        if (s->blend)
+        if (s->logicOp) C3D_ColorLogicOp(logicOp(s->logicOpMode));
+        else if (s->blend)
         {
             GPU_BLENDFACTOR src = blendFactor(s->blendSrc), dst = blendFactor(s->blendDst);
             C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, src, dst, src, dst);
@@ -1092,6 +1110,8 @@ static void prepareDraw(bool clipSpace, bool points)
         key.fogEnd = gl.fogEnd;
         key.fogColor = colorByte(gl.fogColor[0]) | (colorByte(gl.fogColor[1]) << 8) | (colorByte(gl.fogColor[2]) << 16);
     }
+    if (key.logicOp) { key.blend = false; key.blendSrc = key.blendDst = 0; }
+    else key.logicOpMode = 0;
     if (!key.stencilTest)
     {
         key.stencilFunc = key.stencilFail = key.stencilDepthFail = key.stencilPass = 0;
@@ -1915,6 +1935,19 @@ static void submitLitVertex(Vertex *v, const float normal[3], bool edge)
     submitVertex(v, edge);
 }
 
+// Capabilities that programs commonly toggle but c3dgl does not implement or that have no effect on this
+// framebuffer (color index mode, no sample buffers): stored for glIsEnabled
+static const GLenum ignoredCaps[] = {
+    GL_DITHER, GL_LINE_SMOOTH, GL_POINT_SMOOTH, GL_POLYGON_SMOOTH, GL_INDEX_LOGIC_OP,
+    GL_MULTISAMPLE, GL_SAMPLE_ALPHA_TO_COVERAGE, GL_SAMPLE_ALPHA_TO_ONE, GL_SAMPLE_COVERAGE,
+};
+
+static int ignoredCapBit(GLenum cap)
+{
+    for (int i = 0; i < (int)(sizeof(ignoredCaps)/sizeof(ignoredCaps[0])); i++) if (ignoredCaps[i] == cap) return i;
+    return -1;
+}
+
 //----------------------------------------------------------------------------------
 // Platform API (c3dgl.h)
 //----------------------------------------------------------------------------------
@@ -1983,6 +2016,7 @@ bool c3dglInit(void)
     gl.state.viewport[3] = gl.state.scissorBox[3] = C3DGL_SCREEN_HEIGHT;
     gl.state.blendSrc = GL_ONE;
     gl.state.blendDst = GL_ZERO;
+    gl.state.logicOpMode = GL_COPY;
     gl.state.depthFunc = GL_LESS;
     gl.state.depthMask = true;
     gl.state.alphaFunc = GL_ALWAYS;
@@ -2022,7 +2056,8 @@ bool c3dglInit(void)
     initLighting();
     gl.fogMode = GL_EXP;
     gl.fogDensity = gl.fogEnd = 1.0f;
-    gl.ignoredCaps = 1u << 0;     // GL_DITHER is enabled by default
+    gl.ignoredCaps = (1u << ignoredCapBit(GL_DITHER)) | (1u << ignoredCapBit(GL_MULTISAMPLE));    // Enabled by default
+    gl.sampleCoverage = 1.0f;
     memset(gl.current.color, 255, 4);
     gl.current.tex[2] = 1.0f;
     gl.current.pointSize = -1.0f;   // No point size array: glPointSize
@@ -2115,18 +2150,6 @@ void c3dglSwapBuffers(void)
 //----------------------------------------------------------------------------------
 // OpenGL: state
 //----------------------------------------------------------------------------------
-// Capabilities that programs commonly toggle but c3dgl does not implement: stored for glIsEnabled,
-// enabling the ones that change the picture warns once
-static const GLenum ignoredCaps[] = {
-    GL_DITHER, GL_LINE_SMOOTH, GL_POINT_SMOOTH, GL_POLYGON_SMOOTH,
-};
-
-static int ignoredCapBit(GLenum cap)
-{
-    for (int i = 0; i < (int)(sizeof(ignoredCaps)/sizeof(ignoredCaps[0])); i++) if (ignoredCaps[i] == cap) return i;
-    return -1;
-}
-
 static void setCapability(GLenum cap, bool enable)
 {
     litStateChanged();          // Lights, GL_NORMALIZE, ...
@@ -2135,9 +2158,6 @@ static void setCapability(GLenum cap, bool enable)
     {
         if (enable) gl.ignoredCaps |= 1u << bit;
         else gl.ignoredCaps &= ~(1u << bit);
-
-        bool cosmetic = (cap == GL_DITHER) || (cap == GL_LINE_SMOOTH) || (cap == GL_POINT_SMOOTH) || (cap == GL_POLYGON_SMOOTH);
-        if (enable && !cosmetic) WARN_ONCE("glEnable: capability 0x%x not supported, ignored\n", cap);
         return;
     }
 
@@ -2145,6 +2165,7 @@ static void setCapability(GLenum cap, bool enable)
     {
         case GL_TEXTURE_2D: gl.texture2D[gl.activeTexture] = enable; break;
         case GL_BLEND: gl.state.blend = enable; break;
+        case GL_COLOR_LOGIC_OP: gl.state.logicOp = enable; break;
         case GL_DEPTH_TEST: gl.state.depthTest = enable; break;
         case GL_ALPHA_TEST: gl.state.alphaTest = enable; break;
         case GL_STENCIL_TEST:
@@ -2223,6 +2244,7 @@ GLboolean glIsEnabled(GLenum cap)
     {
         case GL_TEXTURE_2D: return gl.texture2D[gl.activeTexture];
         case GL_BLEND: return gl.state.blend;
+        case GL_COLOR_LOGIC_OP: return gl.state.logicOp;
         case GL_DEPTH_TEST: return gl.state.depthTest;
         case GL_ALPHA_TEST: return gl.state.alphaTest;
         case GL_STENCIL_TEST: return gl.state.stencilTest;
@@ -2407,6 +2429,10 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_DEPTH_FUNC: v[0] = gl.state.depthFunc; return 1;
         case GL_BLEND_SRC: v[0] = gl.state.blendSrc; return 1;
         case GL_BLEND_DST: v[0] = gl.state.blendDst; return 1;
+        case GL_LOGIC_OP_MODE: v[0] = gl.state.logicOpMode; return 1;
+        case GL_SAMPLE_COVERAGE_VALUE: v[0] = gl.sampleCoverage; return 1;
+        case GL_SAMPLE_COVERAGE_INVERT: v[0] = gl.sampleCoverageInvert; return 1;
+        case GL_SAMPLE_BUFFERS: case GL_SAMPLES: v[0] = 0; return 1;
         case GL_ALPHA_TEST_FUNC: v[0] = gl.state.alphaFunc; return 1;
         case GL_ALPHA_TEST_REF: v[0] = gl.state.alphaRef/255.0; *normalized = true; return 1;
         case GL_STENCIL_FUNC: v[0] = gl.state.stencilFunc; return 1;
@@ -2471,7 +2497,7 @@ static int getState(GLenum pname, double v[16], bool *normalized)
 
         default:
             // Capabilities can be queried with glGet too
-            if ((ignoredCapBit(pname) >= 0) || (pname == GL_TEXTURE_2D) || (pname == GL_BLEND) || (pname == GL_DEPTH_TEST) ||
+            if ((ignoredCapBit(pname) >= 0) || (pname == GL_TEXTURE_2D) || (pname == GL_BLEND) || (pname == GL_COLOR_LOGIC_OP) || (pname == GL_DEPTH_TEST) ||
                 (pname == GL_ALPHA_TEST) || (pname == GL_STENCIL_TEST) || (pname == GL_CULL_FACE) || (pname == GL_SCISSOR_TEST) ||
                 (pname == GL_VERTEX_ARRAY) || (pname == GL_TEXTURE_COORD_ARRAY) || (pname == GL_COLOR_ARRAY) || (pname == GL_NORMAL_ARRAY) ||
                 (pname == GL_EDGE_FLAG_ARRAY) || (pname == GL_POINT_SIZE_ARRAY_OES) || (pname == GL_POLYGON_OFFSET_FILL) || (pname == GL_POLYGON_OFFSET_LINE) ||
@@ -2679,6 +2705,18 @@ void glBlendFunc(GLenum sfactor, GLenum dfactor)
 {
     gl.state.blendSrc = sfactor;
     gl.state.blendDst = dfactor;
+}
+
+void glLogicOp(GLenum opcode)
+{
+    if ((opcode < GL_CLEAR) || (opcode > GL_SET)) { setError(GL_INVALID_ENUM); return; }
+    gl.state.logicOpMode = opcode;
+}
+
+void glSampleCoverage(GLclampf value, GLboolean invert)
+{
+    gl.sampleCoverage = (value < 0.0f)? 0.0f : (value > 1.0f)? 1.0f : value;
+    gl.sampleCoverageInvert = invert;
 }
 
 void glCullFace(GLenum mode) { gl.state.cullFace = mode; }
@@ -5251,6 +5289,8 @@ typedef struct {
     bool offsetFill, offsetLine, offsetPoint;
     float offsetFactor, offsetUnits;
     u32 ignoredCaps, clearColor;
+    float sampleCoverage;
+    bool sampleCoverageInvert;
     float clearDepth;
     u8 clearStencil;
     bool texture2D[C3DGL_TEXTURE_UNITS];
@@ -5316,6 +5356,8 @@ void glPushAttrib(GLbitfield mask)
     a->offsetFactor = gl.offsetFactor;
     a->offsetUnits = gl.offsetUnits;
     a->ignoredCaps = gl.ignoredCaps;
+    a->sampleCoverage = gl.sampleCoverage;
+    a->sampleCoverageInvert = gl.sampleCoverageInvert;
     a->clearColor = gl.clearColor;
     a->clearDepth = gl.clearDepth;
     a->clearStencil = gl.clearStencil;
@@ -5465,6 +5507,7 @@ void glPopAttrib(void)
     {
         st->alphaTest = sv->alphaTest;
         st->blend = sv->blend;
+        st->logicOp = sv->logicOp;
         st->cull = sv->cull;
         st->depthTest = sv->depthTest;
         st->scissor = sv->scissor;
@@ -5492,9 +5535,18 @@ void glPopAttrib(void)
         st->blend = sv->blend;
         st->blendSrc = sv->blendSrc;
         st->blendDst = sv->blendDst;
+        st->logicOp = sv->logicOp;
+        st->logicOpMode = sv->logicOpMode;
         st->colorMask = sv->colorMask;
         gl.clearColor = a->clearColor;
-        caps |= capBits((const GLenum[]){ GL_DITHER }, 1);
+        caps |= capBits((const GLenum[]){ GL_DITHER, GL_INDEX_LOGIC_OP }, 2);
+    }
+    if (mask & GL_MULTISAMPLE_BIT)
+    {
+        gl.sampleCoverage = a->sampleCoverage;
+        gl.sampleCoverageInvert = a->sampleCoverageInvert;
+        caps |= capBits((const GLenum[]){ GL_MULTISAMPLE, GL_SAMPLE_ALPHA_TO_COVERAGE, GL_SAMPLE_ALPHA_TO_ONE,
+                                          GL_SAMPLE_COVERAGE }, 4);
     }
     if (mask & GL_TEXTURE_BIT)
     {
@@ -5924,6 +5976,7 @@ void glDepthRangex(GLclampx zNear, GLclampx zFar) { glDepthRange(fixedToFloat(zN
 void glLineWidthx(GLfixed width) { glLineWidth(fixedToFloat(width)); }
 void glNormal3x(GLfixed nx, GLfixed ny, GLfixed nz) { glNormal3f(fixedToFloat(nx), fixedToFloat(ny), fixedToFloat(nz)); }
 void glPointSizex(GLfixed size) { glPointSize(fixedToFloat(size)); }
+void glSampleCoveragex(GLclampx value, GLboolean invert) { glSampleCoverage(fixedToFloat(value), invert); }
 void glPointParameterx(GLenum pname, GLfixed param) { glPointParameterf(pname, fixedToFloat(param)); }
 
 void glPointParameterxv(GLenum pname, const GLfixed *params)

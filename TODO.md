@@ -62,7 +62,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glLightx(v)`, `glLightModelx(v)`, `glMaterialx(v)`, `glGetLightxv`, `glGetMaterialxv`, `glMultiTexCoord4x`
 * [x] `glFogx(v)`, `glClipPlanex`, `glGetClipPlanex`
 * [x] `glPointParameterx(v)`
-* [ ] `x` entry points that come with their features: `glSampleCoveragex`
+* [x] `glSampleCoveragex`
 
 ## Lighting
 
@@ -145,8 +145,12 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] Stencil: `glStencilFunc`, `glStencilMask`, `glStencilOp`, `glClearStencil`, `GL_STENCIL_TEST`
 * [x] Scissor: `glScissor`, `GL_SCISSOR_TEST`
 * [x] Color mask: `glColorMask`, `GL_COLOR_WRITEMASK`
-* [ ] Logic operations: `glLogicOp`, `GL_COLOR_LOGIC_OP`
-* [ ] Multisampling: `glSampleCoverage`, `GL_MULTISAMPLE`, `GL_SAMPLE_ALPHA_TO_COVERAGE`, `GL_SAMPLE_ALPHA_TO_ONE` (ES)
+* [x] Logic operations: `glLogicOp` (all 16), `GL_COLOR_LOGIC_OP` on PICA's logic op unit (replaces blending while on,
+  clears are unaffected), `GL_LOGIC_OP_MODE`, in `GL_COLOR_BUFFER_BIT`/`GL_ENABLE_BIT`; `GL_INDEX_LOGIC_OP` (GL, color
+  index) stored only. Verified with Azahar's software renderer: its Vulkan and OpenGL renderers on macOS ignore logic ops
+* [x] Multisampling (ES; GL 1.3): `glSampleCoverage(x)`, `GL_MULTISAMPLE` (on by default), `GL_SAMPLE_ALPHA_TO_COVERAGE`,
+  `GL_SAMPLE_ALPHA_TO_ONE`, `GL_SAMPLE_COVERAGE`, their queries and `GL_MULTISAMPLE_BIT`. The framebuffer has no
+  sample buffers (`GL_SAMPLE_BUFFERS` = `GL_SAMPLES` = 0), so as the spec requires they have no effect
 * [~] `GL_DITHER` — accepted, no effect
 
 ## Rasterization
@@ -237,7 +241,6 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 ```text
 [ ] Lighting in the vertex shader     [ ] Display lists (GL)
-[ ] Logic op, sample coverage
 [ ] Smooth points/lines (GL)          [ ] Feedback / selection (GL)
                                       [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
                                       [ ] Accumulation buffer (GL)
@@ -261,4 +264,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Fog (PICA fog table)              [x] User clip planes (CPU)
 [x] Point parameters + sprites (ES) [x] Point size array (ES)
 [x] Compressed textures: paletted + ETC1 (ES) [x] Texture copies (glCopyTexImage2D)
+[x] Logic ops, sample coverage state
 ```

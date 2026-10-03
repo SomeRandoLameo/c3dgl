@@ -139,7 +139,7 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
   environment, texture matrix and texcoord array
 - Flat shading with GL's provoking vertices, `glPolygonMode` (fill/line/point per face, with edge flags),
   `glPolygonOffset` (including the slope factor) and `glDepthRange`
-- Blending (`glBlendFunc`), alpha test (`glAlphaFunc`), stencil (`glStencilFunc`/`Op`/`Mask`), depth
+- Blending (`glBlendFunc`), logic ops (`glLogicOp`, `GL_COLOR_LOGIC_OP`), alpha test (`glAlphaFunc`), stencil (`glStencilFunc`/`Op`/`Mask`), depth
   test/function/mask, color mask, face culling, scissor, viewport, line width, point size
 - Point parameters (`glPointParameter*`: size min/max, distance attenuation) and point sprites
   (`GL_POINT_SPRITE_OES`, `GL_COORD_REPLACE_OES` per texture unit), listed as `GL_OES_point_sprite`; the point size
@@ -158,6 +158,8 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - Fog: `GL_LINEAR`, `GL_EXP`, `GL_EXP2`, per pixel; `glFog*` and the fog queries
 - User clip planes: 6 (`glClipPlane`, ES `glClipPlanef/x`, `glGetClipPlane*`)
 - Dithering and smoothing can be enabled and queried but have no effect yet
+- Multisampling state (`glSampleCoverage`, `GL_MULTISAMPLE`, `GL_SAMPLE_ALPHA_TO_*`): stored and queried; there are no
+  sample buffers (`GL_SAMPLE_BUFFERS` = 0), so as the spec says it has no effect
 - `glReadPixels`: color in all GL 1.1 formats and types (plus the packed 16-bit ES types), depth and stencil;
   waits for the GPU to finish the draws so far
 - `glCopyTexImage2D` / `glCopyTexSubImage2D` (render to texture): internal formats alpha, luminance(-alpha), RGB, RGBA;

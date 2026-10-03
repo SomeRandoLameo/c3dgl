@@ -24,7 +24,7 @@
 //   - Compressed textures: paletted (GL_OES_compressed_paletted_texture, expanded on load) and ETC1 (native)
 //   - Attribute stacks (glPushAttrib, glPushClientAttrib)
 //   - Multitexturing: 3 units (glActiveTexture, glClientActiveTexture, glMultiTexCoord)
-//   - Blending, alpha test, stencil, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
+//   - Blending, logic ops, alpha test, stencil, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
 //   - Point parameters (size min/max, distance attenuation) and point sprites (GL_OES_point_sprite)
 //   - glClear of color/depth/stencil honors scissor and write masks
 //   - glGetError, glGet*v, glIsEnabled; common glVertex/glColor/glTexCoord/glRect/matrix variants
