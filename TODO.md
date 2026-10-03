@@ -213,7 +213,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 * [x] Top and bottom screen, `c3dglSetScreen`, `c3dglSwapBuffers`
 * [ ] Stereoscopic 3D (right eye, 3D slider)
-* [x] Examples show CPU/GPU time and command buffer usage (bottom screen rows 2-4)
+* [x] Examples show CPU/GPU time, command buffer usage and FPS (bottom screen rows 2-5)
 * [x] Resource use: only changed GPU state is sent per batch (command buffer about halved), one vertex cache flush per
   command list submission instead of one per batch, `glEvalMesh2` evaluates each grid point once
 * [ ] Real hardware verification (everything so far is verified in Azahar only)

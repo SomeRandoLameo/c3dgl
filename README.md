@@ -100,8 +100,9 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
   array, point sprites with `GL_COORD_REPLACE_OES` on one and two units, a particle field with per-particle sizes;
   self-checks of the point API on the bottom screen
 
-Every example shows the CPU and GPU time of the last frame and the command buffer usage in rows 2-4 of the bottom
-screen (`C3D_GetProcessingTime`, `C3D_GetDrawingTime`, `C3D_GetCmdBufUsage`).
+Every example shows the CPU and GPU time of the last frame, the command buffer usage and the frames per second
+(averaged over one second) in rows 2-5 of the bottom screen (`C3D_GetProcessingTime`, `C3D_GetDrawingTime`,
+`C3D_GetCmdBufUsage`, `osGetTime`).
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
 c3dgl itself does not.

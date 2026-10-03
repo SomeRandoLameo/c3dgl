@@ -691,11 +691,25 @@ static void drawBufferSquares(void)
 
 static void printStats(void)
 {
-    // Rows 2-4 of the console, timings of the last frame; the cursor stays where the text ended
+    // Rows 2-5 of the console: timings of the last frame, frames per second over the last second; the cursor stays
+    // where the text ended
     printf("\x1b[s");
     printf("\x1b[2;1HCPU:     %6.2fms\x1b[K", C3D_GetProcessingTime());
     printf("\x1b[3;1HGPU:     %6.2fms\x1b[K", C3D_GetDrawingTime());
     printf("\x1b[4;1HCmdBuf:  %6.2f%%\x1b[K", C3D_GetCmdBufUsage()*100.0f);
+    static u64 fpsStart;
+    static int fpsFrames;
+    static float fps;
+    const u64 now = osGetTime();
+    if (fpsStart == 0) fpsStart = now;
+    fpsFrames++;
+    if (now - fpsStart >= 1000)
+    {
+        fps = fpsFrames*1000.0f/(now - fpsStart);
+        fpsFrames = 0;
+        fpsStart = now;
+    }
+    printf("\x1b[5;1HFPS:     %6.2f\x1b[K", fps);
     printf("\x1b[u");
 }
 
