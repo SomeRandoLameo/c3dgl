@@ -81,6 +81,7 @@ typedef struct {
     float depthBias;            // Added to PICA NDC depth by the shader: polygon offset of filled polygons
     float texExtra[C3DGL_TEXTURE_UNITS - 1][3];     // Units 1, 2: s, t, q
     u8 backColor[4];            // Lit color of back faces (two-sided lighting only); not sent to the GPU
+    float pointSize;            // From the point size array (GL_OES_point_size_array), < 0: glPointSize; not sent
 } Vertex;
 
 #define GPU_VERTEX_SIZE     offsetof(Vertex, texExtra)
@@ -230,7 +231,7 @@ typedef struct {
     GLenum usage;
 } Buffer;
 
-enum { ARRAY_VERTEX, ARRAY_TEXCOORD0, ARRAY_TEXCOORD1, ARRAY_TEXCOORD2, ARRAY_COLOR, ARRAY_NORMAL, ARRAY_EDGEFLAG, ARRAY_COUNT };
+enum { ARRAY_VERTEX, ARRAY_TEXCOORD0, ARRAY_TEXCOORD1, ARRAY_TEXCOORD2, ARRAY_COLOR, ARRAY_NORMAL, ARRAY_EDGEFLAG, ARRAY_POINTSIZE, ARRAY_COUNT };
 
 // Texcoord array of the client active unit (glClientActiveTexture)
 #define ARRAY_TEXCOORD      (ARRAY_TEXCOORD0 + gl.clientActiveTexture)
@@ -1122,6 +1123,7 @@ static void lerpVertex(Vertex *out, const Vertex *a, const Vertex *b, float t)
         for (int i = 0; i < 3; i++) out->texExtra[u][i] = a->texExtra[u][i] + (b->texExtra[u][i] - a->texExtra[u][i])*t;
     for (int i = 0; i < 4; i++) out->color[i] = (u8)(a->color[i] + ((float)b->color[i] - a->color[i])*t);
     for (int i = 0; i < 4; i++) out->backColor[i] = (u8)(a->backColor[i] + ((float)b->backColor[i] - a->backColor[i])*t);
+    out->pointSize = a->pointSize + (b->pointSize - a->pointSize)*t;
 }
 
 //----------------------------------------------------------------------------------
@@ -1313,12 +1315,12 @@ static void emitLine(const Vertex *a, const Vertex *b, float zBias)
     emitExpandedQuad(&va, &vb, pa, pb, -dy*r/halfW, dx*r/halfH, dx*r/halfW, dy*r/halfH);
 }
 
-// Point size of v (glPointParameter, GL 1.4 / ES 1.1 3.3): glPointSize scaled by the distance attenuation
-// 1/sqrt(a + b*d + c*d^2) of the eye distance d, clamped to GL_POINT_SIZE_MIN/MAX. The fade threshold only applies
-// with multisampling, which PICA does not have
+// Point size of v (glPointParameter, GL 1.4 / ES 1.1 3.3): glPointSize or the point size array value, scaled by the
+// distance attenuation 1/sqrt(a + b*d + c*d^2) of the eye distance d, clamped to GL_POINT_SIZE_MIN/MAX. The fade
+// threshold only applies with multisampling, which PICA does not have
 static float pointSize(const Vertex *v)
 {
-    float size = gl.pointSize;
+    float size = (v->pointSize >= 0.0f)? v->pointSize : gl.pointSize;
     const float *att = gl.pointAttenuation;
     if ((att[0] != 1.0f) || (att[1] != 0.0f) || (att[2] != 0.0f))
     {
@@ -2007,11 +2009,12 @@ bool c3dglInit(void)
     gl.ignoredCaps = 1u << 0;     // GL_DITHER is enabled by default
     memset(gl.current.color, 255, 4);
     gl.current.tex[2] = 1.0f;
+    gl.current.pointSize = -1.0f;   // No point size array: glPointSize
 
     // Client array defaults: size 4 (3 for normals), GL_FLOAT
     for (int i = 0; i < ARRAY_COUNT; i++)
     {
-        gl.arrays[i].size = (i == ARRAY_NORMAL)? 3 : (i == ARRAY_EDGEFLAG)? 1 : 4;
+        gl.arrays[i].size = (i == ARRAY_NORMAL)? 3 : ((i == ARRAY_EDGEFLAG) || (i == ARRAY_POINTSIZE))? 1 : 4;
         gl.arrays[i].type = (i == ARRAY_EDGEFLAG)? GL_UNSIGNED_BYTE : GL_FLOAT;
     }
 
@@ -2187,6 +2190,7 @@ static void setClientState(GLenum array, bool enable)
         case GL_COLOR_ARRAY: gl.arrays[ARRAY_COLOR].enabled = enable; break;
         case GL_EDGE_FLAG_ARRAY: gl.arrays[ARRAY_EDGEFLAG].enabled = enable; break;
         case GL_NORMAL_ARRAY: gl.arrays[ARRAY_NORMAL].enabled = enable; break;
+        case GL_POINT_SIZE_ARRAY_OES: gl.arrays[ARRAY_POINTSIZE].enabled = enable; break;
         default: setError(GL_INVALID_ENUM); break;
     }
 }
@@ -2233,6 +2237,7 @@ GLboolean glIsEnabled(GLenum cap)
         case GL_COLOR_ARRAY: return gl.arrays[ARRAY_COLOR].enabled;
         case GL_EDGE_FLAG_ARRAY: return gl.arrays[ARRAY_EDGEFLAG].enabled;
         case GL_NORMAL_ARRAY: return gl.arrays[ARRAY_NORMAL].enabled;
+        case GL_POINT_SIZE_ARRAY_OES: return gl.arrays[ARRAY_POINTSIZE].enabled;
         case GL_POLYGON_OFFSET_FILL: return gl.offsetFill;
         case GL_POLYGON_OFFSET_LINE: return gl.offsetLine;
         case GL_POLYGON_OFFSET_POINT: return gl.offsetPoint;
@@ -2357,6 +2362,8 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_TEXTURE_COORD_ARRAY_TYPE: v[0] = gl.arrays[ARRAY_TEXCOORD].type; return 1;
         case GL_TEXTURE_COORD_ARRAY_STRIDE: v[0] = gl.arrays[ARRAY_TEXCOORD].stride; return 1;
         case GL_EDGE_FLAG_ARRAY_STRIDE: v[0] = gl.arrays[ARRAY_EDGEFLAG].stride; return 1;
+        case GL_POINT_SIZE_ARRAY_TYPE_OES: v[0] = gl.arrays[ARRAY_POINTSIZE].type; return 1;
+        case GL_POINT_SIZE_ARRAY_STRIDE_OES: v[0] = gl.arrays[ARRAY_POINTSIZE].stride; return 1;
         case GL_ARRAY_BUFFER_BINDING: v[0] = gl.arrayBuffer; return 1;
         case GL_ELEMENT_ARRAY_BUFFER_BINDING: v[0] = gl.elementArrayBuffer; return 1;
         case GL_VERTEX_ARRAY_BUFFER_BINDING: v[0] = gl.arrays[ARRAY_VERTEX].buffer; return 1;
@@ -2364,6 +2371,7 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_COLOR_ARRAY_BUFFER_BINDING: v[0] = gl.arrays[ARRAY_COLOR].buffer; return 1;
         case GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING: v[0] = gl.arrays[ARRAY_TEXCOORD].buffer; return 1;
         case GL_EDGE_FLAG_ARRAY_BUFFER_BINDING: v[0] = gl.arrays[ARRAY_EDGEFLAG].buffer; return 1;
+        case GL_POINT_SIZE_ARRAY_BUFFER_BINDING_OES: v[0] = gl.arrays[ARRAY_POINTSIZE].buffer; return 1;
         case GL_CURRENT_NORMAL: for (int i = 0; i < 3; i++) v[i] = gl.currentNormal[i]; return 3;
 
         case GL_COLOR_CLEAR_VALUE:
@@ -2446,7 +2454,7 @@ static int getState(GLenum pname, double v[16], bool *normalized)
             if ((ignoredCapBit(pname) >= 0) || (pname == GL_TEXTURE_2D) || (pname == GL_BLEND) || (pname == GL_DEPTH_TEST) ||
                 (pname == GL_ALPHA_TEST) || (pname == GL_STENCIL_TEST) || (pname == GL_CULL_FACE) || (pname == GL_SCISSOR_TEST) ||
                 (pname == GL_VERTEX_ARRAY) || (pname == GL_TEXTURE_COORD_ARRAY) || (pname == GL_COLOR_ARRAY) || (pname == GL_NORMAL_ARRAY) ||
-                (pname == GL_EDGE_FLAG_ARRAY) || (pname == GL_POLYGON_OFFSET_FILL) || (pname == GL_POLYGON_OFFSET_LINE) ||
+                (pname == GL_EDGE_FLAG_ARRAY) || (pname == GL_POINT_SIZE_ARRAY_OES) || (pname == GL_POLYGON_OFFSET_FILL) || (pname == GL_POLYGON_OFFSET_LINE) ||
                 (pname == GL_POLYGON_OFFSET_POINT) || (pname == GL_AUTO_NORMAL) || (pname == GL_LIGHTING) || (pname == GL_FOG) ||
                 ((pname >= GL_LIGHT0) && (pname <= GL_LIGHT7)) || (pname == GL_COLOR_MATERIAL) ||
                 ((pname >= GL_CLIP_PLANE0) && (pname < GL_CLIP_PLANE0 + C3DGL_MAX_CLIP_PLANES)) ||
@@ -2509,7 +2517,7 @@ const GLubyte *glGetString(GLenum name)
         case GL_VENDOR: return (const GLubyte *)"c3dgl";
         case GL_RENDERER: return (const GLubyte *)"citro3d (PICA200)";
         case GL_VERSION: return (const GLubyte *)"1.1 c3dgl";
-        case GL_EXTENSIONS: return (const GLubyte *)"GL_OES_point_sprite";
+        case GL_EXTENSIONS: return (const GLubyte *)"GL_OES_point_sprite GL_OES_point_size_array";
         default: return (const GLubyte *)"";
     }
 }
@@ -3446,6 +3454,7 @@ static const GLenum positionTypes[] = { GL_BYTE, GL_SHORT, GL_INT, GL_FLOAT, GL_
 static const GLenum colorTypes[] = { GL_BYTE, GL_UNSIGNED_BYTE, GL_SHORT, GL_UNSIGNED_SHORT, GL_INT, GL_UNSIGNED_INT,
                                      GL_FLOAT, GL_DOUBLE, GL_FIXED, 0 };
 static const GLenum edgeFlagTypes[] = { GL_UNSIGNED_BYTE, 0 };
+static const GLenum pointSizeTypes[] = { GL_FLOAT, GL_FIXED, 0 };
 
 void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer)
 {
@@ -3473,6 +3482,11 @@ void glEdgeFlagPointer(GLsizei stride, const GLvoid *pointer)
     setArray(ARRAY_EDGEFLAG, 1, GL_UNSIGNED_BYTE, stride, pointer, 1 << 1, edgeFlagTypes);
 }
 
+void glPointSizePointerOES(GLenum type, GLsizei stride, const GLvoid *pointer)
+{
+    setArray(ARRAY_POINTSIZE, 1, type, stride, pointer, 1 << 1, pointSizeTypes);
+}
+
 void glGetPointerv(GLenum pname, GLvoid **params)
 {
     switch (pname)
@@ -3482,6 +3496,7 @@ void glGetPointerv(GLenum pname, GLvoid **params)
         case GL_COLOR_ARRAY_POINTER: *params = (GLvoid *)gl.arrays[ARRAY_COLOR].pointer; break;
         case GL_TEXTURE_COORD_ARRAY_POINTER: *params = (GLvoid *)gl.arrays[ARRAY_TEXCOORD].pointer; break;
         case GL_EDGE_FLAG_ARRAY_POINTER: *params = (GLvoid *)gl.arrays[ARRAY_EDGEFLAG].pointer; break;
+        case GL_POINT_SIZE_ARRAY_POINTER_OES: *params = (GLvoid *)gl.arrays[ARRAY_POINTSIZE].pointer; break;
         default: setError(GL_INVALID_ENUM); break;
     }
 }
@@ -3577,6 +3592,12 @@ static void submitArrayVertex(int index)
         const u8 *e = arrayElement(&gl.arrays[ARRAY_EDGEFLAG], index);
         if (e == NULL) return;
         edge = (*e != 0);
+    }
+    if (arrayActive(ARRAY_POINTSIZE))
+    {
+        float size[4];
+        if (!readArray(&gl.arrays[ARRAY_POINTSIZE], index, size, false)) return;
+        v.pointSize = fmaxf(size[0], 0.0f);
     }
 
     if (!arrayActive(ARRAY_VERTEX))

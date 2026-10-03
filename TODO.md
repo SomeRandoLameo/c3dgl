@@ -29,7 +29,9 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glNormalPointer`, `GL_NORMAL_ARRAY`
 * [x] `glArrayElement`, `glInterleavedArrays` (GL)
 * [x] `glGetPointerv`, array state queries, validation errors
-* [ ] `glPointSizePointerOES`, `GL_POINT_SIZE_ARRAY_OES` (ES, required extension)
+* [x] `glPointSizePointerOES`, `GL_POINT_SIZE_ARRAY_OES` (ES, required extension): `GL_FLOAT`/`GL_FIXED`, buffer
+  offsets, queries, `GL_CLIENT_VERTEX_ARRAY_BIT`; the array value replaces `glPointSize`, then attenuation and
+  min/max apply
 
 ## Vertex Buffer Objects (ES)
 
@@ -186,7 +188,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glGetFixedv` (ES), `glGetPointerv`, `glGetBufferParameteriv` (ES)
 * [x] `glGetLight*`, `glGetMaterial*`, lighting state in `glGet*`
 * [x] `glGetClipPlane*`
-* [~] `GL_EXTENSIONS` lists `GL_OES_point_sprite`; ES 1.1 also requires the point size array and paletted texture names
+* [~] `GL_EXTENSIONS` lists `GL_OES_point_sprite`, `GL_OES_point_size_array`; ES 1.1 also requires the paletted
+  texture name (`GL_OES_compressed_paletted_texture`)
 * [~] `glHint` — accepted, hints have no effect (allowed by the spec)
 
 ## Error Handling
@@ -225,7 +228,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [ ] Lighting in the vertex shader     [ ] Display lists (GL)
 [ ] Compressed / paletted textures    [ ] Texture copies, glReadPixels
 [ ] Smooth points/lines (GL)          [ ] Feedback / selection (GL)
-[ ] Point size array (ES)             [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
+                                      [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
                                       [ ] Accumulation buffer (GL)
 [ ] Logic op, sample coverage         [ ] 1D textures, texgen (GL)
 [ ] Complete state queries            [ ] Stipple (GL)
@@ -245,5 +248,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Mipmapping (+ GL_GENERATE_MIPMAP) [x] Attribute stacks (GL)
 [x] Lighting (CPU, per vertex)        [x] Evaluators (GL)
 [x] Fog (PICA fog table)              [x] User clip planes (CPU)
-[x] Point parameters + sprites (ES)
+[x] Point parameters + sprites (ES) [x] Point size array (ES)
 ```

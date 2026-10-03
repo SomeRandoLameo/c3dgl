@@ -1,4 +1,4 @@
-// c3dgl example: point parameters and point sprites (OpenGL ES 1.1). The top screen shows one setup per cell (4x2
+// c3dgl example: point parameters, point sprites and the point size array (OpenGL ES 1.1). The top screen shows one setup per cell (4x2
 // grid, 100x120 px per cell). Most cells draw pairs: left the points under test, right a reference drawn without the
 // feature (plain points of the expected size, or textured quads with the expected texcoords). Each pair must look
 // the same. The last cell is a particle field (soft round sprites with distance attenuation). The bottom screen
@@ -33,7 +33,7 @@ void check(bool ok, const char* what, int line) {
 
 bool near(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 
-GLuint quadrants, disc;
+GLuint quadrants, disc, sizeBuffer;
 
 // 2x2: red, green in the first row (t = 0), blue, yellow in the second. A sprite shows red top left
 GLuint createQuadrants() {
@@ -107,22 +107,57 @@ void drawSpriteQuad(float x, float y, float size, int units = 1) {
     glEnd();
 }
 
-// 1: GL_POINT_SIZE_MIN/MAX clamp glPointSize: 20 with max 12, 2 with min 8. Right: plain 12 and 8
+// Point size array of the lower row of cell 1: GL_FIXED sizes 4, 8, 12 and 30 (clamped to 16 by GL_POINT_SIZE_MAX)
+// with a gap of 4 bytes after each, in a buffer object
+GLuint createSizeBuffer() {
+    const GLfixed sizes[8] = {4 << 16, -1, 8 << 16, -1, 12 << 16, -1, 30 << 16, -1};
+    GLuint id;
+    glGenBuffers(1, &id);
+    glBindBuffer(GL_ARRAY_BUFFER, id);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(sizes), sizes, GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    return id;
+}
+
+// 1: GL_POINT_SIZE_MIN/MAX clamp glPointSize: 20 with max 12, 2 with min 8. Right: plain 12 and 8.
+// Bottom: four points in one draw with sizes 4, 8, 12, 16 from the point size array; glPointSize (2) is ignored
 void drawClamp() {
     glColor4f(1.0f, 0.6f, 0.1f, 1.0f);
     glPointSize(20.0f);
     glPointParameterf(GL_POINT_SIZE_MAX, 12.0f);
-    drawPoint(30.5f, 85.5f);
+    drawPoint(30.5f, 95.5f);
     glPointSize(2.0f);
     glPointParameterf(GL_POINT_SIZE_MIN, 8.0f);
-    drawPoint(30.5f, 35.5f);
+    drawPoint(30.5f, 60.5f);
 
     glPointParameterf(GL_POINT_SIZE_MIN, 0.0f);
     glPointParameterf(GL_POINT_SIZE_MAX, 256.0f);
     glPointSize(12.0f);
-    drawPoint(70.5f, 85.5f);
+    drawPoint(70.5f, 95.5f);
     glPointSize(8.0f);
-    drawPoint(70.5f, 35.5f);
+    drawPoint(70.5f, 60.5f);
+
+    glColor4f(0.6f, 1.0f, 0.3f, 1.0f);
+    const float xs[4] = {6.0f, 15.0f, 27.0f, 42.0f};
+    const GLfloat v[4][2] = {{xs[0], 22.0f}, {xs[1], 22.0f}, {xs[2], 22.0f}, {xs[3], 22.0f}};
+    glPointSize(2.0f);
+    glPointParameterf(GL_POINT_SIZE_MAX, 16.0f);
+    glBindBuffer(GL_ARRAY_BUFFER, sizeBuffer);
+    glPointSizePointerOES(GL_FIXED, 2 * sizeof(GLfixed), nullptr);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glEnableClientState(GL_POINT_SIZE_ARRAY_OES);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glVertexPointer(2, GL_FLOAT, 0, v);
+    glDrawArrays(GL_POINTS, 0, 4);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisableClientState(GL_POINT_SIZE_ARRAY_OES);
+    glPointParameterf(GL_POINT_SIZE_MAX, 256.0f);
+
+    const float sizes[4] = {4.0f, 8.0f, 12.0f, 16.0f};
+    for (int i = 0; i < 4; i++) {
+        glPointSize(sizes[i]);
+        drawPoint(xs[i] + 50.0f, 22.0f);
+    }
 }
 
 // Eye distance of a point at (x, y, z)
@@ -259,6 +294,7 @@ void drawMultitexture() {
 struct Particle {
     GLfloat pos[3];
     GLubyte color[4];
+    GLfloat size;               // Before attenuation
 };
 Particle particles[PARTICLES];
 
@@ -274,10 +310,12 @@ void createParticles() {
         p.color[1] = (GLubyte)(64 + 191 * rnd());
         p.color[2] = (GLubyte)(255 * rnd());
         p.color[3] = 96;
+        p.size = 24.0f + 48.0f * rnd();
     }
 }
 
-// 8: particle field: soft sprites, size by distance (0, 0, 1) -> 48/d px (at most 20), additive blending, turning
+// 8: particle field: soft sprites with sizes 24..72 from the point size array, attenuated by distance (0, 0, 1)
+// -> size/d px (at most 20), additive blending, turning
 void drawParticles(float angle) {
     glTranslatef(0.0f, 0.0f, -5.0f);
     glRotatef(angle, 0.3f, 1.0f, 0.0f);
@@ -291,13 +329,15 @@ void drawParticles(float angle) {
     const GLfloat att[3] = {0.0f, 0.0f, 1.0f};
     glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, att);
     glPointParameterf(GL_POINT_SIZE_MAX, 20.0f);
-    glPointSize(48.0f);
 
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_COLOR_ARRAY);
+    glEnableClientState(GL_POINT_SIZE_ARRAY_OES);
     glVertexPointer(3, GL_FLOAT, sizeof(Particle), particles[0].pos);
     glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(Particle), particles[0].color);
+    glPointSizePointerOES(GL_FLOAT, sizeof(Particle), &particles[0].size);
     glDrawArrays(GL_POINTS, 0, PARTICLES);
+    glDisableClientState(GL_POINT_SIZE_ARRAY_OES);
     glDisableClientState(GL_COLOR_ARRAY);
     glDisableClientState(GL_VERTEX_ARRAY);
     glTexEnvi(GL_POINT_SPRITE_OES, GL_COORD_REPLACE_OES, GL_FALSE);
@@ -414,6 +454,67 @@ void testPointApi() {
     CHECK(glGetError() == GL_NO_ERROR);
 }
 
+void testPointSizeArrayApi() {
+    GLint i[1];
+    GLboolean b;
+    GLvoid* ptr;
+
+    // Defaults
+    CHECK(!glIsEnabled(GL_POINT_SIZE_ARRAY_OES));
+    glGetIntegerv(GL_POINT_SIZE_ARRAY_TYPE_OES, i);
+    CHECK(i[0] == GL_FLOAT);
+    glGetIntegerv(GL_POINT_SIZE_ARRAY_STRIDE_OES, i);
+    CHECK(i[0] == 0);
+    glGetIntegerv(GL_POINT_SIZE_ARRAY_BUFFER_BINDING_OES, i);
+    CHECK(i[0] == 0);
+    glGetPointerv(GL_POINT_SIZE_ARRAY_POINTER_OES, &ptr);
+    CHECK(ptr == nullptr);
+    const char* ext = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+    CHECK(ext && std::strstr(ext, "GL_OES_point_size_array"));
+    CHECK(glGetError() == GL_NO_ERROR);
+
+    // Set, enable, query; the buffer binding is taken from GL_ARRAY_BUFFER
+    static const GLfixed sizes[2] = {1 << 16, 2 << 16};
+    glPointSizePointerOES(GL_FIXED, 8, sizes);
+    glEnableClientState(GL_POINT_SIZE_ARRAY_OES);
+    glGetBooleanv(GL_POINT_SIZE_ARRAY_OES, &b);
+    CHECK(b == GL_TRUE);
+    glGetIntegerv(GL_POINT_SIZE_ARRAY_TYPE_OES, i);
+    CHECK(i[0] == GL_FIXED);
+    glGetIntegerv(GL_POINT_SIZE_ARRAY_STRIDE_OES, i);
+    CHECK(i[0] == 8);
+    glGetPointerv(GL_POINT_SIZE_ARRAY_POINTER_OES, &ptr);
+    CHECK(ptr == sizes);
+    glBindBuffer(GL_ARRAY_BUFFER, sizeBuffer);
+    glPointSizePointerOES(GL_FLOAT, 0, reinterpret_cast<const GLvoid*>(8));
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glGetIntegerv(GL_POINT_SIZE_ARRAY_BUFFER_BINDING_OES, i);
+    CHECK(i[0] == (GLint)sizeBuffer);
+    CHECK(glGetError() == GL_NO_ERROR);
+
+    // Errors: only GL_FIXED and GL_FLOAT, no negative stride; the array stays as it was
+    glPointSizePointerOES(GL_SHORT, 0, sizes);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glPointSizePointerOES(GL_FIXED, -4, sizes);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glGetIntegerv(GL_POINT_SIZE_ARRAY_TYPE_OES, i);
+    CHECK(i[0] == GL_FLOAT);
+
+    // Client attribute stack (GL_CLIENT_VERTEX_ARRAY_BIT)
+    glPushClientAttrib(GL_CLIENT_VERTEX_ARRAY_BIT);
+    glDisableClientState(GL_POINT_SIZE_ARRAY_OES);
+    glPointSizePointerOES(GL_FIXED, 4, sizes);
+    glPopClientAttrib();
+    CHECK(glIsEnabled(GL_POINT_SIZE_ARRAY_OES));
+    glGetIntegerv(GL_POINT_SIZE_ARRAY_BUFFER_BINDING_OES, i);
+    CHECK(i[0] == (GLint)sizeBuffer);
+
+    // Back to the defaults
+    glDisableClientState(GL_POINT_SIZE_ARRAY_OES);
+    glPointSizePointerOES(GL_FLOAT, 0, nullptr);
+    CHECK(glGetError() == GL_NO_ERROR);
+}
+
 } // namespace
 
 static void printStats() {
@@ -441,13 +542,16 @@ int main() {
     }
 
     std::printf("c3dgl points\n\n\n\n\n");
+    sizeBuffer = createSizeBuffer();
     testPointApi();
+    testPointSizeArrayApi();
     std::printf("%i/%i checks passed\n\n"
                 "Top screen: left/right of every\n"
                 "pair must match\n"
                 "top row:\n"
                 "- orange squares 12px and 8px\n"
-                "  (size clamped by min/max)\n"
+                "  (size clamped by min/max),\n"
+                "  green 4, 8, 12, 16px (array)\n"
                 "- cyan squares, smaller with\n"
                 "  distance (attenuation)\n"
                 "- the same with the ES x API\n"
@@ -489,6 +593,7 @@ int main() {
         angle += 0.5f;
     }
 
+    glDeleteBuffers(1, &sizeBuffer);
     glDeleteTextures(1, &disc);
     glDeleteTextures(1, &quadrants);
     c3dglClose();

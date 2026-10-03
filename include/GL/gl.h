@@ -583,6 +583,15 @@ void glPointParameteriv(GLenum pname, const GLint *params);
 #define GL_COORD_REPLACE                    0x8862
 #define GL_OES_point_sprite                 1
 
+// Point size array (ES 1.1 GL_OES_point_size_array): per-vertex point sizes instead of glPointSize
+#define GL_POINT_SIZE_ARRAY_OES             0x8B9C
+#define GL_POINT_SIZE_ARRAY_TYPE_OES        0x898A
+#define GL_POINT_SIZE_ARRAY_STRIDE_OES      0x898B
+#define GL_POINT_SIZE_ARRAY_POINTER_OES     0x898C
+#define GL_POINT_SIZE_ARRAY_BUFFER_BINDING_OES 0x8B9F
+#define GL_OES_point_size_array             1
+void glPointSizePointerOES(GLenum type, GLsizei stride, const GLvoid *pointer);
+
 // Matrices
 void glMatrixMode(GLenum mode);
 void glPushMatrix(void);

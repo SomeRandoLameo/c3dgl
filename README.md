@@ -96,8 +96,9 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
   each next to a reference square in the expected color; self-checks of the fog API on the bottom screen
 - `clipplane`: user clip planes on smooth-shaded, textured and lit geometry, lines, points and `glPolygonMode`
   outlines, mostly next to the expected shape drawn without clipping; self-checks of the clip plane API on the bottom screen
-- `points` (ES API): point size min/max, distance attenuation (also through the fixed-point API), point sprites with
-  `GL_COORD_REPLACE_OES` on one and two units, a particle field; self-checks of the point API on the bottom screen
+- `points` (ES API): point size min/max, distance attenuation (also through the fixed-point API), the point size
+  array, point sprites with `GL_COORD_REPLACE_OES` on one and two units, a particle field with per-particle sizes;
+  self-checks of the point API on the bottom screen
 
 Every example shows the CPU and GPU time of the last frame and the command buffer usage in rows 2-4 of the bottom
 screen (`C3D_GetProcessingTime`, `C3D_GetDrawingTime`, `C3D_GetCmdBufUsage`).
@@ -137,7 +138,8 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - Blending (`glBlendFunc`), alpha test (`glAlphaFunc`), stencil (`glStencilFunc`/`Op`/`Mask`), depth
   test/function/mask, color mask, face culling, scissor, viewport, line width, point size
 - Point parameters (`glPointParameter*`: size min/max, distance attenuation) and point sprites
-  (`GL_POINT_SPRITE_OES`, `GL_COORD_REPLACE_OES` per texture unit), listed as `GL_OES_point_sprite`
+  (`GL_POINT_SPRITE_OES`, `GL_COORD_REPLACE_OES` per texture unit), listed as `GL_OES_point_sprite`; the point size
+  array (`glPointSizePointerOES`, `GL_POINT_SIZE_ARRAY_OES`), listed as `GL_OES_point_size_array`
 - `glClear` of color, depth and stencil, honoring scissor and write masks
 - `glGetError`, `glGet{Boolean,Integer,Float,Double}v` for the common state, `glIsEnabled`, `glIsTexture`
 - The common variants of the immediate mode calls (`glVertex2/3/4{f,d,i,s}[v]`, `glColor3/4{f,d,ub}[v]`, ...),
