@@ -3,7 +3,8 @@
 // Page 1: texture matrix, the same square with texcoords 0..1 in every cell, only the GL_TEXTURE matrix differs.
 // Page 2: texture coordinates: per-vertex q, texcoord array types.
 // Page 3: multitexturing (3 units) and GL_COMBINE.
-// Page 4: mipmaps on a floor that recedes into the distance. A switches pages.
+// Page 4: mipmaps on a floor that recedes into the distance.
+// Page 5: compressed textures (paletted, ETC1). A switches pages.
 // The expected result is printed on the bottom screen.
 #include <3ds.h>
 #include <GL/gl.h>
@@ -11,29 +12,32 @@
 #include <citro3d.h>
 
 #include <cstdio>
+#include <cstring>
 
 namespace {
 
 constexpr int COLUMNS = 4, ROWS = 2;
 constexpr int CELL_W = C3DGL_TOP_SCREEN_WIDTH / COLUMNS, CELL_H = C3DGL_SCREEN_HEIGHT / ROWS;
 
+// Texel (x, y) of the "F" image of size x size, y = 0 at the bottom: 0 = blue background, 1 = white F, 2 = red marker
+int fTexel(int x, int y, int size) {
+    // Glyph on a 16x16 grid, scaled for other sizes
+    const int gx = x * 16 / size, gy = y * 16 / size;
+    const bool stem = gx >= 4 && gx <= 6 && gy >= 2 && gy <= 13;
+    const bool top = gx >= 4 && gx <= 12 && gy >= 11 && gy <= 13;
+    const bool middle = gx >= 4 && gx <= 10 && gy >= 7 && gy <= 8;
+    const bool marker = gx <= 1 && gy <= 1;
+    return marker ? 2 : (stem || top || middle) ? 1 : 0;
+}
+
+constexpr GLubyte F_COLORS[3][3] = {{40, 70, 200}, {255, 255, 255}, {230, 30, 30}};
+
 // 16x16 (or 12x12 for the NPOT version) RGB image, row 0 = t = 0 = bottom: upright "F", red block bottom left
 GLuint createF(int size) {
     GLubyte pixels[16][16][3];
-    for (int y = 0; y < size; y++) {
-        for (int x = 0; x < size; x++) {
-            // Glyph on a 16x16 grid, scaled down for smaller sizes
-            const int gx = x * 16 / size, gy = y * 16 / size;
-            const bool stem = gx >= 4 && gx <= 6 && gy >= 2 && gy <= 13;
-            const bool top = gx >= 4 && gx <= 12 && gy >= 11 && gy <= 13;
-            const bool middle = gx >= 4 && gx <= 10 && gy >= 7 && gy <= 8;
-            const bool marker = gx <= 1 && gy <= 1;
-            GLubyte* p = pixels[y][x];
-            if (marker) { p[0] = 230; p[1] = 30; p[2] = 30; }
-            else if (stem || top || middle) { p[0] = p[1] = p[2] = 255; }
-            else { p[0] = 40; p[1] = 70; p[2] = 200; }
-        }
-    }
+    for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+            for (int c = 0; c < 3; c++) pixels[y][x][c] = F_COLORS[fTexel(x, y, size)][c];
 
     // Rows of `size` pixels, tightly packed
     GLubyte packed[16 * 16 * 3];
@@ -369,9 +373,11 @@ void drawMultitexturePage(const MultiTextures& t) {
 constexpr int MIP_SIZE = 64;    // Levels 64x64 .. 1x1 (0..6), PICA stores 64 .. 8 (0..3)
 
 // Solid color per level: red, green, blue, yellow, then magenta/cyan/white for the levels PICA does not store
+constexpr GLubyte LEVEL_COLORS[7][3] = {{220, 40, 40}, {40, 200, 40}, {50, 80, 230}, {230, 220, 40},
+                                        {220, 40, 220}, {40, 220, 220}, {255, 255, 255}};
+
 GLuint createLevelColors(int levels) {
-    static const GLubyte colors[7][3] = {{220, 40, 40}, {40, 200, 40}, {50, 80, 230}, {230, 220, 40},
-                                         {220, 40, 220}, {40, 220, 220}, {255, 255, 255}};
+    const auto& colors = LEVEL_COLORS;
     static GLubyte pixels[MIP_SIZE * MIP_SIZE * 3];
     GLuint id = 0;
     glGenTextures(1, &id);
@@ -473,10 +479,191 @@ void drawMipmapPage(const MipTextures& t) {
     drawFloor(3, 1, t.checker565, 0);
 }
 
+// Page 5 ------------------------------------------------------------------------------------------------
+
+// "F" as a paletted texture: palette entries 0..2 for background, F and marker (entrySize bytes each), then the
+// 4- or 8-bit indices of all texels without row padding
+GLuint createPalettedF(GLenum format, int size, const void* entries, int entrySize) {
+    const bool fourBit = format <= GL_PALETTE4_RGB5_A1_OES;
+    const int paletteBytes = (fourBit ? 16 : 256) * entrySize;
+    static GLubyte data[256 * 4 + 16 * 16];
+    std::memset(data, 0, sizeof(data));
+    std::memcpy(data, entries, 3 * entrySize);
+    GLubyte* indices = data + paletteBytes;
+    for (int i = 0; i < size * size; i++) {
+        const int index = fTexel(i % size, i / size, size);
+        if (fourBit) indices[i / 2] |= index << ((i & 1) ? 0 : 4);     // First texel in the high nibble
+        else indices[i] = index;
+    }
+    const int imageSize = paletteBytes + (fourBit ? (size * size + 1) / 2 : size * size);
+
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, format, size, size, 0, imageSize, data);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    return id;
+}
+
+// All MIP_SIZE levels in one paletted image (level = -6): palette entry n is the color of level n
+GLuint createPalettedLevels() {
+    constexpr int LEVELS = 7;
+    static GLubyte data[16 * 2 + (MIP_SIZE * MIP_SIZE * 4 / 3 + 16) / 2];
+    std::memset(data, 0, sizeof(data));
+    GLushort* palette = reinterpret_cast<GLushort*>(data);
+    for (int level = 0; level < LEVELS; level++) {
+        const GLubyte* c = LEVEL_COLORS[level];
+        palette[level] = static_cast<GLushort>((c[0] >> 3) << 11 | (c[1] >> 3) << 6 | (c[2] >> 3) << 1 | 1);
+    }
+    GLubyte* indices = data + 16 * 2;
+    for (int level = 0; level < LEVELS; level++) {
+        const int texels = (MIP_SIZE >> level) * (MIP_SIZE >> level);
+        for (int i = 0; i < texels; i++) indices[i / 2] |= level << ((i & 1) ? 0 : 4);
+        indices += (texels + 1) / 2;
+    }
+
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glCompressedTexImage2D(GL_TEXTURE_2D, -(LEVELS - 1), GL_PALETTE4_RGB5_A1_OES, MIP_SIZE, MIP_SIZE, 0,
+                           static_cast<GLsizei>(indices - data), data);
+    return id;
+}
+
+// ETC1 block in individual mode: two sub-blocks with 4-bit colors (columns 0-1 and 2-3, or with flip rows 0-1 and
+// 2-3), modifier table 0 with every pixel at +2
+void etc1Block(GLubyte* out, const GLubyte* c1, const GLubyte* c2, bool flip) {
+    for (int i = 0; i < 3; i++) out[i] = static_cast<GLubyte>((c1[i] * 15 + 127) / 255 << 4 | (c2[i] * 15 + 127) / 255);
+    out[3] = flip ? 1 : 0;
+    out[4] = out[5] = out[6] = out[7] = 0;
+}
+
+// "F" in ETC1 with one solid color per 4x4 block, size a multiple of 4. Block (0, 0) is red at the bottom (rows 0-1)
+// and yellow above, block (1, 0) red left and yellow right. The bottom right block is light gray with a black L
+// along its bottom and right edges (per-pixel modifiers of table 7)
+GLuint createEtc1F(int size) {
+    static const GLubyte red[3] = {230, 30, 30}, yellow[3] = {230, 220, 40}, gray[3] = {128, 128, 128};
+    static GLubyte data[8 * 8 * 8];
+    const int blocks = size / 4;
+    for (int by = 0; by < blocks; by++) {
+        for (int bx = 0; bx < blocks; bx++) {
+            GLubyte* block = data + (by * blocks + bx) * 8;
+            const GLubyte* color = F_COLORS[fTexel(bx * 4 + 2, by * 4 + 2, size)];
+            etc1Block(block, color, color, false);
+            if (by == 0 && bx == 0) etc1Block(block, red, yellow, true);
+            if (by == 0 && bx == 1) etc1Block(block, red, yellow, false);
+            if (by == 0 && bx == blocks - 1) {
+                etc1Block(block, gray, gray, false);
+                block[3] = 7 << 5 | 7 << 2;      // Tables 7: +47, +183, -47, -183
+                // Pixel (x, y) is bit 4x + y of both index halves; index 3 (-183) is black, 0 (+47) light gray
+                unsigned bits = 0;
+                for (int x = 0; x < 4; x++)
+                    for (int y = 0; y < 4; y++)
+                        if (x == 3 || y == 0) bits |= 1u << (4 * x + y);
+                block[4] = block[6] = static_cast<GLubyte>(bits >> 8);
+                block[5] = block[7] = static_cast<GLubyte>(bits);
+            }
+        }
+    }
+
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_ETC1_RGB8_OES, size, size, 0, blocks * blocks * 8, data);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    return id;
+}
+
+// ETC1 levels 64x64 .. 1x1, each a solid level color
+GLuint createEtc1Levels() {
+    static GLubyte data[16 * 16 * 8];
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    for (int level = 0; level < 7; level++) {
+        const int size = MIP_SIZE >> level, blocks = (size + 3) / 4;
+        for (int i = 0; i < blocks * blocks; i++) etc1Block(data + i * 8, LEVEL_COLORS[level], LEVEL_COLORS[level], false);
+        glCompressedTexImage2D(GL_TEXTURE_2D, level, GL_ETC1_RGB8_OES, size, size, 0, blocks * blocks * 8, data);
+    }
+    return id;
+}
+
+struct CompressedTextures {
+    GLuint rgb8, rgba4Npot, rgba8Alpha, paletteLevels, etc1, etc1Npot, etc1Levels;
+};
+
+CompressedTextures createCompressedTextures() {
+    CompressedTextures t{};
+    t.rgb8 = createPalettedF(GL_PALETTE4_RGB8_OES, 16, F_COLORS, 3);
+
+    // RGBA4 entries 0xRGBA, 13x13: an odd texel count, so rows start in the middle of an index byte
+    const GLushort rgba4[3] = {0x24CF, 0xFFFF, 0xE22F};
+    t.rgba4Npot = createPalettedF(GL_PALETTE4_RGBA4_OES, 13, rgba4, 2);
+
+    // Background alpha 0: cut away by the alpha test
+    const GLubyte rgba8[3][4] = {{40, 70, 200, 0}, {255, 255, 255, 255}, {230, 30, 30, 255}};
+    t.rgba8Alpha = createPalettedF(GL_PALETTE8_RGBA8_OES, 16, rgba8, 4);
+
+    t.paletteLevels = createPalettedLevels();
+    t.etc1 = createEtc1F(32);
+    t.etc1Npot = createEtc1F(28);     // 7x7 blocks, padded to 32
+    t.etc1Levels = createEtc1Levels();
+    return t;
+}
+
+void drawCompressedPage(const CompressedTextures& t) {
+    resetTextureMatrix();
+    drawCell(0, 0, t.rgb8);
+    drawCell(1, 0, t.rgba4Npot);
+
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.5f);
+    drawCell(2, 0, t.rgba8Alpha);
+    glDisable(GL_ALPHA_TEST);
+
+    drawFloor(3, 0, t.paletteLevels, GL_LINEAR_MIPMAP_NEAREST);
+
+    drawCell(0, 1, t.etc1);
+
+    // ETC1 is stored upside down, the texture matrix must still compose: F upside down and shifted left
+    textureMatrix([] {
+        glTranslatef(0.25f, 1.0f, 0.0f);
+        glScalef(1.0f, -1.0f, 1.0f);
+    });
+    glBindTexture(GL_TEXTURE_2D, t.etc1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    drawCell(1, 1, t.etc1);
+    resetTextureMatrix();
+
+    drawCell(2, 1, t.etc1Npot);
+    drawFloor(3, 1, t.etc1Levels, GL_LINEAR_MIPMAP_NEAREST);
+}
+
 void printPage(int page) {
     consoleClear();
-    std::printf("c3dgl texture test, page %i/4\n\n\n\n\n", page + 1);
-    if (page == 0) {
+    std::printf("c3dgl texture test, page %i/5\n\n\n\n\n", page + 1);
+    if (page == 4) {
+        std::printf("Compressed textures. Expected,\n"
+                    "left to right, top row:\n"
+                    "- PALETTE4_RGB8: upright F, red\n"
+                    "  block bottom left\n"
+                    "- PALETTE4_RGBA4 13x13: same F\n"
+                    "- PALETTE8_RGBA8, alpha test:\n"
+                    "  white F and red block, no blue\n"
+                    "- PALETTE4_RGB5_A1 mipmaps: red,\n"
+                    "  green, blue, yellow bands\n"
+                    "bottom row (ETC1, blocky F):\n"
+                    "- upright F; bottom left: red\n"
+                    "  stripe under yellow, then red|\n"
+                    "  yellow; bottom right: gray with\n"
+                    "  black L at bottom/right edge\n"
+                    "- matrix: F upside down, shifted\n"
+                    "  left by a quarter\n"
+                    "- NPOT 28x28: upright F\n"
+                    "- ETC1 mipmaps: color bands\n");
+    } else if (page == 0) {
         std::printf("Texture matrix. Expected on the\n"
                     "top screen, left to right, top row:\n"
                     "- identity: upright white F,\n"
@@ -585,6 +772,7 @@ int main() {
     const GLuint texPot = createF(16), texNpot = createF(12);
     const MultiTextures multi = createMultiTextures(texPot);
     const MipTextures mips = createMipTextures();
+    const CompressedTextures compressed = createCompressedTextures();
     glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
     float time = 0.0f;
     int page = 0;
@@ -596,11 +784,16 @@ int main() {
         const u32 keys = hidKeysDown();
         if (keys & KEY_START) break;
         if (keys & KEY_A) {
-            page = (page + 1) % 4;
+            page = (page + 1) % 5;
             printPage(page);
         }
 
         glClear(GL_COLOR_BUFFER_BIT);
+        if (page == 4) {
+            drawCompressedPage(compressed);
+            c3dglSwapBuffers();
+            continue;
+        }
         if (page == 3) {
             drawMipmapPage(mips);
             c3dglSwapBuffers();

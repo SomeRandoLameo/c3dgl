@@ -10,6 +10,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 static int checks, failures;
 
@@ -445,6 +446,93 @@ static void testAttribStacks(void)
 }
 
 // Four white 60x60 squares with different vertex calls, pixel coordinates y down
+// Compressed textures: paletted images expand to the palette format (read back with glGetTexImage), ETC1 is stored
+// as is; formats, image sizes and levels are validated
+static void testCompressed(void)
+{
+    GLint n = 0, formats[16] = {0};
+    glGetIntegerv(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &n);
+    CHECK(n == 11);
+    glGetIntegerv(GL_COMPRESSED_TEXTURE_FORMATS, formats);
+    CHECK(formats[0] == GL_PALETTE4_RGB8_OES && formats[9] == GL_PALETTE8_RGB5_A1_OES && formats[10] == GL_ETC1_RGB8_OES);
+    const char *ext = (const char *)glGetString(GL_EXTENSIONS);
+    CHECK(strstr(ext, "GL_OES_compressed_paletted_texture") != NULL);
+    CHECK(strstr(ext, "GL_OES_compressed_ETC1_RGB8_texture") != NULL);
+
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+    // 3x1 PALETTE4_RGB8: indices 1, 2, 3, high nibble first, the last nibble unused
+    unsigned char p4[16*3 + 2] = {0};
+    for (int i = 0; i < 4; i++) { p4[i*3] = (unsigned char)(10*i); p4[i*3 + 1] = (unsigned char)(10*i + 1); p4[i*3 + 2] = (unsigned char)(10*i + 2); }
+    p4[48] = 0x12;
+    p4[49] = 0x30;
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_PALETTE4_RGB8_OES, 3, 1, 0, sizeof(p4), p4);
+    CHECK(glGetError() == GL_NO_ERROR);
+    unsigned char rgb[9] = {0};
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
+    CHECK(rgb[0] == 10 && rgb[1] == 11 && rgb[2] == 12 && rgb[3] == 20 && rgb[6] == 30 && rgb[8] == 32);
+    GLint value = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &value);
+    CHECK(value == GL_PALETTE4_RGB8_OES);
+
+    // 2x2 PALETTE8_R5_G6_B5 with both levels (level = -1): 512 bytes palette, 4 + 1 indices
+    unsigned char p8[512 + 5] = {0};
+    unsigned short *palette = (unsigned short *)p8;
+    palette[7] = 0xF800;
+    palette[200] = 0x07E0;
+    palette[255] = 0x001F;
+    p8[512] = 7; p8[513] = 200; p8[514] = 255; p8[515] = 0; p8[516] = 7;
+    glCompressedTexImage2D(GL_TEXTURE_2D, -1, GL_PALETTE8_R5_G6_B5_OES, 2, 2, 0, sizeof(p8), p8);
+    CHECK(glGetError() == GL_NO_ERROR);
+    unsigned short texels[4] = {0};
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, texels);
+    CHECK(texels[0] == 0xF800 && texels[1] == 0x07E0 && texels[2] == 0x001F && texels[3] == 0);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 1, GL_TEXTURE_WIDTH, &value);
+    CHECK(value == 1);
+
+    // Errors
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_PALETTE4_RGB8_OES, 3, 1, 0, sizeof(p4) - 1, p4);
+    CHECK(glGetError() == GL_INVALID_VALUE);    // imageSize
+    glCompressedTexImage2D(GL_TEXTURE_2D, 1, GL_PALETTE4_RGB8_OES, 3, 1, 0, sizeof(p4), p4);
+    CHECK(glGetError() == GL_INVALID_VALUE);    // Paletted levels are <= 0
+    glCompressedTexImage2D(GL_TEXTURE_2D, -2, GL_PALETTE8_R5_G6_B5_OES, 2, 2, 0, sizeof(p8), p8);
+    CHECK(glGetError() == GL_INVALID_VALUE);    // 2x2 has 2 levels
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_PALETTE4_RGB8_OES, 3, 1, 1, sizeof(p4), p4);
+    CHECK(glGetError() == GL_INVALID_VALUE);    // Border
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3, 1, 0, sizeof(p4), p4);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glCompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_PALETTE4_RGB8_OES, sizeof(p4), p4);
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+
+    // ETC1: 8 bytes per 4x4 block, 6x5 = 2x2 blocks
+    unsigned char etc1[32] = {0};
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_ETC1_RGB8_OES, 6, 5, 0, 24, etc1);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_ETC1_RGB8_OES, 6, 5, 0, 32, etc1);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &value);
+    CHECK(value == 5);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
+    CHECK(glGetError() == GL_INVALID_OPERATION);    // Cannot be read back
+    glCompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 4, GL_ETC1_RGB8_OES, 8, etc1);
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+
+    // Proxy: too large, then fitting
+    glCompressedTexImage2D(GL_PROXY_TEXTURE_2D, 0, GL_ETC1_RGB8_OES, 2048, 8, 0, 512*2*8, NULL);
+    glGetTexLevelParameteriv(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &value);
+    CHECK(value == 0);
+    glCompressedTexImage2D(GL_PROXY_TEXTURE_2D, 0, GL_ETC1_RGB8_OES, 64, 8, 0, 16*2*8, NULL);
+    glGetTexLevelParameteriv(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &value);
+    CHECK(value == 64);
+    CHECK(glGetError() == GL_NO_ERROR);
+
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glDeleteTextures(1, &tex);
+}
+
 static void drawSquares(void)
 {
     glMatrixMode(GL_PROJECTION);
@@ -637,6 +725,7 @@ int main(void)
     testArraysAndEs();
     testBuffers();
     testAttribStacks();
+    testCompressed();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

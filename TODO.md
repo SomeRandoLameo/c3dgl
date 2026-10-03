@@ -97,8 +97,13 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [ ] Internal formats with different sampling (`GL_INTENSITY`, ...) (GL)
 * [x] `glGetTexParameter*` (`iv`, `fv`, `xv`)
 * [ ] `glCopyTexImage2D`, `glCopyTexSubImage2D`
-* [ ] `glCompressedTexImage2D`, `glCompressedTexSubImage2D`
-* [ ] Paletted textures `GL_PALETTE4/8_*_OES` (ES, required); ETC1 (PICA native, extension)
+* [x] `glCompressedTexImage2D`, `glCompressedTexSubImage2D` (`GL_INVALID_OPERATION` for both formats, as their
+  extensions require), `GL_NUM_COMPRESSED_TEXTURE_FORMATS`, `GL_COMPRESSED_TEXTURE_FORMATS`, compressed proxies
+* [x] Paletted textures, all 10 `GL_PALETTE4/8_*_OES` formats (ES, required): expanded to the palette's format
+  (RGB8, RGBA8, RGB565, RGBA4, RGBA5551) on load; level <= 0 loads levels 0..-level from one image
+* [x] ETC1 `GL_ETC1_RGB8_OES` (`GL_OES_compressed_ETC1_RGB8_texture`): sampled natively, blocks stored upside down and
+  flipped back by the texture matrix; any size (NPOT padded), mipmaps per level. `GL_GENERATE_MIPMAP` is not
+  supported for ETC1 (would need an encoder)
 * [ ] 1D textures: `glTexImage1D` (stub), `glTexSubImage1D`, `glCopyTexImage1D`... (GL)
 * [ ] Texture coordinate generation `glTexGen*` (GL)
 * [ ] `glPrioritizeTextures`, `glAreTexturesResident` (GL)
@@ -188,8 +193,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glGetFixedv` (ES), `glGetPointerv`, `glGetBufferParameteriv` (ES)
 * [x] `glGetLight*`, `glGetMaterial*`, lighting state in `glGet*`
 * [x] `glGetClipPlane*`
-* [~] `GL_EXTENSIONS` lists `GL_OES_point_sprite`, `GL_OES_point_size_array`; ES 1.1 also requires the paletted
-  texture name (`GL_OES_compressed_paletted_texture`)
+* [x] `GL_EXTENSIONS` lists `GL_OES_point_sprite`, `GL_OES_point_size_array`, `GL_OES_compressed_paletted_texture`
+  (all required by ES 1.1) and `GL_OES_compressed_ETC1_RGB8_texture`
 * [~] `glHint` — accepted, hints have no effect (allowed by the spec)
 
 ## Error Handling
@@ -226,11 +231,11 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 ```text
 [ ] Lighting in the vertex shader     [ ] Display lists (GL)
-[ ] Compressed / paletted textures    [ ] Texture copies, glReadPixels
+[ ] Logic op, sample coverage         [ ] Texture copies, glReadPixels
 [ ] Smooth points/lines (GL)          [ ] Feedback / selection (GL)
                                       [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
                                       [ ] Accumulation buffer (GL)
-[ ] Logic op, sample coverage         [ ] 1D textures, texgen (GL)
+                                      [ ] 1D textures, texgen (GL)
 [ ] Complete state queries            [ ] Stipple (GL)
 ```
 
@@ -249,4 +254,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Lighting (CPU, per vertex)        [x] Evaluators (GL)
 [x] Fog (PICA fog table)              [x] User clip planes (CPU)
 [x] Point parameters + sprites (ES) [x] Point size array (ES)
+[x] Compressed textures: paletted + ETC1 (ES)
 ```

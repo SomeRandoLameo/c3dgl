@@ -88,7 +88,7 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks and the ES API; green screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
-  page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps
+  page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps, page 5: compressed textures (paletted, ETC1)
 - `fragment`: per-fragment operations (alpha test, texture environment, stencil, `glClear`); A switches pages
 - `lighting`: directional, point and spot lights, specular, several lights, color material, two-sided lighting,
   flat shading with `GL_NORMALIZE`/`GL_RESCALE_NORMAL`; self-checks of the lighting API on the bottom screen
@@ -129,6 +129,9 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
   `glTranslatef`, `glRotatef`, `glScalef`, `glMultMatrixf`
 - Textures of any size up to 1024x1024: RGBA8, RGB8, luminance/alpha, luminance, alpha, RGB565, RGBA5551, RGBA4;
   `glTexSubImage2D`, `glGetTexImage`, nearest/linear filtering, repeat/clamp/mirror wrapping
+- Compressed textures (`glCompressedTexImage2D`): the 10 paletted formats of `GL_OES_compressed_paletted_texture`
+  (expanded to the palette's format on load, one image can carry all mip levels) and ETC1
+  (`GL_OES_compressed_ETC1_RGB8_texture`, sampled natively by PICA); `GL_COMPRESSED_TEXTURE_FORMATS`
 - Texture environment (`glTexEnv`): `GL_MODULATE`, `GL_REPLACE`, `GL_DECAL`, `GL_BLEND`, `GL_ADD`, `GL_TEXTURE_ENV_COLOR`,
   and `GL_COMBINE` with all functions including `GL_DOT3_RGB(A)`
 - Multitexturing: 3 texture units (`glActiveTexture`, `glClientActiveTexture`, `glMultiTexCoord*`), each with its own
@@ -196,6 +199,8 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
 - Textures are padded to power-of-two sizes and Morton-swizzled on upload; the shader applies the texture matrix
   and scales the texcoords back. Texture unit n is TexEnv stage n; texcoords of units 1/2 are written to a second
   vertex buffer only while those units are in use.
+- ETC1 blocks are stored as they come (byte order reversed, 4 blocks per 8x8 tile) and therefore upside down
+  compared to the other formats, whose rows are flipped on upload; the texture matrix flips t for them instead.
 - Textures deleted during a frame are freed after the GPU finished that frame.
 - One render target per screen; switching flushes the batch and changes the target within the same frame.
 

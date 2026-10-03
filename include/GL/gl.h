@@ -808,6 +808,29 @@ void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoi
 void glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint *params);
 void glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat *params);
 
+// Compressed textures (GL 1.3, ES 1.1). Paletted (ES 1.1 GL_OES_compressed_paletted_texture): expanded to the palette's
+// format on load, level <= 0 loads levels 0..-level from one image. ETC1 (GL_OES_compressed_ETC1_RGB8_texture):
+// sampled natively by PICA. glCompressedTexSubImage2D is GL_INVALID_OPERATION for both, as the extensions require
+#define GL_NUM_COMPRESSED_TEXTURE_FORMATS   0x86A2
+#define GL_COMPRESSED_TEXTURE_FORMATS       0x86A3
+#define GL_PALETTE4_RGB8_OES                0x8B90
+#define GL_PALETTE4_RGBA8_OES               0x8B91
+#define GL_PALETTE4_R5_G6_B5_OES            0x8B92
+#define GL_PALETTE4_RGBA4_OES               0x8B93
+#define GL_PALETTE4_RGB5_A1_OES             0x8B94
+#define GL_PALETTE8_RGB8_OES                0x8B95
+#define GL_PALETTE8_RGBA8_OES               0x8B96
+#define GL_PALETTE8_R5_G6_B5_OES            0x8B97
+#define GL_PALETTE8_RGBA4_OES               0x8B98
+#define GL_PALETTE8_RGB5_A1_OES             0x8B99
+#define GL_ETC1_RGB8_OES                    0x8D64
+#define GL_OES_compressed_paletted_texture  1
+#define GL_OES_compressed_ETC1_RGB8_texture 1
+void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height,
+                            GLint border, GLsizei imageSize, const GLvoid *data);
+void glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
+                               GLenum format, GLsizei imageSize, const GLvoid *data);
+
 // Attribute stacks (GL), 16 deep
 void glPushAttrib(GLbitfield mask);
 void glPopAttrib(void);
