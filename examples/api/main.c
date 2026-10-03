@@ -559,6 +559,118 @@ static void testReadPixels(void)
     glPopAttrib();
 }
 
+// glCopyTexImage2D / glCopyTexSubImage2D within a frame: texel rows go up from y like glReadPixels, component selection
+// per internal format (luminance = R), borders, sub-copies keeping the texture's format, draws before a copy keeping
+// the old texels, errors. Leaves a frame in progress, the main loop clears it
+static void testCopyTexImage(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, 400.0, 0.0, 240.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    glClearColor(0.2f, 0.4f, 0.6f, 0.8f);       // 51, 102, 153, 204
+    glClear(GL_COLOR_BUFFER_BIT);
+    glColor3ub(255, 0, 0);
+    glRecti(0, 0, 4, 4);                        // Red bottom left, green to its right, clear color above
+    glColor3ub(0, 255, 0);
+    glRecti(4, 0, 8, 4);
+
+    GLuint tex[2];
+    glGenTextures(2, tex);
+    glBindTexture(GL_TEXTURE_2D, tex[0]);
+    GLubyte p[8*8*4];
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 8, 8, 0);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 255 && p[1] == 0 && p[2] == 0 && p[3] == 255);                    // Texel (0, 0)
+    CHECK(p[5*4] == 0 && p[5*4 + 1] == 255);                                        // (5, 0)
+    CHECK(p[5*32] == 51 && p[5*32 + 1] == 102 && p[5*32 + 2] == 153 && p[5*32 + 3] == 204);    // (0, 5)
+
+    // Components by internal format: luminance is R, alpha is A
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 0, 0, 8, 8, 0);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 255 && p[5] == 0 && p[5*8] == 51);
+    GLint v = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &v);
+    CHECK(v == GL_LUMINANCE);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, 0, 0, 8, 8, 0);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_ALPHA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 255 && p[5*8] == 204);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, 0, 0, 8, 8, 0);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[5*16] == 51 && p[5*16 + 1] == 204);
+
+    // Border: the image is the inner 2x2 of the 4x4 rectangle at (3, 0), i.e. x = 4..5, y = 1..2 (green)
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 3, 0, 4, 4, 1);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v);
+    CHECK(v == 4);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 0 && p[1] == 255 && p[8] == 0 && p[9] == 255);       // Rows padded to 8 bytes
+
+    // Sub-copy into an RGBA4 texture: texels (2, 3) and (3, 4) get red and the clear color, the rest stays 0
+    GLushort us[8*8];
+    memset(us, 0, sizeof(us));
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 8, 8, 0, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4, us);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 2, 3, 3, 3, 2, 2);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4, us);
+    CHECK(us[3*8 + 2] == 0xF00F && us[4*8 + 3] == 0x369C && us[3*8 + 1] == 0 && us[5*8 + 2] == 0);
+
+    // A quad drawn before the copy keeps the old texels (white), one drawn after it samples the copy (red)
+    glBindTexture(GL_TEXTURE_2D, tex[1]);
+    memset(p, 255, sizeof(p));
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    glEnable(GL_TEXTURE_2D);
+    for (int i = 0; i < 2; i++)
+    {
+        int x = 100 + 20*i;
+        glBegin(GL_QUADS);
+        glTexCoord2f(0.0f, 0.0f); glVertex2i(x, 100);
+        glTexCoord2f(1.0f, 0.0f); glVertex2i(x + 8, 100);
+        glTexCoord2f(1.0f, 1.0f); glVertex2i(x + 8, 108);
+        glTexCoord2f(0.0f, 1.0f); glVertex2i(x, 108);
+        glEnd();
+        if (i == 0) glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 8, 8);
+    }
+    glDisable(GL_TEXTURE_2D);
+    glReadPixels(101, 101, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    glReadPixels(121, 101, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p + 4);
+    CHECK(p[0] == 255 && p[1] == 255 && p[2] == 255);
+    CHECK(p[4] == 255 && p[5] == 0 && p[6] == 0);
+    CHECK(glGetError() == GL_NO_ERROR);
+
+    // Errors
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, 3, 0, 0, 8, 8, 0);                     // 1..4 are not allowed for copies
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glCopyTexImage2D(GL_PROXY_TEXTURE_2D, 0, GL_RGBA, 0, 0, 8, 8, 0);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, -1, 8, 0);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 8, 8, 2);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 4, 4, 0, 0, 8, 8);                  // Beyond the 8x8 image
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, 0, 0, 4, 4);                  // Level 1 not defined
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    static const GLubyte etc1[8] = {0};
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_ETC1_RGB8_OES, 4, 4, 0, 8, etc1);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 4, 4);
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 8, 8, 0);
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+
+    glDeleteTextures(2, tex);
+    glPopAttrib();
+}
+
 static void testCompressed(void)
 {
     GLint n = 0, formats[16] = {0};
@@ -852,6 +964,7 @@ int main(void)
     testAttribStacks();
     testCompressed();
     testReadPixels();
+    testCopyTexImage();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

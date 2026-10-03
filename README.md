@@ -160,6 +160,8 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - Dithering and smoothing can be enabled and queried but have no effect yet
 - `glReadPixels`: color in all GL 1.1 formats and types (plus the packed 16-bit ES types), depth and stencil;
   waits for the GPU to finish the draws so far
+- `glCopyTexImage2D` / `glCopyTexSubImage2D` (render to texture): internal formats alpha, luminance(-alpha), RGB, RGBA;
+  like `glReadPixels` they wait for the GPU, draws before the copy keep the old texels
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.

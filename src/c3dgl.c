@@ -5752,6 +5752,110 @@ void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format
 }
 
 //----------------------------------------------------------------------------------
+// OpenGL: copying the framebuffer into textures
+//----------------------------------------------------------------------------------
+// GL format and type that load texels of PICA format f unchanged (the inverse of texFormat(), not for ETC1)
+static void texFormatGl(GPU_TEXCOLOR f, GLenum *format, GLenum *type)
+{
+    *type = GL_UNSIGNED_BYTE;
+    switch (f)
+    {
+        case GPU_RGBA8: *format = GL_RGBA; break;
+        case GPU_RGB8: *format = GL_RGB; break;
+        case GPU_LA8: *format = GL_LUMINANCE_ALPHA; break;
+        case GPU_L8: *format = GL_LUMINANCE; break;
+        case GPU_A8: *format = GL_ALPHA; break;
+        case GPU_RGB565: *format = GL_RGB; *type = GL_UNSIGNED_SHORT_5_6_5; break;
+        case GPU_RGBA5551: *format = GL_RGBA; *type = GL_UNSIGNED_SHORT_5_5_5_1; break;
+        default: *format = GL_RGBA; *type = GL_UNSIGNED_SHORT_4_4_4_4; break;     // GPU_RGBA4
+    }
+}
+
+// Window rectangle as tightly packed texels of format/type (a texFormat() pair), malloc'ed. Read like glReadPixels
+// (ending a frame in progress, so draws issued before the copy still see the old texels); the components are picked
+// from R, G, B, A as for texture images, so luminance is R (glReadPixels sums R + G + B). Pixels outside the window are 0
+static u8 *copyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type)
+{
+    size_t count = (size_t)width*height;
+    u8 *pixels = calloc(count? count : 1, 4);
+    if (pixels == NULL) { setError(GL_OUT_OF_MEMORY); return NULL; }
+
+    PixelStore saved = gl.pack;
+    gl.pack = (PixelStore){ .alignment = 1 };
+    glReadPixels(x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    gl.pack = saved;
+
+    // In place: a texel is at most 4 bytes, so texel i never overwrites a later pixel
+    TexFormat f;
+    texFormat(format, type, &f);
+    int comp[4], n = colorComponents(format, comp);
+    for (size_t i = 0; i < count; i++)
+    {
+        int c[4] = { pixels[i*4], pixels[i*4 + 1], pixels[i*4 + 2], pixels[i*4 + 3] };
+        if (f.packed16)
+        {
+            u16 v = pack16(f.format, c);
+            memcpy(pixels + i*2, &v, 2);
+        }
+        else for (int k = 0; k < n; k++) pixels[i*n + k] = (u8)c[(comp[k] == 4)? 0 : comp[k]];
+    }
+    return pixels;
+}
+
+void glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height,
+                      GLint border)
+{
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    if (target != GL_TEXTURE_2D) { setError(GL_INVALID_ENUM); return; }
+
+    // Base internal formats only, all are in the RGBA framebuffer; the sized ones come with GL_INTENSITY & co
+    switch (internalformat)
+    {
+        case GL_ALPHA: case GL_LUMINANCE: case GL_LUMINANCE_ALPHA: case GL_RGB: case GL_RGBA: break;
+        default: LOG("glCopyTexImage2D: internal format 0x%x not supported\n", internalformat); setError(GL_INVALID_ENUM); return;
+    }
+    if (!textureSizeValid(level, width, height, border)) { setError(GL_INVALID_VALUE); return; }
+    if (boundTexture(target) == NULL) { setError(GL_INVALID_OPERATION); return; }
+    if (!textureSizeFits(level, width, height, border)) { setError(GL_INVALID_VALUE); return; }
+
+    u8 *pixels = copyPixels(x, y, width, height, internalformat, GL_UNSIGNED_BYTE);
+    if (pixels == NULL) return;
+    PixelStore saved = gl.unpack;
+    gl.unpack = (PixelStore){ .alignment = 1 };
+    glTexImage2D(target, level, (GLint)internalformat, width, height, border, internalformat, GL_UNSIGNED_BYTE, pixels);
+    gl.unpack = saved;
+    free(pixels);
+}
+
+void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
+                         GLsizei height)
+{
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    Texture *t = boundTexture(target);
+    if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
+    if ((level < 0) || (level > MAX_TEXTURE_LEVEL)) { setError(GL_INVALID_VALUE); return; }
+    const TexLevel *lv = &t->level[level];
+    if (!t->loaded || !lv->defined || t->format.compressed) { setError(GL_INVALID_OPERATION); return; }
+    if ((width < 0) || (height < 0) || (xoffset < 0) || (yoffset < 0) || (xoffset + width > lv->width) ||
+        (yoffset + height > lv->height))
+    {
+        setError(GL_INVALID_VALUE);
+        return;
+    }
+
+    // The texels keep the texture's format
+    GLenum format, type;
+    texFormatGl(t->format.format, &format, &type);
+    u8 *pixels = copyPixels(x, y, width, height, format, type);
+    if (pixels == NULL) return;
+    PixelStore saved = gl.unpack;
+    gl.unpack = (PixelStore){ .alignment = 1 };
+    glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
+    gl.unpack = saved;
+    free(pixels);
+}
+
+//----------------------------------------------------------------------------------
 // Not implemented yet (declared so that code like GLU links; see gl.h)
 //----------------------------------------------------------------------------------
 #define NOT_IMPLEMENTED(name) do { WARN_ONCE(name " not implemented yet\n"); setError(GL_INVALID_OPERATION); } while (0)

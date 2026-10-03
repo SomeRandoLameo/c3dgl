@@ -96,7 +96,10 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] Texture borders (GL; border texels are dropped), proxy textures, `glGetTexLevelParameter*` (GL)
 * [ ] Internal formats with different sampling (`GL_INTENSITY`, ...) (GL)
 * [x] `glGetTexParameter*` (`iv`, `fv`, `xv`)
-* [ ] `glCopyTexImage2D`, `glCopyTexSubImage2D`
+* [x] `glCopyTexImage2D`, `glCopyTexSubImage2D`: internal formats `GL_ALPHA`, `GL_LUMINANCE(_ALPHA)`, `GL_RGB`,
+  `GL_RGBA` (sized ones come with the internal formats above), borders; sub-copies keep the texture's format (also the
+  16-bit ones). The rectangle is read like `glReadPixels` (frame ended without presenting), so draws issued before the
+  copy keep the old texels; luminance is R as for texture images
 * [x] `glCompressedTexImage2D`, `glCompressedTexSubImage2D` (`GL_INVALID_OPERATION` for both formats, as their
   extensions require), `GL_NUM_COMPRESSED_TEXTURE_FORMATS`, `GL_COMPRESSED_TEXTURE_FORMATS`, compressed proxies
 * [x] Paletted textures, all 10 `GL_PALETTE4/8_*_OES` formats (ES, required): expanded to the palette's format
@@ -234,7 +237,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 ```text
 [ ] Lighting in the vertex shader     [ ] Display lists (GL)
-[ ] Logic op, sample coverage         [ ] Texture copies (glCopyTexImage2D)
+[ ] Logic op, sample coverage
 [ ] Smooth points/lines (GL)          [ ] Feedback / selection (GL)
                                       [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
                                       [ ] Accumulation buffer (GL)
@@ -257,5 +260,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Lighting (CPU, per vertex)        [x] Evaluators (GL)
 [x] Fog (PICA fog table)              [x] User clip planes (CPU)
 [x] Point parameters + sprites (ES) [x] Point size array (ES)
-[x] Compressed textures: paletted + ETC1 (ES)
+[x] Compressed textures: paletted + ETC1 (ES) [x] Texture copies (glCopyTexImage2D)
 ```

@@ -808,6 +808,13 @@ void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoi
 void glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint *params);
 void glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat *params);
 
+// Copying the framebuffer into a texture: internal formats GL_ALPHA, GL_LUMINANCE, GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA;
+// glCopyTexSubImage2D keeps the texture's format. Waits for the GPU to finish the draws so far, like glReadPixels
+void glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height,
+                      GLint border);
+void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
+                         GLsizei height);
+
 // Compressed textures (GL 1.3, ES 1.1). Paletted (ES 1.1 GL_OES_compressed_paletted_texture): expanded to the palette's
 // format on load, level <= 0 loads levels 0..-level from one image. ETC1 (GL_OES_compressed_ETC1_RGB8_texture):
 // sampled natively by PICA. glCompressedTexSubImage2D is GL_INVALID_OPERATION for both, as the extensions require
