@@ -177,6 +177,15 @@ typedef void            GLvoid;
 #define GL_EXP2                             0x0801
 #define GL_FOG_HINT                         0x0C54
 
+// User clip planes (glClipPlane)
+#define GL_CLIP_PLANE0                      0x3000
+#define GL_CLIP_PLANE1                      0x3001
+#define GL_CLIP_PLANE2                      0x3002
+#define GL_CLIP_PLANE3                      0x3003
+#define GL_CLIP_PLANE4                      0x3004
+#define GL_CLIP_PLANE5                      0x3005
+#define GL_MAX_CLIP_PLANES                  0x0D32
+
 // Lighting (glLight, glLightModel, glMaterial, glColorMaterial)
 #define GL_AMBIENT                          0x1200
 #define GL_DIFFUSE                          0x1201
@@ -801,6 +810,11 @@ void glFogfv(GLenum pname, const GLfloat *params);
 void glFogi(GLenum pname, GLint param);
 void glFogiv(GLenum pname, const GLint *params);
 
+// User clip planes: 6, in eye coordinates (transformed by the inverse modelview of the glClipPlane call);
+// clipped on the CPU
+void glClipPlane(GLenum plane, const GLdouble *equation);
+void glGetClipPlane(GLenum plane, GLdouble *equation);
+
 // Evaluators (GL): order up to 30
 void glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat *points);
 void glMap1d(GLenum target, GLdouble u1, GLdouble u2, GLint stride, GLint order, const GLdouble *points);
@@ -842,6 +856,8 @@ void glOrthof(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat 
 void glFrustumf(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat zNear, GLfloat zFar);
 void glDepthRangef(GLclampf zNear, GLclampf zFar);
 void glClearDepthf(GLclampf depth);
+void glClipPlanef(GLenum plane, const GLfloat *equation);
+void glGetClipPlanef(GLenum plane, GLfloat *equation);
 void glAlphaFuncx(GLenum func, GLclampx ref);
 void glClearColorx(GLclampx red, GLclampx green, GLclampx blue, GLclampx alpha);
 void glClearDepthx(GLclampx depth);
@@ -876,6 +892,8 @@ void glGetLightxv(GLenum light, GLenum pname, GLfixed *params);
 void glGetMaterialxv(GLenum face, GLenum pname, GLfixed *params);
 void glFogx(GLenum pname, GLfixed param);
 void glFogxv(GLenum pname, const GLfixed *params);
+void glClipPlanex(GLenum plane, const GLfixed *equation);
+void glGetClipPlanex(GLenum plane, GLfixed *equation);
 
 #ifdef __cplusplus
 }

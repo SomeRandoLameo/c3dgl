@@ -94,6 +94,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
   flat shading with `GL_NORMALIZE`/`GL_RESCALE_NORMAL`; self-checks of the lighting API on the bottom screen
 - `fog`: linear/exp/exp2 fog with perspective and orthographic projections, depth range, lines/points and blending,
   each next to a reference square in the expected color; self-checks of the fog API on the bottom screen
+- `clipplane`: user clip planes on smooth-shaded, textured and lit geometry, lines, points and `glPolygonMode`
+  outlines, mostly next to the expected shape drawn without clipping; self-checks of the clip plane API on the bottom screen
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
 c3dgl itself does not.
@@ -141,6 +143,7 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - Lighting: 8 lights (directional, positional with attenuation, spot), materials per face, `glColorMaterial`,
   two-sided lighting, local viewer, `GL_NORMALIZE`, `GL_RESCALE_NORMAL`; `glGetLight`, `glGetMaterial`
 - Fog: `GL_LINEAR`, `GL_EXP`, `GL_EXP2`, per pixel; `glFog*` and the fog queries
+- User clip planes: 6 (`glClipPlane`, ES `glClipPlanef/x`, `glGetClipPlane*`)
 - Dithering and smoothing can be enabled and queried but have no effect yet
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
@@ -171,6 +174,10 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
   GL's factor depends on the eye distance, so each entry maps its window depth back through the projection to
   `z_eye` (exact for `glFrustum`/`glOrtho`-style projections). The table is rebuilt only when the projection,
   depth range or fog parameters change.
+- User clip planes are clipped on the CPU (PICA has only one clip plane), in object space before lines and points are
+  expanded: each plane goes to object space with the current modelview (cached per matrix change), polygons are
+  clipped Sutherland-Hodgman with all attributes interpolated, so the GPU only ever sees the remaining part.
+  Edges along a clip plane are not outlined by `glPolygonMode(GL_LINE)`.
 - Depth and stencil share one D24S8 buffer. `glClear` uses a memory fill when it can; clearing only depth or
   only stencil (once stencil is in use), or clearing with a scissor box or color mask, draws a full-screen quad.
 - Textures are padded to power-of-two sizes and Morton-swizzled on upload; the shader applies the texture matrix

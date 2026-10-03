@@ -50,6 +50,7 @@
 #define C3DGL_ATTRIB_STACK      16          // glPushAttrib / glPushClientAttrib depth (GL minimum)
 #define C3DGL_MAX_EVAL_ORDER    30          // Evaluator order (GL minimum 8)
 #define C3DGL_MAX_LIGHTS        8
+#define C3DGL_MAX_CLIP_PLANES   6           // User clip planes, clipped on the CPU (GL minimum 6, ES 1)
 #define C3DGL_MAX_TEXTURE_SIZE  1024
 #define MAX_TEXTURE_LEVEL       10          // log2(C3DGL_MAX_TEXTURE_SIZE)
 
@@ -212,6 +213,13 @@ typedef struct {
     GLsizei stride;
 } ClientArray;
 
+// A polygon's vertices with edge flags (edges[i]: edge from vertex i to i + 1), scratch list of clipPolygon()
+typedef struct {
+    Vertex *verts;
+    bool *edges;
+    int capacity;
+} PolygonList;
+
 // Buffer object (VBO). Kept in normal memory: vertices are converted into the per-frame vertex buffer anyway
 typedef struct {
     bool used;                  // Id handed out by glGenBuffers or created by glBindBuffer
@@ -321,6 +329,16 @@ static struct {
     float fogLutInputs[10];
     bool fogLutValid;
 
+    // User clip planes (glClipPlane), see clipPolygon()
+    float clipPlanes[C3DGL_MAX_CLIP_PLANES][4];     // Eye coordinates
+    u8 clipEnabled;                     // Bit per plane
+    float clipObject[C3DGL_MAX_CLIP_PLANES][4];     // Enabled planes in object coordinates, for clipObjectSerial
+    int clipObjectCount;
+    u32 clipObjectSerial;               // matrixSerial of clipObject, 0: stale
+    PolygonList clipLists[2];
+    const Vertex **clipPtrs;
+    int clipPtrCapacity;
+
     // Lighting, see lightVertex()
     LightingState lighting;
     bool lightingEnabled, colorMaterial, normalize, rescaleNormal;
@@ -376,6 +394,34 @@ static void mat4Mul(Mat4 *out, const Mat4 *a, const Mat4 *b)
 static void mat4Transform(const Mat4 *m, const float v[3], float out[4])
 {
     for (int row = 0; row < 4; row++) out[row] = m->m[row]*v[0] + m->m[4 + row]*v[1] + m->m[8 + row]*v[2] + m->m[12 + row];
+}
+
+// General inverse (cofactors); false and identity if m is singular
+static bool mat4Invert(const Mat4 *m, Mat4 *out)
+{
+    const float *a = m->m;
+    float inv[16];
+    inv[0] = a[5]*a[10]*a[15] - a[5]*a[11]*a[14] - a[9]*a[6]*a[15] + a[9]*a[7]*a[14] + a[13]*a[6]*a[11] - a[13]*a[7]*a[10];
+    inv[4] = -a[4]*a[10]*a[15] + a[4]*a[11]*a[14] + a[8]*a[6]*a[15] - a[8]*a[7]*a[14] - a[12]*a[6]*a[11] + a[12]*a[7]*a[10];
+    inv[8] = a[4]*a[9]*a[15] - a[4]*a[11]*a[13] - a[8]*a[5]*a[15] + a[8]*a[7]*a[13] + a[12]*a[5]*a[11] - a[12]*a[7]*a[9];
+    inv[12] = -a[4]*a[9]*a[14] + a[4]*a[10]*a[13] + a[8]*a[5]*a[14] - a[8]*a[6]*a[13] - a[12]*a[5]*a[10] + a[12]*a[6]*a[9];
+    inv[1] = -a[1]*a[10]*a[15] + a[1]*a[11]*a[14] + a[9]*a[2]*a[15] - a[9]*a[3]*a[14] - a[13]*a[2]*a[11] + a[13]*a[3]*a[10];
+    inv[5] = a[0]*a[10]*a[15] - a[0]*a[11]*a[14] - a[8]*a[2]*a[15] + a[8]*a[3]*a[14] + a[12]*a[2]*a[11] - a[12]*a[3]*a[10];
+    inv[9] = -a[0]*a[9]*a[15] + a[0]*a[11]*a[13] + a[8]*a[1]*a[15] - a[8]*a[3]*a[13] - a[12]*a[1]*a[11] + a[12]*a[3]*a[9];
+    inv[13] = a[0]*a[9]*a[14] - a[0]*a[10]*a[13] - a[8]*a[1]*a[14] + a[8]*a[2]*a[13] + a[12]*a[1]*a[10] - a[12]*a[2]*a[9];
+    inv[2] = a[1]*a[6]*a[15] - a[1]*a[7]*a[14] - a[5]*a[2]*a[15] + a[5]*a[3]*a[14] + a[13]*a[2]*a[7] - a[13]*a[3]*a[6];
+    inv[6] = -a[0]*a[6]*a[15] + a[0]*a[7]*a[14] + a[4]*a[2]*a[15] - a[4]*a[3]*a[14] - a[12]*a[2]*a[7] + a[12]*a[3]*a[6];
+    inv[10] = a[0]*a[5]*a[15] - a[0]*a[7]*a[13] - a[4]*a[1]*a[15] + a[4]*a[3]*a[13] + a[12]*a[1]*a[7] - a[12]*a[3]*a[5];
+    inv[14] = -a[0]*a[5]*a[14] + a[0]*a[6]*a[13] + a[4]*a[1]*a[14] - a[4]*a[2]*a[13] - a[12]*a[1]*a[6] + a[12]*a[2]*a[5];
+    inv[3] = -a[1]*a[6]*a[11] + a[1]*a[7]*a[10] + a[5]*a[2]*a[11] - a[5]*a[3]*a[10] - a[9]*a[2]*a[7] + a[9]*a[3]*a[6];
+    inv[7] = a[0]*a[6]*a[11] - a[0]*a[7]*a[10] - a[4]*a[2]*a[11] + a[4]*a[3]*a[10] + a[8]*a[2]*a[7] - a[8]*a[3]*a[6];
+    inv[11] = -a[0]*a[5]*a[11] + a[0]*a[7]*a[9] + a[4]*a[1]*a[11] - a[4]*a[3]*a[9] - a[8]*a[1]*a[7] + a[8]*a[3]*a[5];
+    inv[15] = a[0]*a[5]*a[10] - a[0]*a[6]*a[9] - a[4]*a[1]*a[10] + a[4]*a[2]*a[9] + a[8]*a[1]*a[6] - a[8]*a[2]*a[5];
+
+    float det = a[0]*inv[0] + a[1]*inv[4] + a[2]*inv[8] + a[3]*inv[12];
+    if (det == 0.0f) { mat4Identity(out); return false; }
+    for (int i = 0; i < 16; i++) out->m[i] = inv[i]/det;
+    return true;
 }
 
 static void mat4ToC3D(const Mat4 *m, C3D_Mtx *out)
@@ -1000,10 +1046,141 @@ static void emitTriangle(const Vertex *a, const Vertex *b, const Vertex *c)
 
 static void lerpVertex(Vertex *out, const Vertex *a, const Vertex *b, float t)
 {
+    for (int i = 0; i < 3; i++) out->pos[i] = a->pos[i] + (b->pos[i] - a->pos[i])*t;
     for (int i = 0; i < 3; i++) out->tex[i] = a->tex[i] + (b->tex[i] - a->tex[i])*t;
     for (int u = 0; u < C3DGL_TEXTURE_UNITS - 1; u++)
         for (int i = 0; i < 3; i++) out->texExtra[u][i] = a->texExtra[u][i] + (b->texExtra[u][i] - a->texExtra[u][i])*t;
     for (int i = 0; i < 4; i++) out->color[i] = (u8)(a->color[i] + ((float)b->color[i] - a->color[i])*t);
+    for (int i = 0; i < 4; i++) out->backColor[i] = (u8)(a->backColor[i] + ((float)b->backColor[i] - a->backColor[i])*t);
+}
+
+//----------------------------------------------------------------------------------
+// User clip planes (glClipPlane): clipped on the CPU in object space, before lines and points are expanded and
+// before polygons are filled, outlined or drawn as vertices. Vertices reach this point untransformed, so the
+// eye space planes go to object space with the modelview (p_obj = p_eye * M); attributes are interpolated linearly
+// like GL does in clip space (object -> clip space is linear)
+//----------------------------------------------------------------------------------
+// The enabled planes in object coordinates, cached per modelview
+static int objectClipPlanes(void)
+{
+    if (gl.clipObjectSerial == gl.matrixSerial) return gl.clipObjectCount;
+    gl.clipObjectSerial = gl.matrixSerial;
+
+    const float *m = gl.stack[0][gl.stackDepth[0]].m;
+    int count = 0;
+    for (int i = 0; i < C3DGL_MAX_CLIP_PLANES; i++)
+    {
+        if (!(gl.clipEnabled & (1u << i))) continue;
+        const float *p = gl.clipPlanes[i];
+        for (int c = 0; c < 4; c++) gl.clipObject[count][c] = p[0]*m[c*4] + p[1]*m[c*4 + 1] + p[2]*m[c*4 + 2] + p[3]*m[c*4 + 3];
+        count++;
+    }
+    gl.clipObjectCount = count;
+    return count;
+}
+
+static float clipDistance(const float plane[4], const Vertex *v)
+{
+    return plane[0]*v->pos[0] + plane[1]*v->pos[1] + plane[2]*v->pos[2] + plane[3];
+}
+
+// Points are kept or dropped whole
+static bool pointClipped(const Vertex *v)
+{
+    int count = gl.clipEnabled? objectClipPlanes() : 0;
+    for (int i = 0; i < count; i++) if (clipDistance(gl.clipObject[i], v) < 0.0f) return true;
+    return false;
+}
+
+// Clip the segment *a -> *b; clipped ends are written to va/vb and *a/*b point there. False: nothing is left
+static bool clipSegment(const Vertex **a, const Vertex **b, Vertex *va, Vertex *vb)
+{
+    int count = gl.clipEnabled? objectClipPlanes() : 0;
+    float t0 = 0.0f, t1 = 1.0f;
+    for (int i = 0; i < count; i++)
+    {
+        float da = clipDistance(gl.clipObject[i], *a), db = clipDistance(gl.clipObject[i], *b);
+        if ((da < 0.0f) && (db < 0.0f)) return false;
+        if (da < 0.0f) t0 = fmaxf(t0, da/(da - db));
+        else if (db < 0.0f) t1 = fminf(t1, da/(da - db));
+    }
+    if (t0 > t1) return false;
+    if ((t0 == 0.0f) && (t1 == 1.0f)) return true;
+
+    const Vertex *oa = *a, *ob = *b;
+    *va = *oa;
+    *vb = *ob;
+    if (t0 > 0.0f) lerpVertex(va, oa, ob, t0);
+    if (t1 < 1.0f) lerpVertex(vb, oa, ob, t1);
+    *a = va;
+    *b = vb;
+    return true;
+}
+
+static bool reservePolygonList(PolygonList *l, int count)
+{
+    if (count <= l->capacity) return true;
+
+    Vertex *verts = realloc(l->verts, count*sizeof(Vertex));
+    if (verts != NULL) l->verts = verts;
+    bool *edges = realloc(l->edges, count*sizeof(bool));
+    if (edges != NULL) l->edges = edges;
+    if ((verts == NULL) || (edges == NULL)) { setError(GL_OUT_OF_MEMORY); return false; }
+    l->capacity = count;
+    return true;
+}
+
+// Sutherland-Hodgman against the enabled planes. On return *vs/*edges point to the clipped polygon (unchanged if
+// it is completely inside), the result is its vertex count (< 3: nothing left). Parts of the original edges keep
+// their edge flags, edges along a clip plane are not drawn by glPolygonMode outlines
+static int clipPolygon(const Vertex *const **vs, const bool **edges, int n)
+{
+    int count = gl.clipEnabled? objectClipPlanes() : 0;
+    bool inside = true;
+    for (int p = 0; (p < count) && inside; p++)
+        for (int i = 0; i < n; i++) if (clipDistance(gl.clipObject[p], (*vs)[i]) < 0.0f) { inside = false; break; }
+    if (inside) return n;
+
+    PolygonList *in = &gl.clipLists[0], *out = &gl.clipLists[1];
+    if (!reservePolygonList(in, n)) return 0;
+    for (int i = 0; i < n; i++) { in->verts[i] = *(*vs)[i]; in->edges[i] = (*edges)[i]; }
+
+    for (int p = 0; (p < count) && (n >= 3); p++)
+    {
+        // Every edge adds at most two vertices
+        if (!reservePolygonList(out, 2*n)) return 0;
+        const float *plane = gl.clipObject[p];
+        int m = 0;
+        float da = clipDistance(plane, &in->verts[0]);
+        for (int i = 0; i < n; i++)
+        {
+            const Vertex *a = &in->verts[i], *b = &in->verts[(i + 1) % n];
+            float db = clipDistance(plane, b);
+            if (da >= 0.0f) { out->verts[m] = *a; out->edges[m++] = in->edges[i]; }
+            if ((da >= 0.0f) != (db >= 0.0f))
+            {
+                out->verts[m] = *a;
+                lerpVertex(&out->verts[m], a, b, da/(da - db));
+                out->edges[m++] = (da < 0.0f) && in->edges[i];     // Leaving: the next edge runs along the plane
+            }
+            da = db;
+        }
+        n = m;
+        PolygonList *t = in; in = out; out = t;
+    }
+    if (n < 3) return 0;
+
+    if (n > gl.clipPtrCapacity)
+    {
+        const Vertex **ptrs = realloc(gl.clipPtrs, n*sizeof(Vertex *));
+        if (ptrs == NULL) { setError(GL_OUT_OF_MEMORY); return 0; }
+        gl.clipPtrs = ptrs;
+        gl.clipPtrCapacity = n;
+    }
+    for (int i = 0; i < n; i++) gl.clipPtrs[i] = &in->verts[i];
+    *vs = gl.clipPtrs;
+    *edges = in->edges;
+    return n;
 }
 
 #define CLIP_W_MIN  1e-5f       // Lines and points are clipped against w > CLIP_W_MIN before the divide
@@ -1026,6 +1203,9 @@ static void emitExpandedQuad(const Vertex *a, const Vertex *b, const float pa[3]
 // zBias is added to the NDC depth (polygon offset of polygon outlines)
 static void emitLine(const Vertex *a, const Vertex *b, float zBias)
 {
+    Vertex clippedA, clippedB;
+    if (!clipSegment(&a, &b, &clippedA, &clippedB)) return;
+
     const Mat4 *pmv = projectionModelview();
 
     float ca[4], cb[4];
@@ -1066,6 +1246,8 @@ static void emitLine(const Vertex *a, const Vertex *b, float zBias)
 // Expand a point to a screen-aligned square of glPointSize pixels in NDC (batch must be in clipSpace mode)
 static void emitPoint(const Vertex *v, float zBias)
 {
+    if (pointClipped(v)) return;
+
     float c[4];
     mat4Transform(projectionModelview(), v->pos, c);
     if (c[3] < CLIP_W_MIN) return;
@@ -1153,6 +1335,8 @@ static float polygonOffset(const Vertex *const *vs, int n)
 // glPolygonMode of the side that faces the viewer. pv: provoking vertex for flat shading
 static void emitPolygon(const Vertex *const *vs, const bool *edges, int n, const Vertex *pv)
 {
+    if (gl.clipEnabled && ((n = clipPolygon(&vs, &edges, n)) < 3)) return;
+
     GLenum mode = GL_FILL;
     bool polygonModes = (gl.polygonMode[0] != GL_FILL) || (gl.polygonMode[1] != GL_FILL);
     bool twoSided = gl.lightingEnabled && gl.lighting.twoSide;
@@ -1696,6 +1880,8 @@ void c3dglClose(void)
     free(gl.polyVerts);
     free(gl.polyEdges);
     free(gl.polyPtrs);
+    for (int i = 0; i < 2; i++) { free(gl.clipLists[i].verts); free(gl.clipLists[i].edges); }
+    free(gl.clipPtrs);
     for (GLuint i = 0; i < gl.bufferCount; i++) free(gl.buffers[i].data);
     free(gl.buffers);
     for (int i = 0; i < 9; i++) { free(gl.map1[i].points); free(gl.map2[i].points); }
@@ -1791,6 +1977,12 @@ static void setCapability(GLenum cap, bool enable)
         case GL_CULL_FACE: gl.state.cull = enable; break;
         case GL_SCISSOR_TEST: gl.state.scissor = enable; break;
         case GL_FOG: gl.fog = enable; break;
+        case GL_CLIP_PLANE0: case GL_CLIP_PLANE1: case GL_CLIP_PLANE2:
+        case GL_CLIP_PLANE3: case GL_CLIP_PLANE4: case GL_CLIP_PLANE5:
+            if (enable) gl.clipEnabled |= 1u << (cap - GL_CLIP_PLANE0);
+            else gl.clipEnabled &= ~(1u << (cap - GL_CLIP_PLANE0));
+            gl.clipObjectSerial = 0;
+            break;
         case GL_LIGHTING: gl.lightingEnabled = enable; break;
         case GL_LIGHT0: case GL_LIGHT1: case GL_LIGHT2: case GL_LIGHT3:
         case GL_LIGHT4: case GL_LIGHT5: case GL_LIGHT6: case GL_LIGHT7:
@@ -1858,6 +2050,9 @@ GLboolean glIsEnabled(GLenum cap)
         case GL_CULL_FACE: return gl.state.cull;
         case GL_SCISSOR_TEST: return gl.state.scissor;
         case GL_FOG: return gl.fog;
+        case GL_CLIP_PLANE0: case GL_CLIP_PLANE1: case GL_CLIP_PLANE2:
+        case GL_CLIP_PLANE3: case GL_CLIP_PLANE4: case GL_CLIP_PLANE5:
+            return (gl.clipEnabled >> (cap - GL_CLIP_PLANE0)) & 1;
         case GL_LIGHTING: return gl.lightingEnabled;
         case GL_LIGHT0: case GL_LIGHT1: case GL_LIGHT2: case GL_LIGHT3:
         case GL_LIGHT4: case GL_LIGHT5: case GL_LIGHT6: case GL_LIGHT7:
@@ -2041,6 +2236,7 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_FRONT_FACE: v[0] = gl.state.frontFace; return 1;
         case GL_SHADE_MODEL: v[0] = gl.shadeModel; return 1;
         case GL_MAX_LIGHTS: v[0] = C3DGL_MAX_LIGHTS; return 1;
+        case GL_MAX_CLIP_PLANES: v[0] = C3DGL_MAX_CLIP_PLANES; return 1;
         case GL_FOG_MODE: v[0] = gl.fogMode; return 1;
         case GL_FOG_DENSITY: v[0] = gl.fogDensity; return 1;
         case GL_FOG_START: v[0] = gl.fogStart; return 1;
@@ -2087,6 +2283,7 @@ static int getState(GLenum pname, double v[16], bool *normalized)
                 (pname == GL_EDGE_FLAG_ARRAY) || (pname == GL_POLYGON_OFFSET_FILL) || (pname == GL_POLYGON_OFFSET_LINE) ||
                 (pname == GL_POLYGON_OFFSET_POINT) || (pname == GL_AUTO_NORMAL) || (pname == GL_LIGHTING) || (pname == GL_FOG) ||
                 ((pname >= GL_LIGHT0) && (pname <= GL_LIGHT7)) || (pname == GL_COLOR_MATERIAL) ||
+                ((pname >= GL_CLIP_PLANE0) && (pname < GL_CLIP_PLANE0 + C3DGL_MAX_CLIP_PLANES)) ||
                 (pname == GL_NORMALIZE) || (pname == GL_RESCALE_NORMAL) ||
                 ((pname >= GL_MAP1_COLOR_4) && (pname <= GL_MAP1_VERTEX_4)) || ((pname >= GL_MAP2_COLOR_4) && (pname <= GL_MAP2_VERTEX_4)))
             {
@@ -2965,6 +3162,43 @@ void glFogi(GLenum pname, GLint param)
 {
     if (pname == GL_FOG_COLOR) { setError(GL_INVALID_ENUM); return; }
     glFogiv(pname, &param);
+}
+
+//----------------------------------------------------------------------------------
+// OpenGL: user clip planes (clipped on the CPU, see clipPolygon())
+//----------------------------------------------------------------------------------
+static float *clipPlane(GLenum plane)
+{
+    if ((plane < GL_CLIP_PLANE0) || (plane >= GL_CLIP_PLANE0 + C3DGL_MAX_CLIP_PLANES)) { setError(GL_INVALID_ENUM); return NULL; }
+    return gl.clipPlanes[plane - GL_CLIP_PLANE0];
+}
+
+// The plane is stored in eye coordinates: p_eye = p * M^-1 with the current modelview
+static void setClipPlane(GLenum plane, const double equation[4])
+{
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    float *p = clipPlane(plane);
+    if (p == NULL) return;
+
+    Mat4 inv;
+    mat4Invert(&gl.stack[0][gl.stackDepth[0]], &inv);
+    for (int c = 0; c < 4; c++)
+        p[c] = (float)(equation[0]*inv.m[c*4] + equation[1]*inv.m[c*4 + 1] + equation[2]*inv.m[c*4 + 2] + equation[3]*inv.m[c*4 + 3]);
+    gl.clipObjectSerial = 0;
+}
+
+static const float *getClipPlane(GLenum plane)
+{
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return NULL; }
+    return clipPlane(plane);
+}
+
+void glClipPlane(GLenum plane, const GLdouble *equation) { setClipPlane(plane, equation); }
+
+void glGetClipPlane(GLenum plane, GLdouble *equation)
+{
+    const float *p = getClipPlane(plane);
+    if (p != NULL) for (int i = 0; i < 4; i++) equation[i] = p[i];
 }
 
 //----------------------------------------------------------------------------------
@@ -4539,6 +4773,8 @@ typedef struct {
     bool fog;
     GLenum fogMode;
     float fogDensity, fogStart, fogEnd, fogColor[4], fogIndex;
+    float clipPlanes[C3DGL_MAX_CLIP_PLANES][4];
+    u8 clipEnabled;
 } AttribState;
 
 typedef struct {
@@ -4623,6 +4859,8 @@ void glPushAttrib(GLbitfield mask)
     a->fogEnd = gl.fogEnd;
     a->fogIndex = gl.fogIndex;
     memcpy(a->fogColor, gl.fogColor, sizeof(a->fogColor));
+    memcpy(a->clipPlanes, gl.clipPlanes, sizeof(a->clipPlanes));
+    a->clipEnabled = gl.clipEnabled;
 }
 
 void glPopAttrib(void)
@@ -4713,6 +4951,9 @@ void glPopAttrib(void)
         gl.matrixMode = a->matrixMode;
         gl.normalize = a->normalize;
         gl.rescaleNormal = a->rescaleNormal;
+        memcpy(gl.clipPlanes, a->clipPlanes, sizeof(gl.clipPlanes));
+        gl.clipEnabled = a->clipEnabled;
+        gl.clipObjectSerial = 0;
     }
     if (mask & GL_ENABLE_BIT)
     {
@@ -4732,6 +4973,8 @@ void glPopAttrib(void)
         gl.normalize = a->normalize;
         gl.rescaleNormal = a->rescaleNormal;
         gl.fog = a->fog;
+        gl.clipEnabled = a->clipEnabled;
+        gl.clipObjectSerial = 0;
         caps = 0xFFFFFFFFu;     // All stored-only capabilities
     }
     if (mask & GL_COLOR_BUFFER_BIT)
@@ -4872,6 +5115,18 @@ void glOrthof(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat 
 void glFrustumf(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat zNear, GLfloat zFar) { glFrustum(left, right, bottom, top, zNear, zFar); }
 void glDepthRangef(GLclampf zNear, GLclampf zFar) { glDepthRange(zNear, zFar); }
 void glClearDepthf(GLclampf depth) { glClearDepth(depth); }
+
+void glClipPlanef(GLenum plane, const GLfloat *equation)
+{
+    double e[4] = { equation[0], equation[1], equation[2], equation[3] };
+    setClipPlane(plane, e);
+}
+
+void glGetClipPlanef(GLenum plane, GLfloat *equation)
+{
+    const float *p = getClipPlane(plane);
+    if (p != NULL) memcpy(equation, p, 4*sizeof(float));
+}
 
 static float fixedToFloat(GLfixed x) { return x/65536.0f; }
 
@@ -5023,6 +5278,19 @@ void glFogxv(GLenum pname, const GLfixed *params)
     if (pname == GL_FOG_COLOR) for (int i = 0; i < 4; i++) f[i] = fixedToFloat(params[i]);
     else f[0] = (pname == GL_FOG_MODE)? (float)params[0] : fixedToFloat(params[0]);
     setFog(pname, f);
+}
+
+void glClipPlanex(GLenum plane, const GLfixed *equation)
+{
+    double e[4];
+    for (int i = 0; i < 4; i++) e[i] = equation[i]/65536.0;
+    setClipPlane(plane, e);
+}
+
+void glGetClipPlanex(GLenum plane, GLfixed *equation)
+{
+    const float *p = getClipPlane(plane);
+    if (p != NULL) for (int i = 0; i < 4; i++) equation[i] = floatToFixed(p[i]);
 }
 
 void glGetFixedv(GLenum pname, GLfixed *params)

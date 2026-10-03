@@ -47,7 +47,9 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glViewport`
 * [x] Texture matrix (`GL_TEXTURE`), including projective matrices (q divide by PICA projection mode)
 * [x] `glOrthof`, `glFrustumf`, `glDepthRangef`, `glClearDepthf` (ES float variants)
-* [ ] Clip planes: `glClipPlane`, `glGetClipPlane` (`f`/`x` variants in ES), `GL_CLIP_PLANE0..5`
+* [x] Clip planes: `glClipPlane`, `glGetClipPlane` (`f`/`x` variants in ES), `GL_CLIP_PLANE0..5`, `GL_MAX_CLIP_PLANES` = 6;
+  clipped on the CPU in object space (polygons Sutherland-Hodgman with all attributes, lines before expansion,
+  points whole), in `GL_TRANSFORM_BIT`/`GL_ENABLE_BIT`. Edges along a clip plane are not outlined in `GL_LINE` mode
 
 ## Fixed-Point API (ES)
 
@@ -56,9 +58,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   `glDepthRangex`, `glFrustumx`, `glGetFixedv`, `glLineWidthx`, `glLoadMatrixx`, `glMultMatrixx`, `glNormal3x`,
   `glOrthox`, `glPointSizex`, `glPolygonOffsetx`, `glRotatex`, `glScalex`, `glTexEnvx(v)`, `glTexParameterx(v)`, `glTranslatex`
 * [x] `glLightx(v)`, `glLightModelx(v)`, `glMaterialx(v)`, `glGetLightxv`, `glGetMaterialxv`, `glMultiTexCoord4x`
-* [x] `glFogx(v)`
-* [ ] `x` entry points that come with their features: `glClipPlanex`, `glPointParameterx(v)`,
-  `glSampleCoveragex`, `glGetClipPlanex`
+* [x] `glFogx(v)`, `glClipPlanex`, `glGetClipPlanex`
+* [ ] `x` entry points that come with their features: `glPointParameterx(v)`, `glSampleCoveragex`
 
 ## Lighting
 
@@ -178,7 +179,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glGetError`, `glGetString`, `glIsEnabled`, `glIsTexture`
 * [x] `glGetFixedv` (ES), `glGetPointerv`, `glGetBufferParameteriv` (ES)
 * [x] `glGetLight*`, `glGetMaterial*`, lighting state in `glGet*`
-* [ ] `glGetClipPlane*`
+* [x] `glGetClipPlane*`
 * [ ] `GL_EXTENSIONS` lists nothing yet (ES 1.1 requires the point sprite / point size array / paletted texture names)
 * [~] `glHint` — accepted, hints have no effect (allowed by the spec)
 
@@ -214,8 +215,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 ```text
 [ ] Lighting in the vertex shader     [ ] Display lists (GL)
 [ ] Compressed / paletted textures    [ ] Texture copies, glReadPixels
-[ ] Clip planes                       [ ] Feedback / selection (GL)
-[ ] Smooth points/lines               [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
+[ ] Smooth points/lines (GL)          [ ] Feedback / selection (GL)
+[ ] Point size array (ES)             [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
 [ ] Point parameters + sprites (ES)   [ ] Accumulation buffer (GL)
 [ ] Logic op, sample coverage         [ ] 1D textures, texgen (GL)
 [ ] Complete state queries            [ ] Stipple (GL)
@@ -234,5 +235,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] VBOs (ES)                         [x] Multitexturing + GL_COMBINE (ES)
 [x] Mipmapping (+ GL_GENERATE_MIPMAP) [x] Attribute stacks (GL)
 [x] Lighting (CPU, per vertex)        [x] Evaluators (GL)
-[x] Fog (PICA fog table)
+[x] Fog (PICA fog table)              [x] User clip planes (CPU)
 ```
