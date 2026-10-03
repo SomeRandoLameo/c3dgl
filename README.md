@@ -85,7 +85,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `cube`: 3D, depth test, culling, textures (NPOT and PNG), scissor, sub-viewports
 - `primitives`: every primitive mode with culling on to catch wrong winding; page 2: flat shading, polygon modes,
   edge flags, polygon offset, depth range
-- `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks and the ES API; green screen = all passed
+- `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks, display lists
+  and the ES API; green screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
   page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps, page 5: compressed textures (paletted, ETC1)
@@ -99,6 +100,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `points` (ES API): point size min/max, distance attenuation (also through the fixed-point API), the point size
   array, point sprites with `GL_COORD_REPLACE_OES` on one and two units, a particle field with per-particle sizes;
   self-checks of the point API on the bottom screen
+- `lists`: display lists, the classic gears: each gear is a list (geometry, normals, material, shade model) drawn with
+  `glCallList`; A switches to immediate mode, which looks identical
 
 Every example shows the CPU and GPU time of the last frame, the command buffer usage and the frames per second
 (averaged over one second) in rows 2-5 of the bottom screen (`C3D_GetProcessingTime`, `C3D_GetDrawingTime`,
@@ -150,6 +153,9 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
   `glRect*`, `glLoadMatrix*`, `glTranslated`/`glRotated`/`glScaled`
 - Mipmaps: all levels, mipmap filters, `GL_GENERATE_MIPMAP`; `glGetTexParameter`
 - Attribute stacks: `glPushAttrib`/`glPopAttrib`, `glPushClientAttrib`/`glPopClientAttrib`
+- Display lists: `glNewList`/`glEndList` (`GL_COMPILE`, `GL_COMPILE_AND_EXECUTE`), `glCallList`, `glCallLists` (all
+  types) with `glListBase`, `glGenLists`, `glDeleteLists`, `glIsList`, nesting 64 deep; client data (pixels, control
+  points, vertex arrays) is copied at compile time
 - Pixel store modes (alignment, row length, skip rows/pixels, byte swapping), texture borders, proxy textures,
   `glGetTexLevelParameter`
 - GLU: the complete Mesa GLU 9.0.3 (`c3dgl::glu`, `<GL/glu.h>`), see [GLU](#glu)
@@ -170,7 +176,7 @@ The full list of functions is `include/GL/gl.h`.
 
 ## Not supported
 
-Display lists, round points (`GL_POINT_SMOOTH`) and stereoscopic 3D. Mipmap levels
+Round points (`GL_POINT_SMOOTH`) and stereoscopic 3D. Mipmap levels
 below 8x8 are accepted but not sampled (PICA stops at 8x8).
 `GL_REPEAT` on non-power-of-two textures samples the padding.
 
@@ -210,6 +216,10 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
   compared to the other formats, whose rows are flipped on upload; the texture matrix flips t for them instead.
 - Textures deleted during a frame are freed after the GPU finished that frame.
 - One render target per screen; switching flushes the batch and changes the target within the same frame.
+- Display lists store each command with its arguments; client memory is copied at compile time (texture images
+  tightly packed, vertex array elements as the immediate mode calls they stand for). `glCallList` runs the commands
+  through the same entry points, so a list renders exactly like the calls it recorded; it costs about as much CPU
+  time as those calls (nothing is pre-transformed or cached on the GPU).
 
 ## License
 

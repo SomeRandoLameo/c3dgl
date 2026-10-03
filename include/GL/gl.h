@@ -940,6 +940,28 @@ void glGetMapiv(GLenum target, GLenum query, GLint *v);
 void glGetMapfv(GLenum target, GLenum query, GLfloat *v);
 void glGetMapdv(GLenum target, GLenum query, GLdouble *v);
 
+// Display lists (GL). Commands are recorded with their arguments and replayed through the gl* functions; client data
+// (pixels, control points, vertex array elements of glArrayElement/glDrawArrays/glDrawElements) is copied at compile
+// time. Calls that GL executes immediately (glGet*, client state, glPixelStore, glGen*/glDelete*, glReadPixels, ...)
+// are not recorded. Nesting up to 64 deep
+#define GL_COMPILE                          0x1300
+#define GL_COMPILE_AND_EXECUTE              0x1301
+#define GL_LIST_MODE                        0x0B30
+#define GL_MAX_LIST_NESTING                 0x0B31
+#define GL_LIST_BASE                        0x0B32
+#define GL_LIST_INDEX                       0x0B33
+#define GL_2_BYTES                          0x1407
+#define GL_3_BYTES                          0x1408
+#define GL_4_BYTES                          0x1409
+void glNewList(GLuint list, GLenum mode);
+void glEndList(void);
+void glCallList(GLuint list);
+void glCallLists(GLsizei n, GLenum type, const GLvoid *lists);
+void glListBase(GLuint base);
+GLuint glGenLists(GLsizei range);
+void glDeleteLists(GLuint list, GLsizei range);
+GLboolean glIsList(GLuint list);
+
 // Not implemented yet: these log a warning and set GL_INVALID_OPERATION
 void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border,
                   GLenum format, GLenum type, const GLvoid *pixels);

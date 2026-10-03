@@ -4,7 +4,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 **Legend**
 
-* `[x]` Implemented and tested (in Azahar; real hardware is still pending for everything)
+* `[x]` Implemented and tested (in Azahar and on real hardware)
 * `[~]` Implemented, but not fully tested / incomplete
 * `[ ]` Missing
 * `(GL)` only in desktop OpenGL 1.1, `(ES)` only in OpenGL ES 1.1, untagged: both
@@ -188,7 +188,13 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 ## Desktop GL 1.1 Only
 
-* [ ] Display lists: `glNewList`, `glEndList`, `glCallList(s)`, `glGenLists`, `glDeleteLists`, `glIsList`, `glListBase`
+* [x] Display lists: `glNewList`, `glEndList` (`GL_COMPILE`, `GL_COMPILE_AND_EXECUTE`), `glCallList`, `glCallLists` (all
+  types), `glListBase`, `glGenLists`, `glDeleteLists`, `glIsList`; `GL_LIST_BASE/INDEX/MODE`, `GL_MAX_LIST_NESTING` (64),
+  `GL_LIST_BIT`. Client data copied at compile time (pixels with the unpack state, control points, vertex array elements,
+  `glCallLists` names); immediate commands (`glGet*`, client state, `glPixelStore`, proxies, ...) are not recorded.
+  Verified in Azahar (api checks, gears example pixel-identical to immediate mode); real hardware pending
+  * [~] Replayed through the gl* entry points: no faster than the immediate mode calls it recorded
+  * [~] The point size array (ES) is not recorded by `glArrayElement`/`glDrawArrays` in a list
 * [x] Attribute stacks: `glPushAttrib`/`glPopAttrib`, `glPushClientAttrib`/`glPopClientAttrib` (16 deep, all groups of the
   implemented state; groups of missing features fill in with them)
 * [x] Evaluators: `glMap1/2`, `glMapGrid*`, `glEvalCoord*`, `glEvalMesh*`, `glEvalPoint*`, `glGetMap*`, `GL_AUTO_NORMAL`
@@ -227,7 +233,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] Examples show CPU/GPU time, command buffer usage and FPS (bottom screen rows 2-5)
 * [x] Resource use: only changed GPU state is sent per batch (command buffer about halved), one vertex cache flush per
   command list submission instead of one per batch, `glEvalMesh2` evaluates each grid point once
-* [ ] Real hardware verification (everything so far is verified in Azahar only)
+* [x] Real hardware verification (all features up to b253860 verified on hardware; display lists pending)
   * [x] Fixed: GPU lockup on the first draw (since bf91bd4): the vertex shader left `outtc0.w` unwritten
 
 ## Known Bugs / Limits
@@ -240,8 +246,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 # Main Remaining Work
 
 ```text
-[ ] Lighting in the vertex shader     [ ] Display lists (GL)
-[ ] Smooth points/lines (GL)          [ ] Feedback / selection (GL)
+[ ] Lighting in the vertex shader     [ ] Feedback / selection (GL)
+[ ] Smooth points/lines (GL)
                                       [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
                                       [ ] Accumulation buffer (GL)
                                       [ ] 1D textures, texgen (GL)
@@ -264,5 +270,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Fog (PICA fog table)              [x] User clip planes (CPU)
 [x] Point parameters + sprites (ES) [x] Point size array (ES)
 [x] Compressed textures: paletted + ETC1 (ES) [x] Texture copies (glCopyTexImage2D)
-[x] Logic ops, sample coverage state
+[x] Logic ops, sample coverage state  [x] Display lists (GL)
 ```

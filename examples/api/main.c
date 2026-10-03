@@ -1,6 +1,6 @@
 // c3dgl example: self-check of the non-visual API (glGet*, glGetError, glIsEnabled, matrix loads, entry point
 // variants). Failed checks are listed on the bottom screen; the top screen is GREEN when everything passed,
-// RED otherwise. On top of that, four white squares are drawn with four different vertex calls
+// RED otherwise (display lists included). On top of that, four white squares are drawn with four different vertex calls
 // (glRectf, glRecti, glVertex2sv, glVertex4f with w = 2) and must look identical.
 #include <3ds.h>
 #include <GL/gl.h>
@@ -898,6 +898,323 @@ static void testLogicOpAndMultisample(void)
     glPopAttrib();
 }
 
+// Color of window pixel (x, y)
+static bool pixelIs(int x, int y, GLubyte r, GLubyte g, GLubyte b)
+{
+    GLubyte p[4];
+    glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    return (p[0] == r) && (p[1] == g) && (p[2] == b);
+}
+
+static bool modelviewTranslation(float x, float y, float z)
+{
+    GLfloat m[16];
+    glGetFloatv(GL_MODELVIEW_MATRIX, m);
+    return near(m[12], x) && near(m[13], y) && near(m[14], z);
+}
+
+// Display lists: names, compile modes, state and errors at execution time, commands executed immediately while
+// compiling, nesting (late binding, self calls up to the nesting limit), glCallLists with glListBase, client data
+// (vertex arrays, pixels, control points) copied at compile time, drawing from lists. Leaves a frame in progress
+static void testDisplayLists(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, 400.0, 0.0, 240.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    // Defaults and names
+    GLint v[4] = { -1, -1, -1, -1 };
+    glGetIntegerv(GL_LIST_BASE, &v[0]);
+    glGetIntegerv(GL_LIST_INDEX, &v[1]);
+    glGetIntegerv(GL_LIST_MODE, &v[2]);
+    glGetIntegerv(GL_MAX_LIST_NESTING, &v[3]);
+    CHECK(v[0] == 0 && v[1] == 0 && v[2] == 0 && v[3] >= 64);
+    GLuint base = glGenLists(3);
+    CHECK(base != 0 && glIsList(base) && glIsList(base + 2) && !glIsList(base + 3) && !glIsList(0));
+    CHECK(glGenLists(0) == 0 && glGetError() == GL_NO_ERROR);
+    CHECK(glGenLists(-1) == 0 && glGetError() == GL_INVALID_VALUE);
+    GLuint more = glGenLists(2);
+    CHECK(more >= base + 3);
+    glDeleteLists(base + 1, 1);                 // A gap of one name, then two lists
+    CHECK(!glIsList(base + 1) && glIsList(base));
+    CHECK(glGenLists(1) == base + 1);           // The gap is reused
+    glDeleteLists(more, 2);
+    glDeleteLists(0, -1);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+
+    // Errors of glNewList / glEndList
+    glNewList(0, GL_COMPILE);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glNewList(base, 0x1234);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glEndList();
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+
+    // GL_COMPILE: recorded only. Queries, client state and pixel store run immediately; errors come at execution
+    glNewList(base, GL_COMPILE);
+    glGetIntegerv(GL_LIST_INDEX, &v[0]);
+    glGetIntegerv(GL_LIST_MODE, &v[1]);
+    CHECK(v[0] == (GLint)base && v[1] == GL_COMPILE);
+    glNewList(base + 1, GL_COMPILE);            // Nested glNewList: error, compiling goes on
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glLineWidth(3.0f);
+    glTranslatef(1.0f, 2.0f, 3.0f);
+    glMatrixMode(0x1234);                       // Invalid: recorded, fails when the list runs
+    glEnableClientState(GL_NORMAL_ARRAY);       // Client state: executed now
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
+    glEndList();
+    CHECK(glGetError() == GL_NO_ERROR);
+    CHECK(!glIsEnabled(GL_BLEND) && modelviewTranslation(0.0f, 0.0f, 0.0f));
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &v[0]);
+    CHECK(glIsEnabled(GL_NORMAL_ARRAY) && v[0] == 2);
+    glDisableClientState(GL_NORMAL_ARRAY);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glGetIntegerv(GL_LIST_INDEX, &v[0]);
+    glGetIntegerv(GL_LIST_MODE, &v[1]);
+    CHECK(v[0] == 0 && v[1] == 0);
+
+    glCallList(base);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    GLfloat f[4];
+    glGetFloatv(GL_LINE_WIDTH, f);
+    glGetIntegerv(GL_BLEND_SRC, &v[0]);
+    glGetIntegerv(GL_BLEND_DST, &v[1]);
+    CHECK(glIsEnabled(GL_BLEND) && f[0] == 3.0f && v[0] == GL_SRC_ALPHA && v[1] == GL_ONE);
+    CHECK(modelviewTranslation(1.0f, 2.0f, 3.0f));
+    glCallList(base);                           // Again: the translation adds up
+    glGetError();
+    CHECK(modelviewTranslation(2.0f, 4.0f, 6.0f));
+    glDisable(GL_BLEND);
+    glLineWidth(1.0f);
+    glLoadIdentity();
+
+    // GL_COMPILE_AND_EXECUTE: executed while compiling too; glEndList replaces the old contents
+    glNewList(base, GL_COMPILE_AND_EXECUTE);
+    glLineWidth(5.0f);
+    glGetFloatv(GL_LINE_WIDTH, f);
+    CHECK(f[0] == 5.0f);
+    glScalef(2.0f, 2.0f, 2.0f);
+    glEndList();
+    CHECK(glGetError() == GL_NO_ERROR);
+    glLineWidth(1.0f);
+    glLoadIdentity();
+    glCallList(base);
+    glGetFloatv(GL_LINE_WIDTH, f);
+    GLfloat m[16];
+    glGetFloatv(GL_MODELVIEW_MATRIX, m);
+    CHECK(f[0] == 5.0f && m[0] == 2.0f && m[12] == 0.0f);   // The new contents only (no translation)
+    glLineWidth(1.0f);
+
+    // Nesting: base + 1 calls base + 2, which is defined later (lists are looked up when executed)
+    glNewList(base + 1, GL_COMPILE);
+    glTranslatef(10.0f, 0.0f, 0.0f);
+    glCallList(base + 2);
+    glEndList();
+    glNewList(base + 2, GL_COMPILE);
+    glTranslatef(0.0f, 20.0f, 0.0f);
+    glEndList();
+    glLoadIdentity();
+    glCallList(base + 1);
+    CHECK(modelviewTranslation(10.0f, 20.0f, 0.0f));
+
+    // A list calling itself stops at the nesting limit
+    glNewList(base + 2, GL_COMPILE);
+    glTranslatef(1.0f, 0.0f, 0.0f);
+    glCallList(base + 2);
+    glEndList();
+    glLoadIdentity();
+    glCallList(base + 2);
+    glGetIntegerv(GL_MAX_LIST_NESTING, &v[0]);
+    CHECK(modelviewTranslation((float)v[0], 0.0f, 0.0f));
+
+    // While a list is compiled with GL_COMPILE_AND_EXECUTE, calling it runs its old contents
+    glNewList(base + 1, GL_COMPILE);            // base + 1: translate by 100 in y
+    glTranslatef(0.0f, 100.0f, 0.0f);
+    glEndList();
+    glLoadIdentity();
+    glNewList(base + 1, GL_COMPILE_AND_EXECUTE);
+    glCallList(base + 1);                       // Old contents: y + 100
+    glTranslatef(1.0f, 0.0f, 0.0f);
+    glEndList();
+    CHECK(modelviewTranslation(1.0f, 100.0f, 0.0f));
+    glLoadIdentity();
+    glCallList(base + 1);                       // New contents: the call (now of the new list itself)...
+    glGetFloatv(GL_MODELVIEW_MATRIX, m);
+    CHECK(m[12] == (float)v[0]);                // ... recurses to the limit: x + 1 per level
+
+    // glCallLists: types, list base (also from a list), errors
+    GLuint lists = glGenLists(4);
+    for (int i = 0; i < 4; i++) {
+        glNewList(lists + i, GL_COMPILE);
+        glTranslatef((float)(1 << i), 0.0f, 0.0f);     // 1, 2, 4, 8
+        glEndList();
+    }
+    glListBase(lists);
+    glGetIntegerv(GL_LIST_BASE, &v[0]);
+    CHECK(v[0] == (GLint)lists);
+    const GLubyte ub[3] = { 0, 2, 3 };
+    glLoadIdentity();
+    glCallLists(3, GL_UNSIGNED_BYTE, ub);
+    CHECK(modelviewTranslation(13.0f, 0.0f, 0.0f));
+    const GLubyte twoBytes[4] = { 0, 1, 0, 2 };  // GL_2_BYTES: big-endian 1 and 2
+    const GLfloat floats[2] = { 3.0f, 0.0f };
+    glLoadIdentity();
+    glCallLists(2, GL_2_BYTES, twoBytes);
+    glCallLists(2, GL_FLOAT, floats);
+    CHECK(modelviewTranslation(15.0f, 0.0f, 0.0f));
+    glCallLists(1, 0x1234, ub);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glCallLists(-1, GL_UNSIGNED_BYTE, ub);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+
+    // In a list: the names are copied at compile time, the base is the one when the list runs
+    GLubyte names[2] = { 1, 2 };
+    glNewList(base, GL_COMPILE);
+    glListBase(lists + 1);                      // Recorded
+    glCallLists(2, GL_UNSIGNED_BYTE, names);
+    glEndList();
+    names[0] = names[1] = 0;
+    glGetIntegerv(GL_LIST_BASE, &v[0]);
+    CHECK(v[0] == (GLint)lists);                // glListBase was not executed
+    glLoadIdentity();
+    glCallList(base);                           // lists + 2, lists + 3
+    CHECK(modelviewTranslation(12.0f, 0.0f, 0.0f));
+    glPushAttrib(GL_LIST_BIT);
+    glListBase(7);
+    glPopAttrib();
+    glGetIntegerv(GL_LIST_BASE, &v[0]);
+    CHECK(v[0] == (GLint)(lists + 1));
+    glListBase(0);
+    glDeleteLists(lists, 4);
+    CHECK(!glIsList(lists) && !glIsList(lists + 3));
+    glLoadIdentity();
+    glCallList(lists);                          // Deleted: nothing happens
+    CHECK(modelviewTranslation(0.0f, 0.0f, 0.0f) && glGetError() == GL_NO_ERROR);
+
+    // Lighting: a light position is transformed by the modelview when the list runs
+    const GLfloat lightPos[4] = { 1.0f, 0.0f, 0.0f, 0.0f };
+    glNewList(base, GL_COMPILE);
+    glLightfv(GL_LIGHT1, GL_POSITION, lightPos);
+    glMaterialf(GL_FRONT, GL_SHININESS, 17.0f);
+    glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, GL_TRUE);
+    glEndList();
+    glLoadIdentity();
+    glRotatef(90.0f, 0.0f, 0.0f, 1.0f);         // x -> y
+    glCallList(base);
+    glLoadIdentity();
+    glGetLightfv(GL_LIGHT1, GL_POSITION, f);
+    GLfloat shininess;
+    glGetMaterialfv(GL_FRONT, GL_SHININESS, &shininess);
+    glGetIntegerv(GL_LIGHT_MODEL_TWO_SIDE, &v[0]);
+    CHECK(near(f[0], 0.0) && near(f[1], 1.0) && shininess == 17.0f && v[0] == GL_TRUE);
+    glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, GL_FALSE);
+
+    // Evaluator control points are copied at compile time
+    GLfloat points[2][3] = { { 1.0f, 2.0f, 3.0f }, { 4.0f, 5.0f, 6.0f } };
+    glNewList(base, GL_COMPILE);
+    glMap1f(GL_MAP1_VERTEX_3, 0.0f, 1.0f, 3, 2, &points[0][0]);
+    glEndList();
+    points[1][2] = 99.0f;
+    glCallList(base);
+    GLfloat coeff[6];
+    glGetMapfv(GL_MAP1_VERTEX_3, GL_COEFF, coeff);
+    CHECK(coeff[0] == 1.0f && coeff[5] == 6.0f);
+
+    // Drawing. Begin/End and glRect in a list, nothing is drawn while compiling with GL_COMPILE
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glColor3ub(0, 0, 255);
+    glNewList(base, GL_COMPILE);
+    glColor3ub(255, 0, 0);
+    glBegin(GL_QUADS);
+    glVertex2i(0, 0); glVertex2i(8, 0); glVertex2i(8, 8); glVertex2i(0, 8);
+    glEnd();
+    glColor3ub(0, 255, 0);
+    glRecti(8, 0, 16, 8);
+    glEndList();
+    glGetFloatv(GL_CURRENT_COLOR, f);           // Not changed by compiling
+    CHECK(f[0] == 0.0f && f[2] == 1.0f);
+    CHECK(pixelIs(4, 4, 0, 0, 0));
+    glCallList(base);
+    CHECK(pixelIs(4, 4, 255, 0, 0) && pixelIs(12, 4, 0, 255, 0));
+    glPushMatrix();
+    glTranslatef(100.0f, 0.0f, 0.0f);           // The same list elsewhere
+    glCallList(base);
+    glPopMatrix();
+    CHECK(pixelIs(104, 4, 255, 0, 0) && pixelIs(112, 4, 0, 255, 0));
+
+    // Vertex arrays are dereferenced at compile time: changing them afterwards does not change the list
+    GLshort quad[4][2] = { { 20, 0 }, { 28, 0 }, { 28, 8 }, { 20, 8 } };
+    GLubyte colors[4][4];
+    for (int i = 0; i < 4; i++) { colors[i][0] = 255; colors[i][1] = 255; colors[i][2] = 0; colors[i][3] = 255; }
+    const GLubyte indices[6] = { 0, 1, 2, 0, 2, 3 };
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
+    glVertexPointer(2, GL_SHORT, 0, quad);
+    glColorPointer(4, GL_UNSIGNED_BYTE, 0, colors);
+    glNewList(base + 1, GL_COMPILE);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);        // Yellow at x = 20..28
+    glTranslatef(10.0f, 0.0f, 0.0f);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_BYTE, indices);     // x = 30..38
+    glTranslatef(10.0f, 0.0f, 0.0f);
+    glBegin(GL_QUADS);                          // x = 40..48
+    for (int i = 0; i < 4; i++) glArrayElement(i);
+    glEnd();
+    glEndList();
+    for (int i = 0; i < 4; i++) { colors[i][0] = 0; quad[i][1] += 100; }
+    glDisableClientState(GL_COLOR_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    CHECK(pixelIs(24, 4, 0, 0, 0));
+    glLoadIdentity();
+    glCallList(base + 1);
+    glLoadIdentity();
+    CHECK(pixelIs(24, 4, 255, 255, 0) && pixelIs(34, 4, 255, 255, 0) && pixelIs(44, 4, 255, 255, 0));
+    glGetFloatv(GL_CURRENT_COLOR, f);
+    CHECK(f[0] == 1.0f && f[1] == 1.0f && f[2] == 0.0f);    // glArrayElement in a list sets the current color
+
+    // Texture images are copied at compile time, unpacked with the pixel store state of then
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    GLubyte image[2][3][4];                     // 3 pixels per row, 2 of them used (row length 3, skip 1 pixel)
+    for (int y = 0; y < 2; y++) {
+        for (int x = 0; x < 3; x++) {
+            image[y][x][0] = (GLubyte)(10*y + x);
+            image[y][x][1] = 1; image[y][x][2] = 2; image[y][x][3] = 3;
+        }
+    }
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 3);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 1);
+    glNewList(base + 2, GL_COMPILE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, image);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexImage2D(GL_PROXY_TEXTURE_2D, 0, GL_RGBA, 64, 32, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);     // Executed now
+    glEndList();
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glGetTexLevelParameteriv(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v[0]);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v[1]);
+    CHECK(v[0] == 64 && v[1] == 0);
+    memset(image, 0, sizeof(image));
+    glCallList(base + 2);
+    GLubyte texels[2][2][4];
+    memset(texels, 0xAA, sizeof(texels));
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &v[0]);
+    CHECK(texels[0][0][0] == 1 && texels[0][1][0] == 2 && texels[1][0][0] == 11 && texels[1][1][0] == 12 &&
+          texels[1][1][3] == 3 && v[0] == GL_NEAREST);
+    glDeleteTextures(1, &tex);
+
+    glDeleteLists(base, 3);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glPopAttrib();
+}
+
 static void drawSquares(void)
 {
     glMatrixMode(GL_PROJECTION);
@@ -1108,6 +1425,7 @@ int main(void)
     testReadPixels();
     testCopyTexImage();
     testLogicOpAndMultisample();
+    testDisplayLists();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

@@ -25,6 +25,8 @@
 //     depends on the eye distance, so the table inverts the projection per entry (see updateFogLut()).
 //   - Depth and stencil share one D24S8 buffer that a memory fill can only clear as a whole. glClear uses the
 //     fill when that is equivalent, otherwise it draws a full-screen quad (scissor, masks, depth or stencil only).
+//   - Display lists record the commands with their arguments (client data like pixels, control points and vertex
+//     arrays copied at compile time) and replay them through the same gl* entry points, see listSave().
 //
 // Known limitations: REPEAT wrap on non-power-of-two textures samples the padding.
 #include "GL/gl.h"
@@ -34,6 +36,7 @@
 #include <citro3d.h>
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -50,6 +53,7 @@
 #define C3DGL_TEXTURE_UNITS     3           // PICA texture units 0..2 (unit 3 is procedural only)
 #define C3DGL_ATTRIB_STACK      16          // glPushAttrib / glPushClientAttrib depth (GL minimum)
 #define C3DGL_MAX_EVAL_ORDER    30          // Evaluator order (GL minimum 8)
+#define C3DGL_MAX_LIST_NESTING  64          // glCallList depth (GL minimum 64)
 #define C3DGL_MAX_LIGHTS        8
 #define C3DGL_MAX_CLIP_PLANES   6           // User clip planes, clipped on the CPU (GL minimum 6, ES 1)
 #define C3DGL_MAX_TEXTURE_SIZE  1024
@@ -240,6 +244,113 @@ enum { ARRAY_VERTEX, ARRAY_TEXCOORD0, ARRAY_TEXCOORD1, ARRAY_TEXCOORD2, ARRAY_CO
 // Texcoord array of the client active unit (glClientActiveTexture)
 #define ARRAY_TEXCOORD      (ARRAY_TEXCOORD0 + gl.clientActiveTexture)
 
+// Display lists: a list is a sequence of commands, each a header word (command | word count << 8, the header included)
+// followed by its arguments
+typedef union {
+    GLfloat f;
+    GLint i;
+    GLuint u;
+} ListWord;
+
+typedef struct {
+    GLuint name;
+    ListWord *words;            // NULL for an empty list (glGenLists)
+    int count;
+} DisplayList;
+
+// The commands that are compiled into display lists and how one is executed: w points to its arguments, as written by
+// listSave() (doubles take two words, see listDouble()). Commands that GL executes immediately (glGet*, client state,
+// glPixelStore, glGen*/glDelete*, glReadPixels, glFlush, ...) are not in here
+#define LIST_COMMANDS(X) \
+    X(ENABLE,           setCapability(w[0].u, w[1].i != 0)) \
+    X(SHADE_MODEL,      glShadeModel(w[0].u)) \
+    X(VIEWPORT,         glViewport(w[0].i, w[1].i, w[2].i, w[3].i)) \
+    X(SCISSOR,          glScissor(w[0].i, w[1].i, w[2].i, w[3].i)) \
+    X(CLEAR_COLOR,      glClearColor(w[0].f, w[1].f, w[2].f, w[3].f)) \
+    X(CLEAR_DEPTH,      glClearDepth(listDouble(&w[0]))) \
+    X(CLEAR_STENCIL,    glClearStencil(w[0].i)) \
+    X(CLEAR,            glClear(w[0].u)) \
+    X(COLOR_MASK,       glColorMask(w[0].i, w[1].i, w[2].i, w[3].i)) \
+    X(DEPTH_MASK,       glDepthMask(w[0].i)) \
+    X(DEPTH_FUNC,       glDepthFunc(w[0].u)) \
+    X(STENCIL_FUNC,     glStencilFunc(w[0].u, w[1].i, w[2].u)) \
+    X(STENCIL_OP,       glStencilOp(w[0].u, w[1].u, w[2].u)) \
+    X(STENCIL_MASK,     glStencilMask(w[0].u)) \
+    X(ALPHA_FUNC,       glAlphaFunc(w[0].u, w[1].f)) \
+    X(BLEND_FUNC,       glBlendFunc(w[0].u, w[1].u)) \
+    X(LOGIC_OP,         glLogicOp(w[0].u)) \
+    X(SAMPLE_COVERAGE,  glSampleCoverage(w[0].f, w[1].i)) \
+    X(CULL_FACE,        glCullFace(w[0].u)) \
+    X(FRONT_FACE,       glFrontFace(w[0].u)) \
+    X(POLYGON_MODE,     glPolygonMode(w[0].u, w[1].u)) \
+    X(POLYGON_OFFSET,   glPolygonOffset(w[0].f, w[1].f)) \
+    X(DEPTH_RANGE,      glDepthRange(listDouble(&w[0]), listDouble(&w[2]))) \
+    X(LINE_WIDTH,       glLineWidth(w[0].f)) \
+    X(POINT_SIZE,       glPointSize(w[0].f)) \
+    X(POINT_PARAMETER,  glPointParameterfv(w[0].u, &w[1].f)) \
+    X(MATRIX_MODE,      glMatrixMode(w[0].u)) \
+    X(PUSH_MATRIX,      glPushMatrix()) \
+    X(POP_MATRIX,       glPopMatrix()) \
+    X(LOAD_IDENTITY,    glLoadIdentity()) \
+    X(LOAD_MATRIX,      glLoadMatrixf(&w[0].f)) \
+    X(MULT_MATRIX,      glMultMatrixf(&w[0].f)) \
+    X(TRANSLATE,        glTranslatef(w[0].f, w[1].f, w[2].f)) \
+    X(ROTATE,           glRotatef(w[0].f, w[1].f, w[2].f, w[3].f)) \
+    X(SCALE,            glScalef(w[0].f, w[1].f, w[2].f)) \
+    X(ORTHO,            glOrtho(listDouble(&w[0]), listDouble(&w[2]), listDouble(&w[4]), listDouble(&w[6]), \
+                                listDouble(&w[8]), listDouble(&w[10]))) \
+    X(FRUSTUM,          glFrustum(listDouble(&w[0]), listDouble(&w[2]), listDouble(&w[4]), listDouble(&w[6]), \
+                                  listDouble(&w[8]), listDouble(&w[10]))) \
+    X(BEGIN,            glBegin(w[0].u)) \
+    X(END,              glEnd()) \
+    X(VERTEX,           glVertex3f(w[0].f, w[1].f, w[2].f)) \
+    X(TEX_COORD,        glTexCoord4f(w[0].f, w[1].f, w[2].f, w[3].f)) \
+    X(MULTI_TEX_COORD,  glMultiTexCoord4f(w[0].u, w[1].f, w[2].f, w[3].f, w[4].f)) \
+    X(EDGE_FLAG,        glEdgeFlag(w[0].i)) \
+    X(NORMAL,           glNormal3f(w[0].f, w[1].f, w[2].f)) \
+    X(COLOR,            glColor4ub(w[0].i, w[1].i, w[2].i, w[3].i)) \
+    X(LIGHT,            setLight(w[0].u, w[1].u, &w[2].f)) \
+    X(LIGHT_MODEL,      setLightModel(w[0].u, &w[1].f)) \
+    X(MATERIAL,         setMaterial(w[0].u, w[1].u, &w[2].f)) \
+    X(COLOR_MATERIAL,   glColorMaterial(w[0].u, w[1].u)) \
+    X(FOG,              setFog(w[0].u, &w[1].f)) \
+    X(CLIP_PLANE,       setClipPlane(w[0].u, (const double[4]){ listDouble(&w[1]), listDouble(&w[3]), \
+                                                                listDouble(&w[5]), listDouble(&w[7]) })) \
+    X(BIND_TEXTURE,     glBindTexture(w[0].u, w[1].u)) \
+    X(TEX_ENV,          setTexEnv(w[0].u, w[1].u, w[2].i, w[3].f)) \
+    X(TEX_ENV_COLOR,    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, &w[0].f)) \
+    X(ACTIVE_TEXTURE,   glActiveTexture(w[0].u)) \
+    X(TEX_PARAMETER,    glTexParameteri(w[0].u, w[1].u, w[2].i)) \
+    X(TEX_IMAGE,        listTexImage(w, false)) \
+    X(TEX_SUB_IMAGE,    listTexImage(w, true)) \
+    X(COMPRESSED_TEX_IMAGE, glCompressedTexImage2D(w[0].u, w[1].i, w[2].u, w[3].i, w[4].i, w[5].i, w[6].i, \
+                                                   w[7].i? &w[8] : NULL)) \
+    X(COMPRESSED_TEX_SUB_IMAGE, glCompressedTexSubImage2D(w[0].u, w[1].i, w[2].i, w[3].i, w[4].i, w[5].i, w[6].u, \
+                                                          w[7].i, NULL)) \
+    X(COPY_TEX_IMAGE,   glCopyTexImage2D(w[0].u, w[1].i, w[2].u, w[3].i, w[4].i, w[5].i, w[6].i, w[7].i)) \
+    X(COPY_TEX_SUB_IMAGE, glCopyTexSubImage2D(w[0].u, w[1].i, w[2].i, w[3].i, w[4].i, w[5].i, w[6].i, w[7].i)) \
+    X(MAP,              defineMap(w[0].u, listDouble(&w[2]), listDouble(&w[4]), w[6].i, w[7].i, listDouble(&w[8]), \
+                                  listDouble(&w[10]), w[12].i, w[13].i, &w[14].f, false, w[1].i != 0)) \
+    X(MAP_GRID1,        glMapGrid1f(w[0].i, w[1].f, w[2].f)) \
+    X(MAP_GRID2,        glMapGrid2f(w[0].i, w[1].f, w[2].f, w[3].i, w[4].f, w[5].f)) \
+    X(EVAL_COORD1,      glEvalCoord1f(w[0].f)) \
+    X(EVAL_COORD2,      glEvalCoord2f(w[0].f, w[1].f)) \
+    X(EVAL_POINT1,      glEvalPoint1(w[0].i)) \
+    X(EVAL_POINT2,      glEvalPoint2(w[0].i, w[1].i)) \
+    X(EVAL_MESH1,       glEvalMesh1(w[0].u, w[1].i, w[2].i)) \
+    X(EVAL_MESH2,       glEvalMesh2(w[0].u, w[1].i, w[2].i, w[3].i, w[4].i)) \
+    X(PUSH_ATTRIB,      glPushAttrib(w[0].u)) \
+    X(POP_ATTRIB,       glPopAttrib()) \
+    X(CALL_LIST,        glCallList(w[0].u)) \
+    X(CALL_LISTS,       glCallLists(w[0].i, w[1].u, &w[2])) \
+    X(LIST_BASE,        glListBase(w[0].u))
+
+typedef enum {
+    #define X(name, call) LIST_##name,
+    LIST_COMMANDS(X)
+    #undef X
+} ListCommand;
+
 //----------------------------------------------------------------------------------
 // Global state
 //----------------------------------------------------------------------------------
@@ -370,7 +481,30 @@ static struct {
     // Textures deleted during a frame are freed once the GPU is done with that frame
     C3D_Tex *deferredDeletes;
     int deferredCount, deferredCapacity;
+
+    // Display lists (GL), see listSave()
+    DisplayList *lists;                 // Sorted by name
+    int listCount, listCapacity;
+    GLuint listBase;                    // glListBase
+    GLuint listName;                    // List being compiled (glNewList), 0: none
+    GLenum listMode;                    // Its mode: GL_COMPILE or GL_COMPILE_AND_EXECUTE
+    bool listCompiling;                 // gl* calls are recorded instead of executed (off while one is executed)
+    ListWord *listWords;                // Commands recorded so far
+    int listWordCount, listWordCapacity;
+    int listLast;                       // Index of the last recorded command, -1 if it was dropped (out of memory)
+    int listDepth;                      // Nesting of lists being executed
 } gl;
+
+// Display list recording, see the display list section
+static void listSave(ListCommand command, const char *format, ...);
+static ListWord *listBegin(ListCommand command, int words);
+static void listEnd(void);
+static void listSaveImage(ListCommand command, const GLint args[8], GLsizei width, GLsizei height, bool sizeValid,
+                          const void *pixels);
+static void listArrayElement(int index);
+
+// While a display list is compiled: record the command instead of executing it, and return from the gl* function
+#define LIST_SAVE(command, ...) do { if (gl.listCompiling) { listSave(LIST_##command, __VA_ARGS__); return; } } while (0)
 
 // Lighting state changed: lit colors cached by lightVertexCached() are stale
 static void litStateChanged(void) { gl.litCacheGen++; }
@@ -2096,6 +2230,9 @@ void c3dglClose(void)
     free(gl.buffers);
     for (int i = 0; i < 9; i++) { free(gl.map1[i].points); free(gl.map2[i].points); }
     free(gl.evalGrid);
+    for (int i = 0; i < gl.listCount; i++) free(gl.lists[i].words);
+    free(gl.lists);
+    free(gl.listWords);
 
     if (gl.dvlb != NULL) { shaderProgramFree(&gl.program); DVLB_Free(gl.dvlb); }
     if (gl.dummyTexture.data != NULL) C3D_TexDelete(&gl.dummyTexture);
@@ -2152,6 +2289,7 @@ void c3dglSwapBuffers(void)
 //----------------------------------------------------------------------------------
 static void setCapability(GLenum cap, bool enable)
 {
+    LIST_SAVE(ENABLE, "ui", cap, (int)enable);
     litStateChanged();          // Lights, GL_NORMALIZE, ...
     int bit = ignoredCapBit(cap);
     if (bit >= 0)
@@ -2299,6 +2437,7 @@ void glHint(GLenum target, GLenum mode) { (void)target; (void)mode; }
 
 void glShadeModel(GLenum mode)
 {
+    LIST_SAVE(SHADE_MODEL, "u", mode);
     if ((mode != GL_SMOOTH) && (mode != GL_FLAT)) { setError(GL_INVALID_ENUM); return; }
     gl.shadeModel = mode;
 }
@@ -2385,6 +2524,10 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_MAP2_GRID_DOMAIN: v[0] = gl.grid2u1; v[1] = gl.grid2u2; v[2] = gl.grid2v1; v[3] = gl.grid2v2; return 4;
         case GL_MAP2_GRID_SEGMENTS: v[0] = gl.grid2un; v[1] = gl.grid2vn; return 2;
         case GL_CLIENT_ATTRIB_STACK_DEPTH: v[0] = gl.clientAttribDepth; return 1;
+        case GL_LIST_BASE: v[0] = gl.listBase; return 1;
+        case GL_LIST_INDEX: v[0] = gl.listName; return 1;
+        case GL_LIST_MODE: v[0] = gl.listName? gl.listMode : 0; return 1;
+        case GL_MAX_LIST_NESTING: v[0] = C3DGL_MAX_LIST_NESTING; return 1;
         case GL_MAX_ATTRIB_STACK_DEPTH: case GL_MAX_CLIENT_ATTRIB_STACK_DEPTH: v[0] = C3DGL_ATTRIB_STACK; return 1;
 
         // Client arrays
@@ -2572,6 +2715,7 @@ const GLubyte *glGetString(GLenum name)
 
 void glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
 {
+    LIST_SAVE(VIEWPORT, "iiii", x, y, width, height);
     if ((width < 0) || (height < 0)) { setError(GL_INVALID_VALUE); return; }
     gl.state.viewport[0] = x;
     gl.state.viewport[1] = y;
@@ -2581,6 +2725,7 @@ void glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
 
 void glScissor(GLint x, GLint y, GLsizei width, GLsizei height)
 {
+    LIST_SAVE(SCISSOR, "iiii", x, y, width, height);
     if ((width < 0) || (height < 0)) { setError(GL_INVALID_VALUE); return; }
     gl.state.scissorBox[0] = x;
     gl.state.scissorBox[1] = y;
@@ -2590,15 +2735,21 @@ void glScissor(GLint x, GLint y, GLsizei width, GLsizei height)
 
 void glClearColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha)
 {
+    LIST_SAVE(CLEAR_COLOR, "ffff", red, green, blue, alpha);
     gl.clearColor = ((u32)colorByte(red) << 24) | ((u32)colorByte(green) << 16) | ((u32)colorByte(blue) << 8) | colorByte(alpha);
 }
 
 void glClearDepth(GLclampd depth)
 {
+    LIST_SAVE(CLEAR_DEPTH, "d", depth);
     gl.clearDepth = (depth < 0.0)? 0.0f : (depth > 1.0)? 1.0f : (float)depth;
 }
 
-void glClearStencil(GLint s) { gl.clearStencil = (u8)s; }
+void glClearStencil(GLint s)
+{
+    LIST_SAVE(CLEAR_STENCIL, "i", s);
+    gl.clearStencil = (u8)s;
+}
 
 // Clear by drawing a full-screen quad at the clear depth: honors scissor and all write masks
 static void clearWithQuad(bool color, bool depth, bool stencil)
@@ -2641,6 +2792,7 @@ static void clearWithQuad(bool color, bool depth, bool stencil)
 
 void glClear(GLbitfield mask)
 {
+    LIST_SAVE(CLEAR, "u", mask);
     // Write masks apply to clears
     bool color = (mask & GL_COLOR_BUFFER_BIT) && (gl.state.colorMask != 0);
     bool depth = (mask & GL_DEPTH_BUFFER_BIT) && gl.state.depthMask;
@@ -2673,14 +2825,25 @@ void glClear(GLbitfield mask)
 
 void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha)
 {
+    LIST_SAVE(COLOR_MASK, "iiii", red, green, blue, alpha);
     gl.state.colorMask = (red? GPU_WRITE_RED : 0) | (green? GPU_WRITE_GREEN : 0) | (blue? GPU_WRITE_BLUE : 0) | (alpha? GPU_WRITE_ALPHA : 0);
 }
 
-void glDepthMask(GLboolean flag) { gl.state.depthMask = flag; }
-void glDepthFunc(GLenum func) { gl.state.depthFunc = func; }
+void glDepthMask(GLboolean flag)
+{
+    LIST_SAVE(DEPTH_MASK, "i", flag);
+    gl.state.depthMask = flag;
+}
+
+void glDepthFunc(GLenum func)
+{
+    LIST_SAVE(DEPTH_FUNC, "u", func);
+    gl.state.depthFunc = func;
+}
 
 void glStencilFunc(GLenum func, GLint ref, GLuint mask)
 {
+    LIST_SAVE(STENCIL_FUNC, "uiu", func, ref, mask);
     gl.state.stencilFunc = func;
     gl.state.stencilRef = (u8)((ref < 0)? 0 : (ref > 255)? 255 : ref);
     gl.state.stencilFuncMask = (u8)mask;
@@ -2688,42 +2851,61 @@ void glStencilFunc(GLenum func, GLint ref, GLuint mask)
 
 void glStencilOp(GLenum fail, GLenum zfail, GLenum zpass)
 {
+    LIST_SAVE(STENCIL_OP, "uuu", fail, zfail, zpass);
     gl.state.stencilFail = fail;
     gl.state.stencilDepthFail = zfail;
     gl.state.stencilPass = zpass;
 }
 
-void glStencilMask(GLuint mask) { gl.state.stencilWriteMask = (u8)mask; }
+void glStencilMask(GLuint mask)
+{
+    LIST_SAVE(STENCIL_MASK, "u", mask);
+    gl.state.stencilWriteMask = (u8)mask;
+}
 
 void glAlphaFunc(GLenum func, GLclampf ref)
 {
+    LIST_SAVE(ALPHA_FUNC, "uf", func, ref);
     gl.state.alphaFunc = func;
     gl.state.alphaRef = colorByte(ref);
 }
 
 void glBlendFunc(GLenum sfactor, GLenum dfactor)
 {
+    LIST_SAVE(BLEND_FUNC, "uu", sfactor, dfactor);
     gl.state.blendSrc = sfactor;
     gl.state.blendDst = dfactor;
 }
 
 void glLogicOp(GLenum opcode)
 {
+    LIST_SAVE(LOGIC_OP, "u", opcode);
     if ((opcode < GL_CLEAR) || (opcode > GL_SET)) { setError(GL_INVALID_ENUM); return; }
     gl.state.logicOpMode = opcode;
 }
 
 void glSampleCoverage(GLclampf value, GLboolean invert)
 {
+    LIST_SAVE(SAMPLE_COVERAGE, "fi", value, invert);
     gl.sampleCoverage = (value < 0.0f)? 0.0f : (value > 1.0f)? 1.0f : value;
     gl.sampleCoverageInvert = invert;
 }
 
-void glCullFace(GLenum mode) { gl.state.cullFace = mode; }
-void glFrontFace(GLenum mode) { gl.state.frontFace = mode; }
+void glCullFace(GLenum mode)
+{
+    LIST_SAVE(CULL_FACE, "u", mode);
+    gl.state.cullFace = mode;
+}
+
+void glFrontFace(GLenum mode)
+{
+    LIST_SAVE(FRONT_FACE, "u", mode);
+    gl.state.frontFace = mode;
+}
 
 void glPolygonMode(GLenum face, GLenum mode)
 {
+    LIST_SAVE(POLYGON_MODE, "uu", face, mode);
     if ((mode != GL_POINT) && (mode != GL_LINE) && (mode != GL_FILL)) { setError(GL_INVALID_ENUM); return; }
 
     switch (face)
@@ -2737,19 +2919,27 @@ void glPolygonMode(GLenum face, GLenum mode)
 
 void glPolygonOffset(GLfloat factor, GLfloat units)
 {
+    LIST_SAVE(POLYGON_OFFSET, "ff", factor, units);
     gl.offsetFactor = factor;
     gl.offsetUnits = units;
 }
 
 void glDepthRange(GLclampd zNear, GLclampd zFar)
 {
+    LIST_SAVE(DEPTH_RANGE, "dd", zNear, zFar);
     gl.state.depthNear = (zNear < 0.0)? 0.0f : (zNear > 1.0)? 1.0f : (float)zNear;
     gl.state.depthFar = (zFar < 0.0)? 0.0f : (zFar > 1.0)? 1.0f : (float)zFar;
 }
 
-void glLineWidth(GLfloat width) { gl.lineWidth = width; }
+void glLineWidth(GLfloat width)
+{
+    LIST_SAVE(LINE_WIDTH, "f", width);
+    gl.lineWidth = width;
+}
+
 void glPointSize(GLfloat size)
 {
+    LIST_SAVE(POINT_SIZE, "f", size);
     if (size <= 0.0f) { setError(GL_INVALID_VALUE); return; }
     gl.pointSize = size;
 }
@@ -2757,6 +2947,7 @@ void glPointSize(GLfloat size)
 // glPointParameter (GL 1.4, ES 1.1)
 void glPointParameterfv(GLenum pname, const GLfloat *params)
 {
+    LIST_SAVE(POINT_PARAMETER, "uF", pname, (pname == GL_POINT_DISTANCE_ATTENUATION)? 3 : 1, params);
     switch (pname)
     {
         case GL_POINT_SIZE_MIN: case GL_POINT_SIZE_MAX: case GL_POINT_FADE_THRESHOLD_SIZE:
@@ -2792,6 +2983,7 @@ void glPointParameteriv(GLenum pname, const GLint *params)
 //----------------------------------------------------------------------------------
 void glMatrixMode(GLenum mode)
 {
+    LIST_SAVE(MATRIX_MODE, "u", mode);
     switch (mode)
     {
         case GL_MODELVIEW: gl.matrixMode = 0; break;
@@ -2803,6 +2995,7 @@ void glMatrixMode(GLenum mode)
 
 void glPushMatrix(void)
 {
+    LIST_SAVE(PUSH_MATRIX, "");
     int *depth = &gl.stackDepth[matrixStack()];
     if (*depth + 1 >= C3DGL_MATRIX_STACK) { WARN_ONCE("Matrix stack overflow\n"); setError(GL_STACK_OVERFLOW); return; }
 
@@ -2812,6 +3005,7 @@ void glPushMatrix(void)
 
 void glPopMatrix(void)
 {
+    LIST_SAVE(POP_MATRIX, "");
     int *depth = &gl.stackDepth[matrixStack()];
     if (*depth == 0) { WARN_ONCE("Matrix stack underflow\n"); setError(GL_STACK_UNDERFLOW); return; }
 
@@ -2821,12 +3015,14 @@ void glPopMatrix(void)
 
 void glLoadIdentity(void)
 {
+    LIST_SAVE(LOAD_IDENTITY, "");
     mat4Identity(currentMatrix());
     matrixChanged();
 }
 
 void glMultMatrixf(const GLfloat *m)
 {
+    LIST_SAVE(MULT_MATRIX, "F", 16, m);
     Mat4 mat;
     memcpy(mat.m, m, sizeof(mat.m));
     multCurrent(&mat);
@@ -2834,26 +3030,28 @@ void glMultMatrixf(const GLfloat *m)
 
 void glMultMatrixd(const GLdouble *m)
 {
-    Mat4 mat;
-    for (int i = 0; i < 16; i++) mat.m[i] = (float)m[i];
-    multCurrent(&mat);
+    GLfloat f[16];
+    for (int i = 0; i < 16; i++) f[i] = (float)m[i];
+    glMultMatrixf(f);
 }
 
 void glLoadMatrixf(const GLfloat *m)
 {
+    LIST_SAVE(LOAD_MATRIX, "F", 16, m);
     memcpy(currentMatrix()->m, m, 16*sizeof(float));
     matrixChanged();
 }
 
 void glLoadMatrixd(const GLdouble *m)
 {
-    Mat4 *cur = currentMatrix();
-    for (int i = 0; i < 16; i++) cur->m[i] = (float)m[i];
-    matrixChanged();
+    GLfloat f[16];
+    for (int i = 0; i < 16; i++) f[i] = (float)m[i];
+    glLoadMatrixf(f);
 }
 
 void glTranslatef(GLfloat x, GLfloat y, GLfloat z)
 {
+    LIST_SAVE(TRANSLATE, "fff", x, y, z);
     Mat4 m;
     mat4Identity(&m);
     m.m[12] = x;
@@ -2864,6 +3062,7 @@ void glTranslatef(GLfloat x, GLfloat y, GLfloat z)
 
 void glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z)
 {
+    LIST_SAVE(ROTATE, "ffff", angle, x, y, z);
     float len = sqrtf(x*x + y*y + z*z);
     if (len == 0.0f) return;
     x /= len; y /= len; z /= len;
@@ -2881,6 +3080,7 @@ void glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z)
 
 void glScalef(GLfloat x, GLfloat y, GLfloat z)
 {
+    LIST_SAVE(SCALE, "fff", x, y, z);
     Mat4 m;
     mat4Identity(&m);
     m.m[0] = x;
@@ -2895,6 +3095,7 @@ void glScaled(GLdouble x, GLdouble y, GLdouble z) { glScalef((float)x, (float)y,
 
 void glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar)
 {
+    LIST_SAVE(ORTHO, "dddddd", left, right, bottom, top, zNear, zFar);
     Mat4 m;
     mat4Identity(&m);
     m.m[0] = (float)(2.0/(right - left));
@@ -2908,6 +3109,7 @@ void glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdou
 
 void glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar)
 {
+    LIST_SAVE(FRUSTUM, "dddddd", left, right, bottom, top, zNear, zFar);
     Mat4 m;
     memset(&m, 0, sizeof(m));
     m.m[0] = (float)(2.0*zNear/(right - left));
@@ -2925,17 +3127,20 @@ void glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLd
 //----------------------------------------------------------------------------------
 void glBegin(GLenum mode)
 {
+    LIST_SAVE(BEGIN, "u", mode);
     gl.inBegin = beginPrimitive(mode);
 }
 
 void glEnd(void)
 {
+    LIST_SAVE(END, "");
     if (gl.inBegin) endPrimitive();
     gl.inBegin = false;
 }
 
 void glVertex3f(GLfloat x, GLfloat y, GLfloat z)
 {
+    LIST_SAVE(VERTEX, "fff", x, y, z);
     if (!gl.inBegin) return;
 
     Vertex v = gl.current;
@@ -2962,6 +3167,7 @@ static void markTexQ(void)
 
 void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q)
 {
+    LIST_SAVE(TEX_COORD, "ffff", s, t, r, q);
     gl.current.tex[0] = s;
     gl.current.tex[1] = t;
     gl.current.tex[2] = q;
@@ -2969,11 +3175,17 @@ void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q)
     if (q != 1.0f) markTexQ();
 }
 
-void glEdgeFlag(GLboolean flag) { gl.currentEdge = flag; }
-void glEdgeFlagv(const GLboolean *flag) { gl.currentEdge = *flag; }
+void glEdgeFlag(GLboolean flag)
+{
+    LIST_SAVE(EDGE_FLAG, "i", flag);
+    gl.currentEdge = flag;
+}
+
+void glEdgeFlagv(const GLboolean *flag) { glEdgeFlag(*flag); }
 
 void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz)
 {
+    LIST_SAVE(NORMAL, "fff", nx, ny, nz);
     gl.currentNormal[0] = nx;
     gl.currentNormal[1] = ny;
     gl.currentNormal[2] = nz;
@@ -2981,6 +3193,7 @@ void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz)
 
 void glColor4ub(GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha)
 {
+    LIST_SAVE(COLOR, "iiii", red, green, blue, alpha);
     gl.current.color[0] = red;
     gl.current.color[1] = green;
     gl.current.color[2] = blue;
@@ -3144,6 +3357,7 @@ static int lightParamCount(GLenum pname)
 // Position and spot direction are stored in eye coordinates, transformed by the current modelview
 static void setLight(GLenum light, GLenum pname, const float *p)
 {
+    LIST_SAVE(LIGHT, "uuF", light, pname, lightParamCount(pname), p);
     Light *li = lightFor(light);
     if (li == NULL) return;
     litStateChanged();
@@ -3208,6 +3422,7 @@ static int lightModelParamCount(GLenum pname)
 
 static void setLightModel(GLenum pname, const float *p)
 {
+    LIST_SAVE(LIGHT_MODEL, "uF", pname, lightModelParamCount(pname), p);
     litStateChanged();
     switch (pname)
     {
@@ -3257,6 +3472,7 @@ static bool faceValid(GLenum face) { return (face == GL_FRONT) || (face == GL_BA
 // Also allowed between glBegin and glEnd: the next vertices are lit with the new material
 static void setMaterial(GLenum face, GLenum pname, const float *p)
 {
+    LIST_SAVE(MATERIAL, "uuF", face, pname, materialParamCount(pname), p);
     if (!faceValid(face) || (materialParamCount(pname) == 0)) { setError(GL_INVALID_ENUM); return; }
     if ((pname == GL_SHININESS) && ((p[0] < 0.0f) || (p[0] > 128.0f))) { setError(GL_INVALID_VALUE); return; }
     litStateChanged();
@@ -3306,6 +3522,7 @@ void glMateriali(GLenum face, GLenum pname, GLint param)
 
 void glColorMaterial(GLenum face, GLenum mode)
 {
+    LIST_SAVE(COLOR_MATERIAL, "uu", face, mode);
     litStateChanged();
     bool modeValid = (mode == GL_EMISSION) || (mode == GL_AMBIENT) || (mode == GL_DIFFUSE) || (mode == GL_SPECULAR) ||
                      (mode == GL_AMBIENT_AND_DIFFUSE);
@@ -3395,6 +3612,7 @@ void glGetMaterialiv(GLenum face, GLenum pname, GLint *params)
 // p holds 4 values for GL_FOG_COLOR, 1 otherwise; GL_FOG_MODE is the enum value
 static void setFog(GLenum pname, const float *p)
 {
+    LIST_SAVE(FOG, "uF", pname, (pname == GL_FOG_COLOR)? 4 : 1, p);
     switch (pname)
     {
         case GL_FOG_MODE:
@@ -3452,6 +3670,7 @@ static float *clipPlane(GLenum plane)
 // The plane is stored in eye coordinates: p_eye = p * M^-1 with the current modelview
 static void setClipPlane(GLenum plane, const double equation[4])
 {
+    LIST_SAVE(CLIP_PLANE, "uD", plane, 4, equation);
     if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
     float *p = clipPlane(plane);
     if (p == NULL) return;
@@ -3690,6 +3909,7 @@ static bool arraysReady(void)
 
 void glArrayElement(GLint i)
 {
+    if (gl.listCompiling) { listArrayElement(i); return; }
     if (arrayActive(ARRAY_TEXCOORD0) && (gl.arrays[ARRAY_TEXCOORD0].size == 4)) markTexQ();
     if (!gl.inBegin && arrayActive(ARRAY_VERTEX)) return;    // A vertex outside glBegin/glEnd is ignored
     submitArrayVertex(i);
@@ -3749,6 +3969,15 @@ void glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer)
 void glDrawArrays(GLenum mode, GLint first, GLsizei count)
 {
     if (count < 0) { setError(GL_INVALID_VALUE); return; }
+    if (gl.listCompiling)
+    {
+        // Compiled as glBegin, glArrayElement per vertex (dereferenced now), glEnd
+        if (!arrayActive(ARRAY_VERTEX)) return;
+        glBegin(mode);
+        for (int i = 0; i < count; i++) listArrayElement(first + i);
+        glEnd();
+        return;
+    }
     if (!arraysReady() || !beginPrimitive(mode)) return;
 
     for (int i = 0; i < count; i++) submitArrayVertex(first + i);
@@ -3763,7 +3992,16 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indic
     // With an element array buffer bound, `indices` is an offset into it
     int indexSize = typeSize(type);
     const u8 *data = bufferRange(gl.elementArrayBuffer, indices, 0, (size_t)count*indexSize);
-    if ((data == NULL) || !arraysReady() || !beginPrimitive(mode)) return;
+    if (data == NULL) return;
+
+    // In a display list: glBegin, glArrayElement per index (dereferenced now), glEnd, like glDrawArrays
+    bool compile = gl.listCompiling;
+    if (compile)
+    {
+        if (!arrayActive(ARRAY_VERTEX)) return;
+        glBegin(mode);
+    }
+    else if (!arraysReady() || !beginPrimitive(mode)) return;
 
     for (int i = 0; i < count; i++)
     {
@@ -3772,9 +4010,11 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indic
         if (type == GL_UNSIGNED_SHORT) { GLushort v; memcpy(&v, p, 2); index = v; }
         else if (type == GL_UNSIGNED_INT) { GLuint v; memcpy(&v, p, 4); index = (int)v; }
         else index = *p;     // GL_UNSIGNED_BYTE, checked above
-        submitArrayVertex(index);
+        if (compile) listArrayElement(index);
+        else submitArrayVertex(index);
     }
-    endPrimitive();
+    if (compile) glEnd();
+    else endPrimitive();
 }
 
 //----------------------------------------------------------------------------------
@@ -4186,6 +4426,7 @@ GLboolean glIsTexture(GLuint texture)
 
 void glBindTexture(GLenum target, GLuint texture)
 {
+    LIST_SAVE(BIND_TEXTURE, "uu", target, texture);
     if (target == GL_TEXTURE_2D) gl.boundTexture[gl.activeTexture] = texture;
 }
 
@@ -4208,6 +4449,7 @@ static bool combineSourceValid(GLenum src)
 // glTexEnv of the active texture unit; float-valued parameters (scales) arrive as floats
 static void setTexEnv(GLenum target, GLenum pname, GLint value, GLfloat fvalue)
 {
+    LIST_SAVE(TEX_ENV, "uuif", target, pname, value, fvalue);
     if (target == GL_POINT_SPRITE_OES)
     {
         if (pname != GL_COORD_REPLACE_OES) { setError(GL_INVALID_ENUM); return; }
@@ -4265,6 +4507,7 @@ void glTexEnvfv(GLenum target, GLenum pname, const GLfloat *params)
 {
     if ((target == GL_TEXTURE_ENV) && (pname == GL_TEXTURE_ENV_COLOR))
     {
+        LIST_SAVE(TEX_ENV_COLOR, "F", 4, params);
         gl.state.units[gl.activeTexture].env.color = ((u32)colorByte(params[3]) << 24) | ((u32)colorByte(params[2]) << 16) |
                                                      ((u32)colorByte(params[1]) << 8) | colorByte(params[0]);
     }
@@ -4322,6 +4565,7 @@ void glGetTexEnviv(GLenum target, GLenum pname, GLint *params)
 // Multitexturing (ES 1.1, GL 1.3)
 void glActiveTexture(GLenum texture)
 {
+    LIST_SAVE(ACTIVE_TEXTURE, "u", texture);
     if ((texture < GL_TEXTURE0) || (texture >= GL_TEXTURE0 + C3DGL_TEXTURE_UNITS)) { setError(GL_INVALID_ENUM); return; }
     gl.activeTexture = texture - GL_TEXTURE0;
 }
@@ -4334,6 +4578,7 @@ void glClientActiveTexture(GLenum texture)
 
 void glMultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q)
 {
+    LIST_SAVE(MULTI_TEX_COORD, "uffff", target, s, t, r, q);
     if ((target < GL_TEXTURE0) || (target >= GL_TEXTURE0 + C3DGL_TEXTURE_UNITS)) { setError(GL_INVALID_ENUM); return; }
     int unit = target - GL_TEXTURE0;
     if (unit == 0) { glTexCoord4f(s, t, r, q); return; }
@@ -4381,6 +4626,7 @@ void glMultiTexCoord4sv(GLenum target, const GLshort *v) { glMultiTexCoord4f(tar
 
 void glTexParameteri(GLenum target, GLenum pname, GLint param)
 {
+    LIST_SAVE(TEX_PARAMETER, "uui", target, pname, param);
     Texture *t = boundTexture(target);
     if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
 
@@ -4566,6 +4812,13 @@ static void finishTexImage(Texture *t, GLint level)
 void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
                   GLint border, GLenum format, GLenum type, const GLvoid *pixels)
 {
+    if (gl.listCompiling && (target != GL_PROXY_TEXTURE_2D))     // Proxies are executed immediately
+    {
+        const GLint args[8] = { (GLint)target, level, internalformat, width, height, border, (GLint)format, (GLint)type };
+        bool sizeValid = textureSizeValid(level, width, height, border) && textureSizeFits(level, width, height, border);
+        listSaveImage(LIST_TEX_IMAGE, args, width, height, sizeValid, pixels);
+        return;
+    }
     if (!textureSizeValid(level, width, height, border)) { setError(GL_INVALID_VALUE); return; }
 
     TexFormat f;
@@ -4628,8 +4881,8 @@ static void uploadEtc1(Texture *t, int level, int width, int height, const u8 *d
 static void compressedPaletted(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height,
                                GLsizei imageSize, const u8 *data)
 {
-    GLenum format, type;
-    int entrySize, indexBits;
+    GLenum format = 0, type = 0;
+    int entrySize = 0, indexBits = 0;
     paletteFormat(internalformat, &format, &type, &entrySize, &indexBits);
 
     int maxLevel = 0;
@@ -4682,6 +4935,18 @@ static void compressedPaletted(GLenum target, GLint level, GLenum internalformat
 void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height,
                             GLint border, GLsizei imageSize, const GLvoid *data)
 {
+    if (gl.listCompiling && (target != GL_PROXY_TEXTURE_2D))     // Proxies are executed immediately
+    {
+        // The image is copied now. Sizes beyond any valid image are not: the call fails before reading it anyway
+        bool captured = (data != NULL) && (imageSize >= 0) && (imageSize <= 2*C3DGL_MAX_TEXTURE_SIZE*C3DGL_MAX_TEXTURE_SIZE);
+        ListWord *w = listBegin(LIST_COMPRESSED_TEX_IMAGE, 8 + (captured? (imageSize + 3)/4 : 0));
+        if (w == NULL) return;
+        const GLint args[8] = { (GLint)target, level, (GLint)internalformat, width, height, border, imageSize, captured };
+        for (int i = 0; i < 8; i++) w[i].i = args[i];
+        if (captured) memcpy(&w[8], data, (size_t)imageSize);
+        listEnd();
+        return;
+    }
     if ((target != GL_TEXTURE_2D) && (target != GL_PROXY_TEXTURE_2D)) { setError(GL_INVALID_ENUM); return; }
     GLenum format, type;
     int entrySize, indexBits;
@@ -4707,6 +4972,7 @@ void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat, G
 void glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
                                GLenum format, GLsizei imageSize, const GLvoid *data)
 {
+    LIST_SAVE(COMPRESSED_TEX_SUB_IMAGE, "uiiiiiui", target, level, xoffset, yoffset, width, height, format, imageSize);
     (void)level; (void)xoffset; (void)yoffset; (void)width; (void)height; (void)imageSize; (void)data;
     GLenum f, type;
     int entrySize, indexBits;
@@ -4718,6 +4984,13 @@ void glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint 
 void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
                      GLenum format, GLenum type, const GLvoid *pixels)
 {
+    if (gl.listCompiling)
+    {
+        const GLint args[8] = { (GLint)target, level, xoffset, yoffset, width, height, (GLint)format, (GLint)type };
+        bool sizeValid = (width >= 0) && (height >= 0) && (width <= C3DGL_MAX_TEXTURE_SIZE) && (height <= C3DGL_MAX_TEXTURE_SIZE);
+        listSaveImage(LIST_TEX_SUB_IMAGE, args, width, height, sizeValid, pixels);
+        return;
+    }
     Texture *t = boundTexture(target);
     if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
     if ((level < 0) || (level > MAX_TEXTURE_LEVEL)) { setError(GL_INVALID_VALUE); return; }
@@ -4848,21 +5121,31 @@ static struct EvalMap *mapForTarget(GLenum target, bool *twoD)
     return NULL;
 }
 
-// Store control points: uorder x vorder points of k components, read with the given strides
+// Store control points: uorder x vorder points of k components, read with the given strides.
+// A display list gets the points packed (strides vorder*k and k); an invalid call is recorded without them and fails
+// again, before reading them, when the list is executed
 static void defineMap(GLenum target, double u1, double u2, int ustride, int uorder, double v1, double v2, int vstride,
                       int vorder, const void *points, bool isDouble, bool twoD)
 {
     bool targetTwoD;
     struct EvalMap *m = mapForTarget(target, &targetTwoD);
-    if ((m == NULL) || (targetTwoD != twoD)) { setError(GL_INVALID_ENUM); return; }
-    int k = mapComponents[m - (twoD? gl.map2 : gl.map1)];
-    if ((uorder < 1) || (uorder > C3DGL_MAX_EVAL_ORDER) || (vorder < 1) || (vorder > C3DGL_MAX_EVAL_ORDER) ||
-        (u1 == u2) || (twoD && (v1 == v2)) || (ustride < k) || (twoD && (vstride < k)))
+    GLenum error = GL_NO_ERROR;
+    int k = 0;
+    if ((m == NULL) || (targetTwoD != twoD)) error = GL_INVALID_ENUM;
+    else
     {
-        setError(GL_INVALID_VALUE);
+        k = mapComponents[m - (twoD? gl.map2 : gl.map1)];
+        if ((uorder < 1) || (uorder > C3DGL_MAX_EVAL_ORDER) || (vorder < 1) || (vorder > C3DGL_MAX_EVAL_ORDER) ||
+            (u1 == u2) || (twoD && (v1 == v2)) || (ustride < k) || (twoD && (vstride < k))) error = GL_INVALID_VALUE;
+    }
+    if (gl.listCompiling && (error != GL_NO_ERROR))
+    {
+        listSave(LIST_MAP, "uiddiiddiiF", target, twoD, u1, u2, ustride, uorder, v1, v2, vstride, vorder,
+                 0, (const float *)NULL);
         return;
     }
-    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    if (error != GL_NO_ERROR) { setError(error); return; }
+    if (gl.inBegin && !gl.listCompiling) { setError(GL_INVALID_OPERATION); return; }
 
     float *data = malloc((size_t)uorder*vorder*k*sizeof(float));
     if (data == NULL) { setError(GL_OUT_OF_MEMORY); return; }
@@ -4874,6 +5157,12 @@ static void defineMap(GLenum target, double u1, double u2, int ustride, int uord
                 data[(i*vorder + j)*k + c] = isDouble? (float)((const double *)points)[src] : ((const float *)points)[src];
             }
 
+    if (gl.listCompiling)
+    {
+        listSave(LIST_MAP, "uiddiiddiiF", target, twoD, u1, u2, vorder*k, uorder, v1, v2, k, vorder, uorder*vorder*k, data);
+        free(data);
+        return;
+    }
     free(m->points);
     m->points = data;
     m->uorder = uorder;
@@ -5000,6 +5289,7 @@ static void submitEvaluated(const EvalVertex *e)
 
 void glEvalCoord1f(GLfloat u)
 {
+    LIST_SAVE(EVAL_COORD1, "f", u);
     const struct EvalMap *maps = gl.map1;
     int vertexMap = (maps[MAP_VERTEX4].enabled && maps[MAP_VERTEX4].points)? MAP_VERTEX4 :
                     (maps[MAP_VERTEX3].enabled && maps[MAP_VERTEX3].points)? MAP_VERTEX3 : -1;
@@ -5071,6 +5361,7 @@ static bool evalCoord2(float u, float v, EvalVertex *e)
 
 void glEvalCoord2f(GLfloat u, GLfloat v)
 {
+    LIST_SAVE(EVAL_COORD2, "ff", u, v);
     EvalVertex e;
     if (gl.inBegin && evalCoord2(u, v, &e)) submitEvaluated(&e);
 }
@@ -5084,6 +5375,7 @@ void glEvalCoord2dv(const GLdouble *u) { glEvalCoord2f((float)u[0], (float)u[1])
 
 void glMapGrid1f(GLint un, GLfloat u1, GLfloat u2)
 {
+    LIST_SAVE(MAP_GRID1, "iff", un, u1, u2);
     if (un <= 0) { setError(GL_INVALID_VALUE); return; }
     gl.grid1n = un;
     gl.grid1u1 = u1;
@@ -5094,6 +5386,7 @@ void glMapGrid1d(GLint un, GLdouble u1, GLdouble u2) { glMapGrid1f(un, (float)u1
 
 void glMapGrid2f(GLint un, GLfloat u1, GLfloat u2, GLint vn, GLfloat v1, GLfloat v2)
 {
+    LIST_SAVE(MAP_GRID2, "iffiff", un, u1, u2, vn, v1, v2);
     if ((un <= 0) || (vn <= 0)) { setError(GL_INVALID_VALUE); return; }
     gl.grid2un = un; gl.grid2u1 = u1; gl.grid2u2 = u2;
     gl.grid2vn = vn; gl.grid2v1 = v1; gl.grid2v2 = v2;
@@ -5107,10 +5400,16 @@ void glMapGrid2d(GLint un, GLdouble u1, GLdouble u2, GLint vn, GLdouble v1, GLdo
 // Grid coordinate i of n segments over [a, b]; exactly b at i = n (as required by the spec)
 static float gridCoord(int i, int n, float a, float b) { return (i == n)? b : a + (b - a)*i/n; }
 
-void glEvalPoint1(GLint i) { glEvalCoord1f(gridCoord(i, gl.grid1n, gl.grid1u1, gl.grid1u2)); }
+// Evaluated at execution: a display list uses the grid of the time it is executed
+void glEvalPoint1(GLint i)
+{
+    LIST_SAVE(EVAL_POINT1, "i", i);
+    glEvalCoord1f(gridCoord(i, gl.grid1n, gl.grid1u1, gl.grid1u2));
+}
 
 void glEvalPoint2(GLint i, GLint j)
 {
+    LIST_SAVE(EVAL_POINT2, "ii", i, j);
     glEvalCoord2f(gridCoord(i, gl.grid2un, gl.grid2u1, gl.grid2u2), gridCoord(j, gl.grid2vn, gl.grid2v1, gl.grid2v2));
 }
 
@@ -5127,6 +5426,7 @@ static bool reserveEvalGrid(int count)
 
 void glEvalMesh1(GLenum mode, GLint i1, GLint i2)
 {
+    LIST_SAVE(EVAL_MESH1, "uii", mode, i1, i2);
     if ((mode != GL_POINT) && (mode != GL_LINE)) { setError(GL_INVALID_ENUM); return; }
     if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
 
@@ -5137,6 +5437,7 @@ void glEvalMesh1(GLenum mode, GLint i1, GLint i2)
 
 void glEvalMesh2(GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2)
 {
+    LIST_SAVE(EVAL_MESH2, "uiiii", mode, i1, i2, j1, j2);
     if ((mode != GL_POINT) && (mode != GL_LINE) && (mode != GL_FILL)) { setError(GL_INVALID_ENUM); return; }
     if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
 
@@ -5266,7 +5567,7 @@ void glGetMapiv(GLenum target, GLenum query, GLint *v)
 // OpenGL: attribute stacks (glPushAttrib, glPushClientAttrib)
 //
 // A push saves a snapshot of everything; a pop restores only the groups of the pushed mask (GL 1.1 tables
-// 6.x). Groups of features that do not exist yet (stipple, pixel transfer, lists, accumulation)
+// 6.x). Groups of features that do not exist yet (stipple, pixel transfer, accumulation)
 // save nothing so far. When a feature moves out of ignoredCaps, its state has to be added here.
 //----------------------------------------------------------------------------------
 typedef struct {
@@ -5308,6 +5609,7 @@ typedef struct {
     float fogDensity, fogStart, fogEnd, fogColor[4], fogIndex;
     float clipPlanes[C3DGL_MAX_CLIP_PLANES][4];
     u8 clipEnabled;
+    GLuint listBase;
 } AttribState;
 
 typedef struct {
@@ -5331,6 +5633,7 @@ static u32 capBits(const GLenum *caps, int count)
 
 void glPushAttrib(GLbitfield mask)
 {
+    LIST_SAVE(PUSH_ATTRIB, "u", mask);
     if (gl.attribDepth == C3DGL_ATTRIB_STACK) { setError(GL_STACK_OVERFLOW); return; }
 
     AttribState *a = &attribStack[gl.attribDepth++];
@@ -5402,10 +5705,12 @@ void glPushAttrib(GLbitfield mask)
     memcpy(a->fogColor, gl.fogColor, sizeof(a->fogColor));
     memcpy(a->clipPlanes, gl.clipPlanes, sizeof(a->clipPlanes));
     a->clipEnabled = gl.clipEnabled;
+    a->listBase = gl.listBase;
 }
 
 void glPopAttrib(void)
 {
+    LIST_SAVE(POP_ATTRIB, "");
     if (gl.attribDepth == 0) { setError(GL_STACK_UNDERFLOW); return; }
 
     const AttribState *a = &attribStack[--gl.attribDepth];
@@ -5592,6 +5897,7 @@ void glPopAttrib(void)
         st->scissor = sv->scissor;
         memcpy(st->scissorBox, sv->scissorBox, sizeof(st->scissorBox));
     }
+    if (mask & GL_LIST_BIT) gl.listBase = a->listBase;
 
     gl.ignoredCaps = (gl.ignoredCaps & ~caps) | (a->ignoredCaps & caps);
 }
@@ -5857,6 +6163,7 @@ static u8 *copyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum fo
 void glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height,
                       GLint border)
 {
+    LIST_SAVE(COPY_TEX_IMAGE, "uiuiiiii", target, level, internalformat, x, y, width, height, border);
     if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
     if (target != GL_TEXTURE_2D) { setError(GL_INVALID_ENUM); return; }
 
@@ -5882,6 +6189,7 @@ void glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x
 void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
                          GLsizei height)
 {
+    LIST_SAVE(COPY_TEX_SUB_IMAGE, "uiiiiiii", target, level, xoffset, yoffset, x, y, width, height);
     if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
     Texture *t = boundTexture(target);
     if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
@@ -5906,6 +6214,367 @@ void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffse
     gl.unpack = saved;
     free(pixels);
 }
+
+//----------------------------------------------------------------------------------
+// OpenGL: display lists (GL)
+//
+// Between glNewList and glEndList, the gl* function of every command in LIST_COMMANDS records it with listSave() (see
+// LIST_SAVE) and returns. Client memory is copied while compiling (pixels, control points, vertex array elements,
+// glCallLists names), as GL requires. glCallList executes the commands through the same gl* functions, so a list does
+// exactly what the calls would do; in GL_COMPILE_AND_EXECUTE mode each command is executed that way right after it is
+// recorded. Errors of recorded commands are raised when the list is executed (some argument checks of the variant
+// functions, like glLightf's, happen while compiling)
+//----------------------------------------------------------------------------------
+static double listDouble(const ListWord *w)
+{
+    double d;
+    memcpy(&d, w, sizeof(d));      // Doubles are only 4-byte aligned in a list
+    return d;
+}
+
+// glTexImage2D/glTexSubImage2D from a list: the pixels were stored tightly packed, see listSaveImage()
+static void listTexImage(const ListWord *w, bool sub)
+{
+    PixelStore saved = gl.unpack;
+    gl.unpack = (PixelStore){ .alignment = 1, .swapBytes = (w[8].i & 2) != 0 };
+    const GLvoid *pixels = (w[8].i & 1)? (const GLvoid *)&w[9] : NULL;
+    if (sub) glTexSubImage2D(w[0].u, w[1].i, w[2].i, w[3].i, w[4].i, w[5].i, w[6].u, w[7].u, pixels);
+    else glTexImage2D(w[0].u, w[1].i, w[2].i, w[3].i, w[4].i, w[5].i, w[6].u, w[7].u, pixels);
+    gl.unpack = saved;
+}
+
+static void executeCommand(const ListWord *command)
+{
+    const ListWord *w = command + 1;
+    switch ((ListCommand)(command->u & 0xFF))
+    {
+        #define X(name, call) case LIST_##name: call; break;
+        LIST_COMMANDS(X)
+        #undef X
+    }
+}
+
+// Binary search; *index (if given): position of the list, or where it would be inserted
+static DisplayList *findList(GLuint name, int *index)
+{
+    int lo = 0, hi = gl.listCount;
+    while (lo < hi)
+    {
+        int mid = (lo + hi)/2;
+        if (gl.lists[mid].name < name) lo = mid + 1;
+        else hi = mid;
+    }
+    if (index != NULL) *index = lo;
+    return ((lo < gl.listCount) && (gl.lists[lo].name == name))? &gl.lists[lo] : NULL;
+}
+
+// Lists cannot be created or deleted while one is executed (those calls are not compiled), so l stays valid
+static void executeList(GLuint name)
+{
+    if (gl.listDepth >= C3DGL_MAX_LIST_NESTING) return;     // Deeper calls are ignored
+    const DisplayList *l = findList(name, NULL);
+    if (l == NULL) return;
+
+    gl.listDepth++;
+    for (const ListWord *w = l->words, *end = w + l->count; w < end; w += w->u >> 8) executeCommand(w);
+    gl.listDepth--;
+}
+
+// Append a command with `words` argument words to the list being compiled and return its arguments; NULL if out of
+// memory (the command is dropped)
+static ListWord *listBegin(ListCommand command, int words)
+{
+    gl.listLast = -1;
+    int needed = gl.listWordCount + 1 + words;
+    if ((words >= (1 << 24) - 1) || (needed < 0)) { setError(GL_OUT_OF_MEMORY); return NULL; }
+    if (needed > gl.listWordCapacity)
+    {
+        int capacity = gl.listWordCapacity? gl.listWordCapacity : 256;
+        while (capacity < needed) capacity *= 2;
+        ListWord *grown = realloc(gl.listWords, (size_t)capacity*sizeof(ListWord));
+        if (grown == NULL) { setError(GL_OUT_OF_MEMORY); return NULL; }
+        gl.listWords = grown;
+        gl.listWordCapacity = capacity;
+    }
+
+    ListWord *header = &gl.listWords[gl.listWordCount];
+    header->u = (GLuint)command | ((GLuint)(1 + words) << 8);
+    gl.listLast = gl.listWordCount;
+    gl.listWordCount = needed;
+    return header + 1;
+}
+
+// After the arguments are written: GL_COMPILE_AND_EXECUTE executes the command, from the list
+static void listEnd(void)
+{
+    if ((gl.listMode != GL_COMPILE_AND_EXECUTE) || (gl.listLast < 0)) return;
+    gl.listCompiling = false;
+    executeCommand(&gl.listWords[gl.listLast]);
+    gl.listCompiling = true;
+}
+
+// Record a command. Each character of format is an argument: 'i' int, 'u' unsigned, 'f' float (passed as double),
+// 'd' double (2 words), 'F' an int count and a pointer to that many floats, 'D' the same for doubles
+static void listSave(ListCommand command, const char *format, ...)
+{
+    va_list args, sizes;
+    va_start(args, format);
+    va_copy(sizes, args);
+    int words = 0;
+    for (const char *c = format; *c != '\0'; c++)
+    {
+        switch (*c)
+        {
+            case 'i': (void)va_arg(sizes, int); words++; break;
+            case 'u': (void)va_arg(sizes, unsigned); words++; break;
+            case 'f': (void)va_arg(sizes, double); words++; break;
+            case 'd': (void)va_arg(sizes, double); words += 2; break;
+            case 'F': words += va_arg(sizes, int); (void)va_arg(sizes, const float *); break;
+            default: words += 2*va_arg(sizes, int); (void)va_arg(sizes, const double *); break;    // 'D'
+        }
+    }
+    va_end(sizes);
+
+    ListWord *w = listBegin(command, words);
+    bool saved = (w != NULL);
+    for (const char *c = format; saved && (*c != '\0'); c++)
+    {
+        switch (*c)
+        {
+            case 'i': (w++)->i = va_arg(args, int); break;
+            case 'u': (w++)->u = va_arg(args, unsigned); break;
+            case 'f': (w++)->f = (float)va_arg(args, double); break;
+            case 'd': { double d = va_arg(args, double); memcpy(w, &d, sizeof(d)); w += 2; break; }
+            case 'F':
+            {
+                int n = va_arg(args, int);
+                const float *p = va_arg(args, const float *);
+                if (n > 0) memcpy(w, p, (size_t)n*sizeof(float));
+                w += n;
+                break;
+            }
+            default:    // 'D'
+            {
+                int n = va_arg(args, int);
+                const double *p = va_arg(args, const double *);
+                if (n > 0) memcpy(w, p, (size_t)n*sizeof(double));
+                w += 2*n;
+                break;
+            }
+        }
+    }
+    va_end(args);
+    if (saved) listEnd();
+}
+
+// glTexImage2D/glTexSubImage2D: args are the 8 integer arguments before the pixels. The pixels are read as the unpack
+// state lays them out (see transferPixels()) and stored tightly packed; not if the call fails anyway before reading
+// them (sizeValid false or an unknown format/type), it is recorded without them then
+static void listSaveImage(ListCommand command, const GLint args[8], GLsizei width, GLsizei height, bool sizeValid,
+                          const void *pixels)
+{
+    TexFormat f;
+    bool captured = (pixels != NULL) && sizeValid && texFormat((GLenum)args[6], (GLenum)args[7], &f);
+    size_t rowBytes = captured? (size_t)width*f.bpp : 0;
+    ListWord *w = listBegin(command, 9 + (captured? (int)((rowBytes*height + 3)/4) : 0));
+    if (w == NULL) return;
+
+    for (int i = 0; i < 8; i++) w[i].i = args[i];
+    w[8].i = (captured? 1 : 0) | (gl.unpack.swapBytes? 2 : 0);
+    if (captured)
+    {
+        const PixelStore *ps = &gl.unpack;
+        size_t srcRow = (size_t)((ps->rowLength > 0)? ps->rowLength : width)*f.bpp;
+        if (ps->alignment > 1) srcRow = (srcRow + ps->alignment - 1)/ps->alignment*ps->alignment;
+        const u8 *src = (const u8 *)pixels + (size_t)ps->skipRows*srcRow + (size_t)ps->skipPixels*f.bpp;
+        for (int y = 0; y < height; y++) memcpy((u8 *)&w[9] + (size_t)y*rowBytes, src + (size_t)y*srcRow, rowBytes);
+    }
+    listEnd();
+}
+
+// glArrayElement while compiling: the element of the enabled arrays is recorded as the immediate mode calls it stands
+// for (nothing if it is outside its buffer object, like submitArrayVertex())
+static void listArrayElement(int index)
+{
+    float tex[C3DGL_TEXTURE_UNITS][4], color[4] = { 0.0f, 0.0f, 0.0f, 1.0f }, normal[4];
+    float pos[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+    {
+        float *t = tex[unit];
+        t[0] = t[1] = t[2] = 0.0f;
+        t[3] = 1.0f;
+        if (arrayActive(ARRAY_TEXCOORD0 + unit) && !readArray(&gl.arrays[ARRAY_TEXCOORD0 + unit], index, t, false)) return;
+    }
+    if (arrayActive(ARRAY_COLOR) && !readArray(&gl.arrays[ARRAY_COLOR], index, color, true)) return;
+    if (arrayActive(ARRAY_NORMAL) && !readArray(&gl.arrays[ARRAY_NORMAL], index, normal, true)) return;
+    const u8 *edge = arrayActive(ARRAY_EDGEFLAG)? arrayElement(&gl.arrays[ARRAY_EDGEFLAG], index) : NULL;
+    if (arrayActive(ARRAY_EDGEFLAG) && (edge == NULL)) return;
+    if (arrayActive(ARRAY_VERTEX) && !readArray(&gl.arrays[ARRAY_VERTEX], index, pos, false)) return;
+    if (arrayActive(ARRAY_POINTSIZE)) WARN_ONCE("Display lists: the point size array is not recorded\n");
+
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+    {
+        if (arrayActive(ARRAY_TEXCOORD0 + unit))
+            glMultiTexCoord4f(GL_TEXTURE0 + unit, tex[unit][0], tex[unit][1], tex[unit][2], tex[unit][3]);
+    }
+    if (arrayActive(ARRAY_COLOR)) glColor4ub(colorByte(color[0]), colorByte(color[1]), colorByte(color[2]), colorByte(color[3]));
+    if (arrayActive(ARRAY_NORMAL)) glNormal3f(normal[0], normal[1], normal[2]);
+    if (edge != NULL) glEdgeFlag(*edge != 0);
+    if (arrayActive(ARRAY_VERTEX)) glVertex4f(pos[0], pos[1], pos[2], pos[3]);
+}
+
+// Insert empty lists named name .. name + count - 1 at `index` (none of them exists); false if out of memory
+static bool insertLists(int index, GLuint name, int count)
+{
+    if (gl.listCount + count > gl.listCapacity)
+    {
+        int capacity = gl.listCapacity? gl.listCapacity : 64;
+        while (capacity < gl.listCount + count) capacity *= 2;
+        DisplayList *grown = realloc(gl.lists, (size_t)capacity*sizeof(DisplayList));
+        if (grown == NULL) { setError(GL_OUT_OF_MEMORY); return false; }
+        gl.lists = grown;
+        gl.listCapacity = capacity;
+    }
+    memmove(&gl.lists[index + count], &gl.lists[index], (size_t)(gl.listCount - index)*sizeof(DisplayList));
+    for (int i = 0; i < count; i++) gl.lists[index + i] = (DisplayList){ name + i, NULL, 0 };
+    gl.listCount += count;
+    return true;
+}
+
+void glNewList(GLuint list, GLenum mode)
+{
+    if (gl.inBegin || (gl.listName != 0)) { setError(GL_INVALID_OPERATION); return; }
+    if (list == 0) { setError(GL_INVALID_VALUE); return; }
+    if ((mode != GL_COMPILE) && (mode != GL_COMPILE_AND_EXECUTE)) { setError(GL_INVALID_ENUM); return; }
+
+    gl.listName = list;
+    gl.listMode = mode;
+    gl.listWordCount = 0;
+    gl.listCompiling = true;
+}
+
+// The list gets its new commands only now: until then, calling it (from itself too) executes the old ones
+void glEndList(void)
+{
+    if (gl.listName == 0) { setError(GL_INVALID_OPERATION); return; }
+    GLuint name = gl.listName;
+    gl.listName = 0;
+    gl.listCompiling = false;
+
+    int index;
+    DisplayList *l = findList(name, &index);
+    if ((l == NULL) && insertLists(index, name, 1)) l = &gl.lists[index];
+    if (l == NULL) return;
+
+    // The recorded words become the list, trimmed to size; the next glNewList starts a new buffer
+    free(l->words);
+    l->words = NULL;
+    l->count = gl.listWordCount;
+    if (l->count > 0)
+    {
+        l->words = realloc(gl.listWords, (size_t)l->count*sizeof(ListWord));
+        if (l->words == NULL) l->words = gl.listWords;
+    }
+    else free(gl.listWords);
+    gl.listWords = NULL;
+    gl.listWordCount = gl.listWordCapacity = 0;
+}
+
+void glCallList(GLuint list)
+{
+    LIST_SAVE(CALL_LIST, "u", list);
+    executeList(list);
+}
+
+// Bytes per name of a glCallLists type, 0 if the type is invalid
+static int callListsSize(GLenum type)
+{
+    switch (type)
+    {
+        case GL_BYTE: case GL_UNSIGNED_BYTE: return 1;
+        case GL_SHORT: case GL_UNSIGNED_SHORT: case GL_2_BYTES: return 2;
+        case GL_3_BYTES: return 3;
+        case GL_INT: case GL_UNSIGNED_INT: case GL_FLOAT: case GL_4_BYTES: return 4;
+        default: return 0;
+    }
+}
+
+// Name i of glCallLists, before the list base is added (GL_n_BYTES: big-endian)
+static GLuint callListsName(GLenum type, const GLvoid *lists, int i)
+{
+    const u8 *p = (const u8 *)lists + (size_t)i*callListsSize(type);
+    switch (type)
+    {
+        case GL_BYTE: return (GLuint)(GLint)*(const s8 *)p;
+        case GL_UNSIGNED_BYTE: return *p;
+        case GL_SHORT: { s16 v; memcpy(&v, p, 2); return (GLuint)(GLint)v; }
+        case GL_UNSIGNED_SHORT: { u16 v; memcpy(&v, p, 2); return v; }
+        case GL_INT: case GL_UNSIGNED_INT: { u32 v; memcpy(&v, p, 4); return v; }
+        case GL_FLOAT: { float v; memcpy(&v, p, 4); return (GLuint)(GLint)v; }
+        case GL_2_BYTES: return ((GLuint)p[0] << 8) | p[1];
+        case GL_3_BYTES: return ((GLuint)p[0] << 16) | ((GLuint)p[1] << 8) | p[2];
+        default: return ((GLuint)p[0] << 24) | ((GLuint)p[1] << 16) | ((GLuint)p[2] << 8) | p[3];    // GL_4_BYTES
+    }
+}
+
+void glCallLists(GLsizei n, GLenum type, const GLvoid *lists)
+{
+    int size = callListsSize(type);
+    if (gl.listCompiling)
+    {
+        // The names are read now (as GL_UNSIGNED_INT); an invalid call is recorded without them and fails when executed
+        bool valid = (n >= 0) && (size > 0);
+        ListWord *w = listBegin(LIST_CALL_LISTS, 2 + (valid? n : 0));
+        if (w == NULL) return;
+        w[0].i = n;
+        w[1].u = valid? GL_UNSIGNED_INT : type;
+        for (int i = 0; valid && (i < n); i++) w[2 + i].u = callListsName(type, lists, i);
+        listEnd();
+        return;
+    }
+    if (n < 0) { setError(GL_INVALID_VALUE); return; }
+    if (size == 0) { setError(GL_INVALID_ENUM); return; }
+
+    // The base is read per name: a called list may change it
+    for (int i = 0; i < n; i++) executeList(gl.listBase + callListsName(type, lists, i));
+}
+
+void glListBase(GLuint base)
+{
+    LIST_SAVE(LIST_BASE, "u", base);
+    gl.listBase = base;
+}
+
+// The first `range` consecutive unused names; they become empty lists. 0 if there is no such range
+GLuint glGenLists(GLsizei range)
+{
+    if (range < 0) { setError(GL_INVALID_VALUE); return 0; }
+    if (range == 0) return 0;
+
+    GLuint base = 1;
+    int index = 0;
+    for (; index < gl.listCount; index++)
+    {
+        if (gl.lists[index].name - base >= (GLuint)range) break;      // Names before index are all < base
+        base = gl.lists[index].name + 1;
+    }
+    if ((base == 0) || ((GLuint)range - 1 > 0xFFFFFFFFu - base) || !insertLists(index, base, range)) return 0;
+    return base;
+}
+
+void glDeleteLists(GLuint list, GLsizei range)
+{
+    if (range < 0) { setError(GL_INVALID_VALUE); return; }
+
+    int first, last;
+    findList(list, &first);
+    u64 end = (u64)list + (u64)range;
+    for (last = first; (last < gl.listCount) && (gl.lists[last].name < end); last++) free(gl.lists[last].words);
+    memmove(&gl.lists[first], &gl.lists[last], (size_t)(gl.listCount - last)*sizeof(DisplayList));
+    gl.listCount -= last - first;
+}
+
+GLboolean glIsList(GLuint list) { return findList(list, NULL) != NULL; }
 
 //----------------------------------------------------------------------------------
 // Not implemented yet (declared so that code like GLU links; see gl.h)

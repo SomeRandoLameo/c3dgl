@@ -23,6 +23,7 @@
 //   - Mipmaps (all levels, mipmap filters, GL_GENERATE_MIPMAP)
 //   - Compressed textures: paletted (GL_OES_compressed_paletted_texture, expanded on load) and ETC1 (native)
 //   - Attribute stacks (glPushAttrib, glPushClientAttrib)
+//   - Display lists (glNewList, glCallList(s), ...)
 //   - Multitexturing: 3 units (glActiveTexture, glClientActiveTexture, glMultiTexCoord)
 //   - Blending, logic ops, alpha test, stencil, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
 //   - Point parameters (size min/max, distance attenuation) and point sprites (GL_OES_point_sprite)
@@ -37,7 +38,6 @@
 //   - Buffer objects (VBOs) for vertex arrays and indices
 //   - OpenGL ES 1.1: <GLES/gl.h>, fixed-point x functions, glOrthof/glFrustumf/... for the implemented features
 //
-// Not supported: display lists.
 // Mipmaps work down to 8x8; smaller levels are accepted but PICA cannot sample them. Points are always square (no GL_POINT_SMOOTH).
 //
 // Screens: rendering goes to the top screen (400x240) by default. c3dglSetScreen() switches to the
