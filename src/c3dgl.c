@@ -52,6 +52,7 @@
 #define C3DGL_MAX_LIGHTS        8
 #define C3DGL_MAX_CLIP_PLANES   6           // User clip planes, clipped on the CPU (GL minimum 6, ES 1)
 #define C3DGL_MAX_TEXTURE_SIZE  1024
+#define C3DGL_MAX_POINT_SIZE    256.0f      // Points are quads, so any size works; a bit more than the screen height
 #define MAX_TEXTURE_LEVEL       10          // log2(C3DGL_MAX_TEXTURE_SIZE)
 
 // Row order of texture memory: the first row in memory is the top of the texture (t = 1),
@@ -178,7 +179,8 @@ typedef struct {
     TexUnitState units[C3DGL_TEXTURE_UNITS];
     bool clipSpace;             // Vertices are already in NDC (expanded lines and points)
     u32 matrixSerial;           // Matrix version (0 for clipSpace)
-    u32 texMatrixSerial;        // Texture matrix version (0 when untextured)
+    u32 texMatrixSerial;        // Texture matrix version (0 when untextured or only sprite units are textured)
+    u8 spriteUnits;             // Point sprites: units with GL_COORD_REPLACE_OES, their texture matrix is not applied
     bool texQ;                  // Unit 0 texcoords with q != 1 were used (projection mode), only when textured
     bool blend;
     GLenum blendSrc, blendDst;
@@ -253,6 +255,8 @@ static struct {
     float (*vboExtra)[C3DGL_TEXTURE_UNITS - 1][3];  // Vertex buffer 1: texcoords of units 1, 2
     int vertexCount;
     int batchStart;                     // First vertex not yet submitted
+    int cacheFlushed;                   // Vertices before this are flushed from the CPU cache, see submitFrame()
+    bool extraUsed;                     // Vertex buffer 1 was written since the last cache flush
     DrawState batch;                    // State applied to the GPU for the current batch
     bool batchValid;
 
@@ -264,6 +268,9 @@ static struct {
     PixelStore unpack, pack;
     ProxyLevel proxy2D[11];             // Per level, 1024 >> 10 = 1
     float lineWidth, pointSize;
+    float pointSizeMin, pointSizeMax, pointFadeThreshold, pointAttenuation[3];  // glPointParameter
+    bool pointSprite;                   // GL_POINT_SPRITE_OES
+    u8 coordReplace;                    // GL_COORD_REPLACE_OES per texture unit (bit n: unit n)
     u32 clearColor;                     // 0xRRGGBBAA
     float clearDepth;
     u8 clearStencil;
@@ -320,6 +327,8 @@ static struct {
     bool autoNormal;
     int grid1n, grid2un, grid2vn;       // glMapGrid
     float grid1u1, grid1u2, grid2u1, grid2u2, grid2v1, grid2v2;
+    void *evalGrid;                     // EvalVertex scratch grid of glEvalMesh2
+    int evalGridCapacity;
 
     // Fog (glFog); the PICA table is rebuilt only when its inputs change, see updateFogLut()
     bool fog;
@@ -346,6 +355,8 @@ static struct {
     float normalMatrix[9];              // Inverse transpose of the modelview's upper 3x3 (row-major), for normalSerial
     float normalRescale;                // GL_RESCALE_NORMAL factor
     u32 normalSerial;
+    u32 litCacheGen;                    // Valid entries of litCache, see lightVertexCached()
+    u32 litCacheSerial;                 // matrixSerial the entries were lit with
 
     Texture textures[C3DGL_MAX_TEXTURES];
 
@@ -353,6 +364,9 @@ static struct {
     C3D_Tex *deferredDeletes;
     int deferredCount, deferredCapacity;
 } gl;
+
+// Lighting state changed: lit colors cached by lightVertexCached() are stale
+static void litStateChanged(void) { gl.litCacheGen++; }
 
 // Record an error for glGetError(); like OpenGL, only the first one is kept until it is read
 static void setError(GLenum error)
@@ -662,6 +676,8 @@ static void ensureFrame(void)
     gl.drawnThisFrame = false;
     gl.vertexCount = 0;
     gl.batchStart = 0;
+    gl.cacheFlushed = 0;
+    gl.extraUsed = false;
     gl.batchValid = false;
 
     processDeferredDeletes();
@@ -673,13 +689,26 @@ static void flush(void)
     int count = gl.vertexCount - gl.batchStart;
     if (count <= 0) return;
 
-    GSPGPU_FlushDataCache(gl.vbo + (size_t)gl.batchStart*GPU_VERTEX_SIZE, count*GPU_VERTEX_SIZE);
-    if (gl.batch.units[1].texture || gl.batch.units[2].texture)
-        GSPGPU_FlushDataCache(&gl.vboExtra[gl.batchStart], count*GPU_EXTRA_SIZE);
     C3D_DrawArrays(GPU_TRIANGLES, gl.batchStart, count);
+    if (gl.batch.units[1].texture || gl.batch.units[2].texture) gl.extraUsed = true;
 
     gl.batchStart = gl.vertexCount;
     gl.drawnThisFrame = true;
+}
+
+// Before the command list goes to the GPU (C3D_FrameSplit, C3D_FrameEnd): the GPU only reads the vertex buffer
+// from then on, so the vertices written since the last submission are flushed from the CPU cache in one go
+// (instead of a GSP call per batch)
+static void flushVertexCache(void)
+{
+    flush();
+    int count = gl.vertexCount - gl.cacheFlushed;
+    if (count <= 0) return;
+
+    GSPGPU_FlushDataCache(gl.vbo + (size_t)gl.cacheFlushed*GPU_VERTEX_SIZE, count*GPU_VERTEX_SIZE);
+    if (gl.extraUsed) GSPGPU_FlushDataCache(&gl.vboExtra[gl.cacheFlushed], count*GPU_EXTRA_SIZE);
+    gl.cacheFlushed = gl.vertexCount;
+    gl.extraUsed = false;
 }
 
 // Logical (landscape, bottom-left origin) rectangle -> physical render target rectangle.
@@ -813,10 +842,12 @@ static void setupTexEnv(C3D_TexEnv *env, int unit, const TexEnvState *e, GPU_TEX
     }
 }
 
-// Texture matrix of `unit` as shader uniform rows s, t, q; s and t scaled from the image to the padded texture size
-static void applyTextureMatrix(int unit, const Texture *t, bool *projective)
+// Texture matrix of `unit` as shader uniform rows s, t, q; s and t scaled from the image to the padded texture size.
+// sprite: the texcoords are point sprite coordinates, which GL does not transform
+static void applyTextureMatrix(int unit, const Texture *t, bool sprite, bool *projective)
 {
-    const Mat4 *tm = &gl.stack[2 + unit][gl.stackDepth[2 + unit]];
+    static const Mat4 identity = {{ 1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1 }};
+    const Mat4 *tm = sprite? &identity : &gl.stack[2 + unit][gl.stackDepth[2 + unit]];
     float scale[2] = { (float)t->width/t->tex.width, (float)t->height/t->tex.height };
     for (int row = 0; row < 2; row++)
         C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat[unit] + row, tm->m[row]*scale[row], tm->m[4 + row]*scale[row],
@@ -864,60 +895,91 @@ static void updateFogLut(const DrawState *s)
     C3D_FogLutBind(&gl.fogLut);     // Marks the table dirty: citro3d copies it into the command list at the next draw
 }
 
-static void applyState(const DrawState *s)
+// Set the GPU state of a batch. prev: the state applied for the previous batch (NULL: unknown), only what differs
+// from it is set: citro3d re-sends every group that is set, changed or not
+#define CHANGED(field) ((prev == NULL) || (memcmp(&s->field, &prev->field, sizeof(s->field)) != 0))
+
+static void applyState(const DrawState *s, const DrawState *prev)
 {
     int x, y, w, h;
-    physicalRect(s->viewport, &x, &y, &w, &h);
-    C3D_SetViewport(x, y, w, h);
-
-    if (s->scissor)
+    if (CHANGED(viewport))
     {
-        physicalRect(s->scissorBox, &x, &y, &w, &h);
-        if (x < 0) { w += x; x = 0; }
-        if (y < 0) { h += y; y = 0; }
-        if (w < 0) w = 0;
-        if (h < 0) h = 0;
-        C3D_SetScissor(GPU_SCISSOR_NORMAL, x, y, x + w, y + h);
+        physicalRect(s->viewport, &x, &y, &w, &h);
+        C3D_SetViewport(x, y, w, h);
     }
-    else C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+
+    if (CHANGED(scissor) || (s->scissor && CHANGED(scissorBox)))
+    {
+        if (s->scissor)
+        {
+            physicalRect(s->scissorBox, &x, &y, &w, &h);
+            if (x < 0) { w += x; x = 0; }
+            if (y < 0) { h += y; y = 0; }
+            if (w < 0) w = 0;
+            if (h < 0) h = 0;
+            C3D_SetScissor(GPU_SCISSOR_NORMAL, x, y, x + w, y + h);
+        }
+        else C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+    }
 
     // Stored depth = 1 - window depth (see depthFunc()), window depth = n + (f - n)*(z_pica + 1) with z_pica in [-1, 0]
-    C3D_DepthMap(true, -(s->depthFar - s->depthNear), 1.0f - s->depthFar);
+    if (CHANGED(depthNear) || CHANGED(depthFar)) C3D_DepthMap(true, -(s->depthFar - s->depthNear), 1.0f - s->depthFar);
 
-    GPU_WRITEMASK writeMask = (GPU_WRITEMASK)(s->colorMask | ((s->depthTest && s->depthMask)? GPU_WRITE_DEPTH : 0));
-    C3D_DepthTest(s->depthTest, s->depthTest? depthFunc(s->depthFunc) : GPU_ALWAYS, writeMask);
-    C3D_AlphaTest(s->alphaTest, testFunc(s->alphaFunc), s->alphaRef);
-
-    if (s->stencilTest)
+    if (CHANGED(colorMask) || CHANGED(depthTest) || CHANGED(depthMask) || CHANGED(depthFunc))
     {
-        C3D_StencilTest(true, testFunc(s->stencilFunc), s->stencilRef, s->stencilFuncMask, s->stencilWriteMask);
-        C3D_StencilOp(stencilOp(s->stencilFail), stencilOp(s->stencilDepthFail), stencilOp(s->stencilPass));
+        GPU_WRITEMASK writeMask = (GPU_WRITEMASK)(s->colorMask | ((s->depthTest && s->depthMask)? GPU_WRITE_DEPTH : 0));
+        C3D_DepthTest(s->depthTest, s->depthTest? depthFunc(s->depthFunc) : GPU_ALWAYS, writeMask);
     }
-    else C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0x00);
+    if (CHANGED(alphaTest) || CHANGED(alphaFunc) || CHANGED(alphaRef)) C3D_AlphaTest(s->alphaTest, testFunc(s->alphaFunc), s->alphaRef);
 
-    if (s->blend)
+    // prepareDraw() zeroes the stencil fields while the test is off
+    if (CHANGED(stencilTest) || CHANGED(stencilFunc) || CHANGED(stencilRef) || CHANGED(stencilFuncMask) ||
+        CHANGED(stencilWriteMask) || CHANGED(stencilFail) || CHANGED(stencilDepthFail) || CHANGED(stencilPass))
     {
-        GPU_BLENDFACTOR src = blendFactor(s->blendSrc), dst = blendFactor(s->blendDst);
-        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, src, dst, src, dst);
+        if (s->stencilTest)
+        {
+            C3D_StencilTest(true, testFunc(s->stencilFunc), s->stencilRef, s->stencilFuncMask, s->stencilWriteMask);
+            C3D_StencilOp(stencilOp(s->stencilFail), stencilOp(s->stencilDepthFail), stencilOp(s->stencilPass));
+        }
+        else C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0x00);
     }
-    else C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
 
-    C3D_CullFace(cullMode(s));
-
-    if (s->fog)
+    if (CHANGED(blend) || CHANGED(blendSrc) || CHANGED(blendDst))
     {
-        updateFogLut(s);
-        C3D_FogGasMode(GPU_FOG, GPU_PLAIN_DENSITY, true);   // Flipped: the table is indexed by window depth
-        C3D_FogColor(s->fogColor);
+        if (s->blend)
+        {
+            GPU_BLENDFACTOR src = blendFactor(s->blendSrc), dst = blendFactor(s->blendDst);
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, src, dst, src, dst);
+        }
+        else C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
     }
-    else C3D_FogGasMode(GPU_NO_FOG, GPU_PLAIN_DENSITY, false);
+
+    if ((prev == NULL) || (cullMode(s) != cullMode(prev))) C3D_CullFace(cullMode(s));
+
+    // The fog table also depends on the projection, updateFogLut() rebuilds it only when its inputs change
+    if (s->fog) updateFogLut(s);
+    if (CHANGED(fog) || CHANGED(fogColor))
+    {
+        if (s->fog)
+        {
+            C3D_FogGasMode(GPU_FOG, GPU_PLAIN_DENSITY, true);   // Flipped: the table is indexed by window depth
+            C3D_FogColor(s->fogColor);
+        }
+        else C3D_FogGasMode(GPU_NO_FOG, GPU_PLAIN_DENSITY, false);
+    }
 
     // Fragment stage: TexEnv stage n combines texture unit n with the result of stage n - 1 (glTexEnv per unit)
     for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
     {
+        const TexUnitState *u = &s->units[unit];
+        bool sprite = (s->spriteUnits >> unit) & 1;
+        if ((prev != NULL) && (memcmp(u, &prev->units[unit], sizeof(*u)) == 0) &&
+            ((u->texture == 0) || ((s->texMatrixSerial == prev->texMatrixSerial) && (s->texQ == prev->texQ) &&
+                                   (sprite == ((prev->spriteUnits >> unit) & 1)))))
+            continue;
+
         C3D_TexEnv *env = C3D_GetTexEnv(unit);
         C3D_TexEnvInit(env);
-        const TexUnitState *u = &s->units[unit];
         if (u->texture == 0)
         {
             // Pass the previous color through (stage 0: the vertex color)
@@ -933,7 +995,7 @@ static void applyState(const DrawState *s)
 
         Texture *t = &gl.textures[u->texture];
         bool projective;
-        applyTextureMatrix(unit, t, &projective);
+        applyTextureMatrix(unit, t, sprite, &projective);
 
         // Unit 0 can let PICA divide s and t by q per pixel (projection mode); units 1/2 divide per vertex in the shader
         if (unit == 0)
@@ -947,12 +1009,17 @@ static void applyState(const DrawState *s)
         setupTexEnv(env, unit, &u->env, t->format.format);
     }
 
-    Mat4 mvp = gl.post;
-    if (!s->clipSpace) mat4Mul(&mvp, &gl.post, projectionModelview());
-    C3D_Mtx mtx;
-    mat4ToC3D(&mvp, &mtx);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, gl.uLocMvp, &mtx);
+    if (CHANGED(clipSpace) || CHANGED(matrixSerial))
+    {
+        Mat4 mvp = gl.post;
+        if (!s->clipSpace) mat4Mul(&mvp, &gl.post, projectionModelview());
+        C3D_Mtx mtx;
+        mat4ToC3D(&mvp, &mtx);
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, gl.uLocMvp, &mtx);
+    }
 }
+
+#undef CHANGED
 
 static bool textureValid(GLuint id)
 {
@@ -967,20 +1034,21 @@ static void useState(const DrawState *key)
     if (!gl.batchValid || (memcmp(key, &gl.batch, sizeof(DrawState)) != 0))
     {
         flush();
-        applyState(key);
+        applyState(key, gl.batchValid? &gl.batch : NULL);
         memcpy(&gl.batch, key, sizeof(DrawState));
         gl.batchValid = true;
     }
 }
 
-// Call before emitting vertices: starts a new batch if the draw state changed
-static void prepareDraw(bool clipSpace)
+// Call before emitting vertices: starts a new batch if the draw state changed.
+// points: points follow (GL_POINTS, polygon mode GL_POINT), point sprites may replace their texcoords
+static void prepareDraw(bool clipSpace, bool points)
 {
     DrawState key;
     memcpy(&key, &gl.state, sizeof(DrawState));
     key.clipSpace = clipSpace;
     key.matrixSerial = clipSpace? 0 : gl.matrixSerial;
-    bool textured = false;
+    u8 textured = 0;
     for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
     {
         TexUnitState *u = &key.units[unit];
@@ -993,10 +1061,11 @@ static void prepareDraw(bool clipSpace)
             u->texture = 0;
         }
         if (u->texture == 0) memset(&u->env, 0, sizeof(u->env));      // Unused, don't split batches over it
-        textured = textured || (u->texture != 0);
+        if (u->texture) textured |= 1u << unit;
     }
-    key.texMatrixSerial = textured? gl.texMatrixSerial : 0;
-    key.texQ = (key.units[0].texture != 0) && gl.texQUsed;
+    key.spriteUnits = (points && gl.pointSprite)? (gl.coordReplace & textured) : 0;
+    key.texMatrixSerial = (textured & ~key.spriteUnits)? gl.texMatrixSerial : 0;
+    key.texQ = (key.units[0].texture != 0) && gl.texQUsed && !(key.spriteUnits & 1);
     key.fog = gl.fog;
     if (gl.fog)
     {
@@ -1047,6 +1116,7 @@ static void emitTriangle(const Vertex *a, const Vertex *b, const Vertex *c)
 static void lerpVertex(Vertex *out, const Vertex *a, const Vertex *b, float t)
 {
     for (int i = 0; i < 3; i++) out->pos[i] = a->pos[i] + (b->pos[i] - a->pos[i])*t;
+    out->depthBias = a->depthBias + (b->depthBias - a->depthBias)*t;
     for (int i = 0; i < 3; i++) out->tex[i] = a->tex[i] + (b->tex[i] - a->tex[i])*t;
     for (int u = 0; u < C3DGL_TEXTURE_UNITS - 1; u++)
         for (int i = 0; i < 3; i++) out->texExtra[u][i] = a->texExtra[u][i] + (b->texExtra[u][i] - a->texExtra[u][i])*t;
@@ -1243,7 +1313,28 @@ static void emitLine(const Vertex *a, const Vertex *b, float zBias)
     emitExpandedQuad(&va, &vb, pa, pb, -dy*r/halfW, dx*r/halfH, dx*r/halfW, dy*r/halfH);
 }
 
-// Expand a point to a screen-aligned square of glPointSize pixels in NDC (batch must be in clipSpace mode)
+// Point size of v (glPointParameter, GL 1.4 / ES 1.1 3.3): glPointSize scaled by the distance attenuation
+// 1/sqrt(a + b*d + c*d^2) of the eye distance d, clamped to GL_POINT_SIZE_MIN/MAX. The fade threshold only applies
+// with multisampling, which PICA does not have
+static float pointSize(const Vertex *v)
+{
+    float size = gl.pointSize;
+    const float *att = gl.pointAttenuation;
+    if ((att[0] != 1.0f) || (att[1] != 0.0f) || (att[2] != 0.0f))
+    {
+        const float *m = gl.stack[0][gl.stackDepth[0]].m;
+        float e[3];
+        for (int i = 0; i < 3; i++) e[i] = m[i]*v->pos[0] + m[4 + i]*v->pos[1] + m[8 + i]*v->pos[2] + m[12 + i];
+        float d = sqrtf(e[0]*e[0] + e[1]*e[1] + e[2]*e[2]);
+        float k = att[0] + att[1]*d + att[2]*d*d;
+        size = (k > 0.0f)? size/sqrtf(k) : C3DGL_MAX_POINT_SIZE;
+    }
+    size = fminf(fmaxf(size, gl.pointSizeMin), gl.pointSizeMax);
+    return fminf(fmaxf(size, 1.0f), C3DGL_MAX_POINT_SIZE);
+}
+
+// Expand a point to a screen-aligned square in NDC (batch must be in clipSpace mode). Point sprites: the texcoords
+// of the batch's sprite units run from (0, 0) at the top left to (1, 1) at the bottom right (OES_point_sprite)
 static void emitPoint(const Vertex *v, float zBias)
 {
     if (pointClipped(v)) return;
@@ -1253,11 +1344,29 @@ static void emitPoint(const Vertex *v, float zBias)
     if (c[3] < CLIP_W_MIN) return;
 
     float p[3] = { c[0]/c[3], c[1]/c[3], c[2]/c[3] + zBias };
-    float r = 0.5f*gl.pointSize;
+    float r = 0.5f*pointSize(v);
     float rx = 2.0f*r/(float)gl.state.viewport[2], ry = 2.0f*r/(float)gl.state.viewport[3];
 
-    // Zero-length "line" from p to p: the cap offset gives the width, the perpendicular offset the height
-    emitExpandedQuad(v, v, p, p, 0.0f, ry, rx, 0.0f);
+    // Corners bottom left, top left, top right, bottom right (NDC y points up)
+    static const float corner[4][2] = { { -1, -1 }, { -1, 1 }, { 1, 1 }, { 1, -1 } };
+    Vertex q[4];
+    for (int i = 0; i < 4; i++)
+    {
+        q[i] = *v;
+        q[i].pos[0] = p[0] + corner[i][0]*rx;
+        q[i].pos[1] = p[1] + corner[i][1]*ry;
+        q[i].pos[2] = p[2];
+        for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+        {
+            if (!((gl.batch.spriteUnits >> unit) & 1)) continue;
+            float *tc = (unit == 0)? q[i].tex : q[i].texExtra[unit - 1];
+            tc[0] = 0.5f + 0.5f*corner[i][0];
+            tc[1] = 0.5f - 0.5f*corner[i][1];
+            tc[2] = 1.0f;
+        }
+    }
+    emitTriangle(&q[0], &q[1], &q[2]);
+    emitTriangle(&q[0], &q[2], &q[3]);
 }
 
 // Copy of v with the color of the provoking vertex pv (flat shading, NULL: smooth) and a depth bias.
@@ -1349,14 +1458,19 @@ static void emitPolygon(const Vertex *const *vs, const bool *edges, int n, const
         if (gl.state.cull && ((gl.state.cullFace == GL_FRONT_AND_BACK) || ((gl.state.cullFace == GL_FRONT) == front))) return;
 
         mode = gl.polygonMode[front? 0 : 1];
-        prepareDraw(mode != GL_FILL);
+        prepareDraw(mode != GL_FILL, mode == GL_POINT);
     }
 
     bool offset = (mode == GL_FILL)? gl.offsetFill : (mode == GL_LINE)? gl.offsetLine : gl.offsetPoint;
     float range = gl.state.depthFar - gl.state.depthNear;
     float windowOffset = (offset && (range != 0.0f))? polygonOffset(vs, n)/range : 0.0f;    // In PICA NDC (= 1/2 GL NDC)
 
-    if (mode == GL_FILL)
+    if ((mode == GL_FILL) && (pv == NULL) && !back && (windowOffset == 0.0f))
+    {
+        // Common case: the vertices go to the buffer as they are (their depth bias is 0)
+        for (int i = 1; i + 1 < n; i++) emitTriangle(vs[0], vs[i], vs[i + 1]);
+    }
+    else if (mode == GL_FILL)
     {
         Vertex a = shadeVertex(vs[0], pv, windowOffset, back);
         for (int i = 1; i + 1 < n; i++)
@@ -1394,7 +1508,7 @@ static bool beginPrimitive(GLenum mode)
     }
 
     bool lineOrPoint = (mode == GL_POINTS) || (mode == GL_LINES) || (mode == GL_LINE_STRIP) || (mode == GL_LINE_LOOP);
-    prepareDraw(lineOrPoint);
+    prepareDraw(lineOrPoint, mode == GL_POINTS);
     gl.primitive = mode;
     gl.primCount = 0;
     gl.primTotal = 0;
@@ -1595,7 +1709,7 @@ static void initLighting(void)
 static void applyColorMaterial(const u8 color[4])
 {
     float c[4];
-    for (int i = 0; i < 4; i++) c[i] = color[i]/255.0f;
+    for (int i = 0; i < 4; i++) c[i] = color[i]*(1.0f/255.0f);
 
     GLenum face = gl.lighting.colorMaterialFace, mode = gl.lighting.colorMaterialMode;
     for (int f = 0; f < 2; f++)
@@ -1738,10 +1852,48 @@ static void lightVertex(Vertex *v, const float normal[3])
     }
 }
 
+// Lit colors of recent vertices. Meshes submit shared vertices several times (glDrawElements, triangle lists, strips
+// next to each other), the lit result only depends on position, normal and color while the lighting state is
+// unchanged. Every call that changes lighting state starts a new generation (litStateChanged()), a modelview change
+// too; GL_COLOR_MATERIAL needs nothing: the tracked material values follow the color, which is part of the key
+#define LIT_CACHE_SIZE  512         // Power of two; direct mapped
+typedef struct {
+    u32 key[7];                 // Position, normal, color
+    u32 gen;
+    u8 color[4], backColor[4];
+} LitCacheEntry;
+static LitCacheEntry litCache[LIT_CACHE_SIZE];
+
+static void lightVertexCached(Vertex *v, const float normal[3])
+{
+    u32 key[7];
+    memcpy(key, v->pos, 3*sizeof(float));
+    memcpy(key + 3, normal, 3*sizeof(float));
+    memcpy(key + 6, v->color, 4);
+    if (gl.litCacheSerial != gl.matrixSerial) { gl.litCacheGen++; gl.litCacheSerial = gl.matrixSerial; }
+
+    u32 h = 2166136261u;
+    for (int i = 0; i < 7; i++) h = (h ^ key[i])*16777619u;
+    LitCacheEntry *e = &litCache[(h ^ (h >> 16)) & (LIT_CACHE_SIZE - 1)];
+    if ((e->gen == gl.litCacheGen) && (memcmp(e->key, key, sizeof(key)) == 0))
+    {
+        if (gl.colorMaterial) applyColorMaterial(v->color);     // The material still follows the color
+        memcpy(v->color, e->color, 4);
+        memcpy(v->backColor, e->backColor, 4);
+        return;
+    }
+
+    lightVertex(v, normal);
+    memcpy(e->key, key, sizeof(key));
+    e->gen = gl.litCacheGen;
+    memcpy(e->color, v->color, 4);
+    memcpy(e->backColor, v->backColor, 4);
+}
+
 // Every vertex goes through here: lighting, then primitive assembly
 static void submitLitVertex(Vertex *v, const float normal[3], bool edge)
 {
-    if (gl.lightingEnabled) lightVertex(v, normal);
+    if (gl.lightingEnabled) lightVertexCached(v, normal);
     submitVertex(v, edge);
 }
 
@@ -1752,6 +1904,7 @@ bool c3dglInit(void)
 {
     if (gl.ready) return true;
     memset(&gl, 0, sizeof(gl));
+    memset(litCache, 0, sizeof(litCache));     // Generations restart at 0
 
     if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) { LOG("C3D_Init failed\n"); return false; }
 
@@ -1838,6 +1991,9 @@ bool c3dglInit(void)
     gl.state.frontFace = GL_CCW;
     gl.unpack.alignment = gl.pack.alignment = 4;
     gl.lineWidth = gl.pointSize = 1.0f;
+    gl.pointSizeMax = C3DGL_MAX_POINT_SIZE;
+    gl.pointFadeThreshold = 1.0f;
+    gl.pointAttenuation[0] = 1.0f;
     gl.clearColor = 0x000000FF;
     gl.clearDepth = 1.0f;
     gl.state.depthFar = 1.0f;
@@ -1872,7 +2028,7 @@ bool c3dglInit(void)
 
 void c3dglClose(void)
 {
-    if (gl.frameActive) { C3D_FrameEnd(0); gl.frameActive = false; }
+    if (gl.frameActive) { flushVertexCache(); C3D_FrameEnd(0); gl.frameActive = false; }
 
     for (int i = 1; i < C3DGL_MAX_TEXTURES; i++) if (gl.textures[i].loaded) C3D_TexDelete(&gl.textures[i].tex);
     processDeferredDeletes();
@@ -1885,6 +2041,7 @@ void c3dglClose(void)
     for (GLuint i = 0; i < gl.bufferCount; i++) free(gl.buffers[i].data);
     free(gl.buffers);
     for (int i = 0; i < 9; i++) { free(gl.map1[i].points); free(gl.map2[i].points); }
+    free(gl.evalGrid);
 
     if (gl.dvlb != NULL) { shaderProgramFree(&gl.program); DVLB_Free(gl.dvlb); }
     if (gl.dummyTexture.data != NULL) C3D_TexDelete(&gl.dummyTexture);
@@ -1931,7 +2088,7 @@ int c3dglGetScreenWidth(C3DGLscreen screen)
 void c3dglSwapBuffers(void)
 {
     ensureFrame();      // Present even if nothing was drawn
-    flush();
+    flushVertexCache();
     C3D_FrameEnd(0);
     gl.frameActive = false;
 }
@@ -1953,6 +2110,7 @@ static int ignoredCapBit(GLenum cap)
 
 static void setCapability(GLenum cap, bool enable)
 {
+    litStateChanged();          // Lights, GL_NORMALIZE, ...
     int bit = ignoredCapBit(cap);
     if (bit >= 0)
     {
@@ -2009,6 +2167,7 @@ static void setCapability(GLenum cap, bool enable)
         case GL_POLYGON_OFFSET_FILL: gl.offsetFill = enable; break;
         case GL_POLYGON_OFFSET_LINE: gl.offsetLine = enable; break;
         case GL_POLYGON_OFFSET_POINT: gl.offsetPoint = enable; break;
+        case GL_POINT_SPRITE_OES: gl.pointSprite = enable; break;
         default:
             WARN_ONCE("glEnable/glDisable: capability 0x%x not supported\n", cap);
             setError(GL_INVALID_ENUM);
@@ -2077,6 +2236,7 @@ GLboolean glIsEnabled(GLenum cap)
         case GL_POLYGON_OFFSET_FILL: return gl.offsetFill;
         case GL_POLYGON_OFFSET_LINE: return gl.offsetLine;
         case GL_POLYGON_OFFSET_POINT: return gl.offsetPoint;
+        case GL_POINT_SPRITE_OES: return gl.pointSprite;
         default: setError(GL_INVALID_ENUM); return GL_FALSE;
     }
 }
@@ -2251,6 +2411,12 @@ static int getState(GLenum pname, double v[16], bool *normalized)
 
         case GL_LINE_WIDTH: v[0] = gl.lineWidth; return 1;
         case GL_POINT_SIZE: v[0] = gl.pointSize; return 1;
+        case GL_POINT_SIZE_RANGE: case GL_ALIASED_POINT_SIZE_RANGE: v[0] = 1.0; v[1] = C3DGL_MAX_POINT_SIZE; return 2;
+        case GL_POINT_SIZE_GRANULARITY: v[0] = 0.0; return 1;     // Any size (points are quads)
+        case GL_POINT_SIZE_MIN: v[0] = gl.pointSizeMin; return 1;
+        case GL_POINT_SIZE_MAX: v[0] = gl.pointSizeMax; return 1;
+        case GL_POINT_FADE_THRESHOLD_SIZE: v[0] = gl.pointFadeThreshold; return 1;
+        case GL_POINT_DISTANCE_ATTENUATION: for (int i = 0; i < 3; i++) v[i] = gl.pointAttenuation[i]; return 3;
         case GL_UNPACK_ALIGNMENT: v[0] = gl.unpack.alignment; return 1;
         case GL_UNPACK_ROW_LENGTH: v[0] = gl.unpack.rowLength; return 1;
         case GL_UNPACK_SKIP_ROWS: v[0] = gl.unpack.skipRows; return 1;
@@ -2284,7 +2450,7 @@ static int getState(GLenum pname, double v[16], bool *normalized)
                 (pname == GL_POLYGON_OFFSET_POINT) || (pname == GL_AUTO_NORMAL) || (pname == GL_LIGHTING) || (pname == GL_FOG) ||
                 ((pname >= GL_LIGHT0) && (pname <= GL_LIGHT7)) || (pname == GL_COLOR_MATERIAL) ||
                 ((pname >= GL_CLIP_PLANE0) && (pname < GL_CLIP_PLANE0 + C3DGL_MAX_CLIP_PLANES)) ||
-                (pname == GL_NORMALIZE) || (pname == GL_RESCALE_NORMAL) ||
+                (pname == GL_NORMALIZE) || (pname == GL_RESCALE_NORMAL) || (pname == GL_POINT_SPRITE_OES) ||
                 ((pname >= GL_MAP1_COLOR_4) && (pname <= GL_MAP1_VERTEX_4)) || ((pname >= GL_MAP2_COLOR_4) && (pname <= GL_MAP2_VERTEX_4)))
             {
                 v[0] = glIsEnabled(pname);
@@ -2343,6 +2509,7 @@ const GLubyte *glGetString(GLenum name)
         case GL_VENDOR: return (const GLubyte *)"c3dgl";
         case GL_RENDERER: return (const GLubyte *)"citro3d (PICA200)";
         case GL_VERSION: return (const GLubyte *)"1.1 c3dgl";
+        case GL_EXTENSIONS: return (const GLubyte *)"GL_OES_point_sprite";
         default: return (const GLubyte *)"";
     }
 }
@@ -2437,7 +2604,7 @@ void glClear(GLbitfield mask)
     }
 
     ensureFrame();
-    flush();
+    flushVertexCache();
 
     // Clears run as memory fills outside the command list; split it so earlier draws stay before the clear
     if (gl.drawnThisFrame) C3D_FrameSplit(0);
@@ -2513,7 +2680,44 @@ void glDepthRange(GLclampd zNear, GLclampd zFar)
 }
 
 void glLineWidth(GLfloat width) { gl.lineWidth = width; }
-void glPointSize(GLfloat size) { gl.pointSize = size; }
+void glPointSize(GLfloat size)
+{
+    if (size <= 0.0f) { setError(GL_INVALID_VALUE); return; }
+    gl.pointSize = size;
+}
+
+// glPointParameter (GL 1.4, ES 1.1)
+void glPointParameterfv(GLenum pname, const GLfloat *params)
+{
+    switch (pname)
+    {
+        case GL_POINT_SIZE_MIN: case GL_POINT_SIZE_MAX: case GL_POINT_FADE_THRESHOLD_SIZE:
+            if (params[0] < 0.0f) { setError(GL_INVALID_VALUE); return; }
+            if (pname == GL_POINT_SIZE_MIN) gl.pointSizeMin = params[0];
+            else if (pname == GL_POINT_SIZE_MAX) gl.pointSizeMax = params[0];
+            else gl.pointFadeThreshold = params[0];
+            return;
+        case GL_POINT_DISTANCE_ATTENUATION:
+            memcpy(gl.pointAttenuation, params, sizeof(gl.pointAttenuation));
+            return;
+        default: setError(GL_INVALID_ENUM); return;
+    }
+}
+
+void glPointParameterf(GLenum pname, GLfloat param)
+{
+    if (pname == GL_POINT_DISTANCE_ATTENUATION) { setError(GL_INVALID_ENUM); return; }     // Needs 3 values
+    glPointParameterfv(pname, &param);
+}
+
+void glPointParameteri(GLenum pname, GLint param) { glPointParameterf(pname, (GLfloat)param); }
+
+void glPointParameteriv(GLenum pname, const GLint *params)
+{
+    GLfloat f[3] = { (GLfloat)params[0], 0.0f, 0.0f };
+    if (pname == GL_POINT_DISTANCE_ATTENUATION) { f[1] = (GLfloat)params[1]; f[2] = (GLfloat)params[2]; }
+    glPointParameterfv(pname, f);
+}
 
 //----------------------------------------------------------------------------------
 // OpenGL: matrices
@@ -2685,7 +2889,7 @@ static void markTexQ(void)
 {
     if (gl.texQUsed) return;
     gl.texQUsed = true;
-    if (gl.inBegin) prepareDraw(gl.batch.clipSpace);    // The batch of the current primitive needs it already
+    if (gl.inBegin) prepareDraw(gl.batch.clipSpace, gl.primitive == GL_POINTS);    // The batch of the current primitive needs it already
 }
 
 void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q)
@@ -2874,6 +3078,7 @@ static void setLight(GLenum light, GLenum pname, const float *p)
 {
     Light *li = lightFor(light);
     if (li == NULL) return;
+    litStateChanged();
 
     const float *m = gl.stack[0][gl.stackDepth[0]].m;
     switch (pname)
@@ -2935,6 +3140,7 @@ static int lightModelParamCount(GLenum pname)
 
 static void setLightModel(GLenum pname, const float *p)
 {
+    litStateChanged();
     switch (pname)
     {
         case GL_LIGHT_MODEL_AMBIENT: memcpy(gl.lighting.modelAmbient, p, sizeof(gl.lighting.modelAmbient)); break;
@@ -2985,6 +3191,7 @@ static void setMaterial(GLenum face, GLenum pname, const float *p)
 {
     if (!faceValid(face) || (materialParamCount(pname) == 0)) { setError(GL_INVALID_ENUM); return; }
     if ((pname == GL_SHININESS) && ((p[0] < 0.0f) || (p[0] > 128.0f))) { setError(GL_INVALID_VALUE); return; }
+    litStateChanged();
 
     for (int f = 0; f < 2; f++)
     {
@@ -3031,6 +3238,7 @@ void glMateriali(GLenum face, GLenum pname, GLint param)
 
 void glColorMaterial(GLenum face, GLenum mode)
 {
+    litStateChanged();
     bool modeValid = (mode == GL_EMISSION) || (mode == GL_AMBIENT) || (mode == GL_DIFFUSE) || (mode == GL_SPECULAR) ||
                      (mode == GL_AMBIENT_AND_DIFFUSE);
     if (!faceValid(face) || !modeValid) { setError(GL_INVALID_ENUM); return; }
@@ -3309,6 +3517,7 @@ static bool readArray(const ClientArray *a, int index, float out[4], bool normal
     int size = typeSize(a->type);
     const u8 *p = arrayElement(a, index);
     if (p == NULL) return false;
+    if (a->type == GL_FLOAT) { memcpy(out, p, (size_t)a->size*sizeof(float)); return true; }
 
     for (int i = 0; i < a->size; i++, p += size)
     {
@@ -3918,6 +4127,13 @@ static bool combineSourceValid(GLenum src)
 // glTexEnv of the active texture unit; float-valued parameters (scales) arrive as floats
 static void setTexEnv(GLenum target, GLenum pname, GLint value, GLfloat fvalue)
 {
+    if (target == GL_POINT_SPRITE_OES)
+    {
+        if (pname != GL_COORD_REPLACE_OES) { setError(GL_INVALID_ENUM); return; }
+        if (value) gl.coordReplace |= 1u << gl.activeTexture;
+        else gl.coordReplace &= ~(1u << gl.activeTexture);
+        return;
+    }
     if (target != GL_TEXTURE_ENV) { setError(GL_INVALID_ENUM); return; }
     TexEnvState *e = &gl.state.units[gl.activeTexture].env;
 
@@ -3989,6 +4205,7 @@ void glTexEnviv(GLenum target, GLenum pname, const GLint *params)
 // glGetTexEnv: values of the active unit; returns the count, 0 on error
 static int getTexEnv(GLenum target, GLenum pname, float v[4])
 {
+    if ((target == GL_POINT_SPRITE_OES) && (pname == GL_COORD_REPLACE_OES)) { v[0] = (gl.coordReplace >> gl.activeTexture) & 1; return 1; }
     if (target != GL_TEXTURE_ENV) { setError(GL_INVALID_ENUM); return 0; }
     const TexEnvState *e = &gl.state.units[gl.activeTexture].env;
     switch (pname)
@@ -4490,19 +4707,23 @@ static void evalMap2(const struct EvalMap *m, int k, float u, float v, float *ou
     bernstein(m->uorder, (u - m->u1)/(m->u2 - m->u1), bu, derivs? dbu : NULL);
     bernstein(m->vorder, (v - m->v1)/(m->v2 - m->v1), bv, derivs? dbv : NULL);
 
+    // Sum over v first: q_i = sum_j bv_j*p_ij (and r_i with the v derivative), then over u
     for (int c = 0; c < k; c++) out[c] = 0.0f;
     if (derivs) for (int c = 0; c < k; c++) du[c] = dv[c] = 0.0f;
+    float su = derivs? 1.0f/(m->u2 - m->u1) : 0.0f, sv = derivs? 1.0f/(m->v2 - m->v1) : 0.0f;
     const float *p = m->points;
     for (int i = 0; i < m->uorder; i++)
     {
+        float q[4] = { 0.0f, 0.0f, 0.0f, 0.0f }, r[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
         for (int j = 0; j < m->vorder; j++, p += k)
         {
-            float w = bu[i]*bv[j];
-            for (int c = 0; c < k; c++) out[c] += w*p[c];
-            if (!derivs) continue;
-            float wu = dbu[i]*bv[j]/(m->u2 - m->u1), wv = bu[i]*dbv[j]/(m->v2 - m->v1);
-            for (int c = 0; c < k; c++) { du[c] += wu*p[c]; dv[c] += wv*p[c]; }
+            for (int c = 0; c < k; c++) q[c] += bv[j]*p[c];
+            if (derivs) for (int c = 0; c < k; c++) r[c] += dbv[j]*p[c];
         }
+        for (int c = 0; c < k; c++) out[c] += bu[i]*q[c];
+        if (!derivs) continue;
+        float wu = dbu[i]*su, wv = bu[i]*sv;
+        for (int c = 0; c < k; c++) { du[c] += wu*q[c]; dv[c] += wv*r[c]; }
     }
 }
 
@@ -4513,23 +4734,40 @@ static int texcoordMap(const struct EvalMap *maps)
     return -1;
 }
 
-// Build and submit the vertex for evaluated values. normal: evaluated normal, NULL: the current normal
-static void submitEvaluated(const float *pos, int posSize, const float *color, const float *tex, int texSize, const float *normal)
+// An evaluated vertex before lighting, with its normal (evaluated or the current one)
+typedef struct {
+    Vertex v;
+    float normal[3];
+    bool valid;                 // False: w = 0, no vertex
+} EvalVertex;
+
+// Build the vertex for evaluated values. normal: evaluated normal, NULL: the current normal
+static void buildEvaluated(EvalVertex *e, const float *pos, int posSize, const float *color, const float *tex,
+                           int texSize, const float *normal)
 {
-    Vertex v = gl.current;      // Values without a map come from the current state
-    if (color != NULL) for (int c = 0; c < 4; c++) v.color[c] = colorByte(color[c]);
+    Vertex *v = &e->v;
+    *v = gl.current;            // Values without a map come from the current state
+    if (color != NULL) for (int c = 0; c < 4; c++) v->color[c] = colorByte(color[c]);
     if (tex != NULL)
     {
-        v.tex[0] = tex[0];
-        v.tex[1] = (texSize > 1)? tex[1] : 0.0f;
-        v.tex[2] = (texSize > 3)? tex[3] : 1.0f;
-        if (v.tex[2] != 1.0f) markTexQ();
+        v->tex[0] = tex[0];
+        v->tex[1] = (texSize > 1)? tex[1] : 0.0f;
+        v->tex[2] = (texSize > 3)? tex[3] : 1.0f;
+        if (v->tex[2] != 1.0f) markTexQ();
     }
+    memcpy(e->normal, (normal != NULL)? normal : gl.currentNormal, sizeof(e->normal));
 
     float w = (posSize == 4)? pos[3] : 1.0f;
-    if (w == 0.0f) { WARN_ONCE("Evaluator: w = 0 (point at infinity) not supported\n"); return; }
-    for (int c = 0; c < 3; c++) v.pos[c] = pos[c]/w;
-    submitLitVertex(&v, (normal != NULL)? normal : gl.currentNormal, gl.currentEdge);
+    e->valid = (w != 0.0f);
+    if (!e->valid) { WARN_ONCE("Evaluator: w = 0 (point at infinity) not supported\n"); return; }
+    for (int c = 0; c < 3; c++) v->pos[c] = pos[c]/w;
+}
+
+static void submitEvaluated(const EvalVertex *e)
+{
+    if (!e->valid) return;
+    Vertex v = e->v;            // Lighting replaces the color
+    submitLitVertex(&v, e->normal, gl.currentEdge);
 }
 
 void glEvalCoord1f(GLfloat u)
@@ -4550,16 +4788,19 @@ void glEvalCoord1f(GLfloat u)
     if (hasNormal) EVAL1(MAP_NORMAL, normal);
     #undef EVAL1
 
-    submitEvaluated(pos, mapComponents[vertexMap], hasColor? color : NULL, (texMap >= 0)? tex : NULL,
-                    mapComponents[texMap >= 0? texMap : 0], hasNormal? normal : NULL);
+    EvalVertex e;
+    buildEvaluated(&e, pos, mapComponents[vertexMap], hasColor? color : NULL, (texMap >= 0)? tex : NULL,
+                   mapComponents[texMap >= 0? texMap : 0], hasNormal? normal : NULL);
+    submitEvaluated(&e);
 }
 
-void glEvalCoord2f(GLfloat u, GLfloat v)
+// Evaluate the 2D maps at (u, v); false without a vertex map (no vertex, like GL)
+static bool evalCoord2(float u, float v, EvalVertex *e)
 {
     const struct EvalMap *maps = gl.map2;
     int vertexMap = (maps[MAP_VERTEX4].enabled && maps[MAP_VERTEX4].points)? MAP_VERTEX4 :
                     (maps[MAP_VERTEX3].enabled && maps[MAP_VERTEX3].points)? MAP_VERTEX3 : -1;
-    if (!gl.inBegin || (vertexMap < 0)) return;
+    if (vertexMap < 0) return false;
 
     int k = mapComponents[vertexMap];
     float pos[4], du[4], dv[4], color[4], tex[4], normal[3];
@@ -4595,8 +4836,15 @@ void glEvalCoord2f(GLfloat u, GLfloat v)
     int texMap = texcoordMap(maps);
     if (texMap >= 0) evalMap2(&maps[texMap], mapComponents[texMap], u, v, tex, NULL, NULL);
 
-    submitEvaluated(pos, k, hasColor? color : NULL, (texMap >= 0)? tex : NULL, mapComponents[texMap >= 0? texMap : 0],
-                    hasNormal? normal : NULL);
+    buildEvaluated(e, pos, k, hasColor? color : NULL, (texMap >= 0)? tex : NULL, mapComponents[texMap >= 0? texMap : 0],
+                   hasNormal? normal : NULL);
+    return true;
+}
+
+void glEvalCoord2f(GLfloat u, GLfloat v)
+{
+    EvalVertex e;
+    if (gl.inBegin && evalCoord2(u, v, &e)) submitEvaluated(&e);
 }
 
 void glEvalCoord1d(GLdouble u) { glEvalCoord1f((float)u); }
@@ -4638,6 +4886,17 @@ void glEvalPoint2(GLint i, GLint j)
     glEvalCoord2f(gridCoord(i, gl.grid2un, gl.grid2u1, gl.grid2u2), gridCoord(j, gl.grid2vn, gl.grid2v1, gl.grid2v2));
 }
 
+// Scratch grid of glEvalMesh2; false (the mesh is evaluated point by point instead) if it cannot grow
+static bool reserveEvalGrid(int count)
+{
+    if (count <= gl.evalGridCapacity) return true;
+    void *grid = realloc(gl.evalGrid, (size_t)count*sizeof(EvalVertex));
+    if (grid == NULL) return false;
+    gl.evalGrid = grid;
+    gl.evalGridCapacity = count;
+    return true;
+}
+
 void glEvalMesh1(GLenum mode, GLint i1, GLint i2)
 {
     if ((mode != GL_POINT) && (mode != GL_LINE)) { setError(GL_INVALID_ENUM); return; }
@@ -4652,6 +4911,47 @@ void glEvalMesh2(GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2)
 {
     if ((mode != GL_POINT) && (mode != GL_LINE) && (mode != GL_FILL)) { setError(GL_INVALID_ENUM); return; }
     if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+
+    // FILL and LINE use every grid point more than once: the grid is evaluated once up front (the same vertices
+    // glEvalPoint2 gives, the maps cannot change during the mesh)
+    int nu = i2 - i1 + 1, nv = j2 - j1 + 1;
+    if ((mode != GL_POINT) && (nu > 0) && (nv > 0) && reserveEvalGrid(nu*nv))
+    {
+        EvalVertex *g = gl.evalGrid;
+        for (int j = 0; j < nv; j++)
+        {
+            float v = gridCoord(j1 + j, gl.grid2vn, gl.grid2v1, gl.grid2v2);
+            for (int i = 0; i < nu; i++)
+                if (!evalCoord2(gridCoord(i1 + i, gl.grid2un, gl.grid2u1, gl.grid2u2), v, &g[j*nu + i])) return;
+        }
+        #define G(i, j) (&g[((j) - j1)*nu + (i) - i1])
+        if (mode == GL_FILL)
+        {
+            for (int j = j1; j < j2; j++)
+            {
+                glBegin(GL_QUAD_STRIP);
+                for (int i = i1; i <= i2; i++) { submitEvaluated(G(i, j)); submitEvaluated(G(i, j + 1)); }
+                glEnd();
+            }
+        }
+        else
+        {
+            for (int j = j1; j <= j2; j++)
+            {
+                glBegin(GL_LINE_STRIP);
+                for (int i = i1; i <= i2; i++) submitEvaluated(G(i, j));
+                glEnd();
+            }
+            for (int i = i1; i <= i2; i++)
+            {
+                glBegin(GL_LINE_STRIP);
+                for (int j = j1; j <= j2; j++) submitEvaluated(G(i, j));
+                glEnd();
+            }
+        }
+        #undef G
+        return;
+    }
 
     switch (mode)
     {
@@ -4754,6 +5054,9 @@ typedef struct {
     bool currentEdge;
     float currentNormal[3], currentTexR[C3DGL_TEXTURE_UNITS];
     float lineWidth, pointSize;
+    float pointSizeMin, pointSizeMax, pointFadeThreshold, pointAttenuation[3];
+    bool pointSprite;
+    u8 coordReplace;
     GLenum shadeModel, polygonMode[2];
     bool offsetFill, offsetLine, offsetPoint;
     float offsetFactor, offsetUnits;
@@ -4809,6 +5112,12 @@ void glPushAttrib(GLbitfield mask)
     memcpy(a->currentTexR, gl.currentTexR, sizeof(a->currentTexR));
     a->lineWidth = gl.lineWidth;
     a->pointSize = gl.pointSize;
+    a->pointSizeMin = gl.pointSizeMin;
+    a->pointSizeMax = gl.pointSizeMax;
+    a->pointFadeThreshold = gl.pointFadeThreshold;
+    memcpy(a->pointAttenuation, gl.pointAttenuation, sizeof(a->pointAttenuation));
+    a->pointSprite = gl.pointSprite;
+    a->coordReplace = gl.coordReplace;
     a->shadeModel = gl.shadeModel;
     memcpy(a->polygonMode, gl.polygonMode, sizeof(a->polygonMode));
     a->offsetFill = gl.offsetFill;
@@ -4868,6 +5177,7 @@ void glPopAttrib(void)
     if (gl.attribDepth == 0) { setError(GL_STACK_UNDERFLOW); return; }
 
     const AttribState *a = &attribStack[--gl.attribDepth];
+    litStateChanged();
     GLbitfield mask = a->mask;
     DrawState *st = &gl.state;
     const DrawState *sv = &a->state;
@@ -4883,6 +5193,12 @@ void glPopAttrib(void)
     if (mask & GL_POINT_BIT)
     {
         gl.pointSize = a->pointSize;
+        gl.pointSizeMin = a->pointSizeMin;
+        gl.pointSizeMax = a->pointSizeMax;
+        gl.pointFadeThreshold = a->pointFadeThreshold;
+        memcpy(gl.pointAttenuation, a->pointAttenuation, sizeof(gl.pointAttenuation));
+        gl.pointSprite = a->pointSprite;        // GL 2.0: point sprite state is in GL_POINT_BIT
+        gl.coordReplace = a->coordReplace;
         caps |= capBits((const GLenum[]){ GL_POINT_SMOOTH }, 1);
     }
     if (mask & GL_LINE_BIT)
@@ -4973,6 +5289,7 @@ void glPopAttrib(void)
         gl.normalize = a->normalize;
         gl.rescaleNormal = a->rescaleNormal;
         gl.fog = a->fog;
+        gl.pointSprite = a->pointSprite;
         gl.clipEnabled = a->clipEnabled;
         gl.clipObjectSerial = 0;
         caps = 0xFFFFFFFFu;     // All stored-only capabilities
@@ -5141,7 +5458,7 @@ static GLfixed floatToFixed(double f)
 static bool fixedParamIsEnum(GLenum pname)
 {
     return (pname == GL_TEXTURE_ENV_MODE) || (pname == GL_TEXTURE_MIN_FILTER) || (pname == GL_TEXTURE_MAG_FILTER) ||
-           (pname == GL_TEXTURE_WRAP_S) || (pname == GL_TEXTURE_WRAP_T) || (pname == GL_GENERATE_MIPMAP) ||
+           (pname == GL_TEXTURE_WRAP_S) || (pname == GL_TEXTURE_WRAP_T) || (pname == GL_GENERATE_MIPMAP) || (pname == GL_COORD_REPLACE_OES) ||
            ((pname >= GL_COMBINE_RGB) && (pname <= GL_COMBINE_ALPHA)) || ((pname >= GL_SRC0_RGB) && (pname <= GL_OPERAND2_ALPHA));
 }
 
@@ -5153,6 +5470,14 @@ void glDepthRangex(GLclampx zNear, GLclampx zFar) { glDepthRange(fixedToFloat(zN
 void glLineWidthx(GLfixed width) { glLineWidth(fixedToFloat(width)); }
 void glNormal3x(GLfixed nx, GLfixed ny, GLfixed nz) { glNormal3f(fixedToFloat(nx), fixedToFloat(ny), fixedToFloat(nz)); }
 void glPointSizex(GLfixed size) { glPointSize(fixedToFloat(size)); }
+void glPointParameterx(GLenum pname, GLfixed param) { glPointParameterf(pname, fixedToFloat(param)); }
+
+void glPointParameterxv(GLenum pname, const GLfixed *params)
+{
+    GLfloat f[3] = { fixedToFloat(params[0]), 0.0f, 0.0f };
+    if (pname == GL_POINT_DISTANCE_ATTENUATION) { f[1] = fixedToFloat(params[1]); f[2] = fixedToFloat(params[2]); }
+    glPointParameterfv(pname, f);
+}
 void glPolygonOffsetx(GLfixed factor, GLfixed units) { glPolygonOffset(fixedToFloat(factor), fixedToFloat(units)); }
 void glRotatex(GLfixed angle, GLfixed x, GLfixed y, GLfixed z) { glRotatef(fixedToFloat(angle), fixedToFloat(x), fixedToFloat(y), fixedToFloat(z)); }
 void glScalex(GLfixed x, GLfixed y, GLfixed z) { glScalef(fixedToFloat(x), fixedToFloat(y), fixedToFloat(z)); }

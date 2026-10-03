@@ -275,6 +275,10 @@ typedef void            GLvoid;
 #define GL_CURRENT_NORMAL                   0x0B02
 #define GL_CURRENT_TEXTURE_COORDS           0x0B03
 #define GL_POINT_SIZE                       0x0B11
+#define GL_POINT_SIZE_RANGE                 0x0B12
+#define GL_SMOOTH_POINT_SIZE_RANGE          0x0B12
+#define GL_POINT_SIZE_GRANULARITY           0x0B13
+#define GL_ALIASED_POINT_SIZE_RANGE         0x846D
 #define GL_LINE_WIDTH                       0x0B21
 #define GL_CULL_FACE_MODE                   0x0B45
 #define GL_FRONT_FACE                       0x0B46
@@ -560,6 +564,24 @@ void glPolygonOffset(GLfloat factor, GLfloat units);
 void glDepthRange(GLclampd zNear, GLclampd zFar);
 void glLineWidth(GLfloat width);
 void glPointSize(GLfloat size);
+
+// Point parameters (GL 1.4, ES 1.1): size attenuation by eye distance, clamped to GL_POINT_SIZE_MIN/MAX
+#define GL_POINT_SIZE_MIN                   0x8126
+#define GL_POINT_SIZE_MAX                   0x8127
+#define GL_POINT_FADE_THRESHOLD_SIZE        0x8128
+#define GL_POINT_DISTANCE_ATTENUATION       0x8129
+void glPointParameterf(GLenum pname, GLfloat param);
+void glPointParameterfv(GLenum pname, const GLfloat *params);
+void glPointParameteri(GLenum pname, GLint param);
+void glPointParameteriv(GLenum pname, const GLint *params);
+
+// Point sprites (ES 1.1 GL_OES_point_sprite, GL 2.0): glEnable(GL_POINT_SPRITE_OES) and per texture unit
+// glTexEnvi(GL_POINT_SPRITE_OES, GL_COORD_REPLACE_OES, GL_TRUE)
+#define GL_POINT_SPRITE_OES                 0x8861
+#define GL_COORD_REPLACE_OES                0x8862
+#define GL_POINT_SPRITE                     0x8861
+#define GL_COORD_REPLACE                    0x8862
+#define GL_OES_point_sprite                 1
 
 // Matrices
 void glMatrixMode(GLenum mode);
@@ -871,6 +893,8 @@ void glMultMatrixx(const GLfixed *m);
 void glNormal3x(GLfixed nx, GLfixed ny, GLfixed nz);
 void glOrthox(GLfixed left, GLfixed right, GLfixed bottom, GLfixed top, GLfixed zNear, GLfixed zFar);
 void glPointSizex(GLfixed size);
+void glPointParameterx(GLenum pname, GLfixed param);
+void glPointParameterxv(GLenum pname, const GLfixed *params);
 void glPolygonOffsetx(GLfixed factor, GLfixed units);
 void glRotatex(GLfixed angle, GLfixed x, GLfixed y, GLfixed z);
 void glScalex(GLfixed x, GLfixed y, GLfixed z);

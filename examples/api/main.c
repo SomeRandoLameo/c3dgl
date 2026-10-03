@@ -6,6 +6,7 @@
 #include <GL/gl.h>
 #include <GLES/gl.h>                     // Must coexist with <GL/gl.h>
 #include <c3dgl.h>
+#include <citro3d.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -600,6 +601,16 @@ static void drawBufferSquares(void)
     glColor3ub(255, 255, 255);
 }
 
+static void printStats(void)
+{
+    // Rows 2-4 of the console, timings of the last frame; the cursor stays where the text ended
+    printf("\x1b[s");
+    printf("\x1b[2;1HCPU:     %6.2fms\x1b[K", C3D_GetProcessingTime());
+    printf("\x1b[3;1HGPU:     %6.2fms\x1b[K", C3D_GetDrawingTime());
+    printf("\x1b[4;1HCmdBuf:  %6.2f%%\x1b[K", C3D_GetCmdBufUsage()*100.0f);
+    printf("\x1b[u");
+}
+
 int main(void)
 {
     gfxInitDefault();
@@ -616,7 +627,7 @@ int main(void)
         return 1;
     }
 
-    printf("c3dgl api test\n"
+    printf("c3dgl api test\n\n\n\n\n"
            "(C3DGL warnings below come from\n"
            " the error checks, they are expected)\n\n");
     testErrors();
@@ -640,6 +651,7 @@ int main(void)
 
     while (aptMainLoop()) {
         hidScanInput();
+        printStats();
         if (hidKeysDown() & KEY_START) break;
 
         if (failures == 0) glClearColor(0.1f, 0.5f, 0.2f, 1.0f);

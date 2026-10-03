@@ -96,6 +96,11 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
   each next to a reference square in the expected color; self-checks of the fog API on the bottom screen
 - `clipplane`: user clip planes on smooth-shaded, textured and lit geometry, lines, points and `glPolygonMode`
   outlines, mostly next to the expected shape drawn without clipping; self-checks of the clip plane API on the bottom screen
+- `points` (ES API): point size min/max, distance attenuation (also through the fixed-point API), point sprites with
+  `GL_COORD_REPLACE_OES` on one and two units, a particle field; self-checks of the point API on the bottom screen
+
+Every example shows the CPU and GPU time of the last frame and the command buffer usage in rows 2-4 of the bottom
+screen (`C3D_GetProcessingTime`, `C3D_GetDrawingTime`, `C3D_GetCmdBufUsage`).
 
 The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
 c3dgl itself does not.
@@ -131,6 +136,8 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
   `glPolygonOffset` (including the slope factor) and `glDepthRange`
 - Blending (`glBlendFunc`), alpha test (`glAlphaFunc`), stencil (`glStencilFunc`/`Op`/`Mask`), depth
   test/function/mask, color mask, face culling, scissor, viewport, line width, point size
+- Point parameters (`glPointParameter*`: size min/max, distance attenuation) and point sprites
+  (`GL_POINT_SPRITE_OES`, `GL_COORD_REPLACE_OES` per texture unit), listed as `GL_OES_point_sprite`
 - `glClear` of color, depth and stencil, honoring scissor and write masks
 - `glGetError`, `glGet{Boolean,Integer,Float,Double}v` for the common state, `glIsEnabled`, `glIsTexture`
 - The common variants of the immediate mode calls (`glVertex2/3/4{f,d,i,s}[v]`, `glColor3/4{f,d,ub}[v]`, ...),
@@ -159,14 +166,18 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
 
 - Vertices are collected in one linear buffer per frame and drawn in batches. A batch is submitted when the
   draw state (texture, matrices, blend, depth, ...) changes; the state is compared when drawing, not in the
-  setters, so code that binds and unbinds a texture around every quad still ends up in one draw call.
+  setters, so code that binds and unbinds a texture around every quad still ends up in one draw call. Only the
+  parts of the state that differ from the previous batch are sent to the GPU, and the vertex buffer is flushed
+  from the CPU cache once before the command list is submitted, not per batch.
 - The PICA200 vertex shader (`shaders/c3dgl.v.pica`) applies `post * projection * modelview`, where `post`
   rotates to the 3DS screen orientation and maps depth to PICA's [-1, 0] range.
 - Strips, fans, quads and polygons are split into triangles on the CPU. Lines and points have no PICA
-  equivalent: they are transformed on the CPU and expanded to screen-aligned quads.
+  equivalent: they are transformed on the CPU and expanded to screen-aligned quads (points with the attenuated
+  size; point sprites get their texcoords per corner, the texture matrix is not applied to them).
 - Lighting is computed per vertex on the CPU when the vertex is submitted (GL 1.1's formula), the lit color
   replaces the vertex color. Flat shading, lines and points therefore need nothing extra; two-sided lighting computes
-  a back color too, and each polygon takes the one of the side it shows. It costs CPU time per lit vertex.
+  a back color too, and each polygon takes the one of the side it shows. It costs CPU time per lit vertex; a cache
+  of recently lit vertices (keyed by position, normal and color) avoids lighting shared mesh vertices again.
 - Assembling primitives on the CPU also gives flat shading (the provoking vertex's color on every vertex),
   `glPolygonMode` (outlines and vertices per polygon, culled on the CPU) and the slope part of `glPolygonOffset`
   (computed per polygon, passed as a per-vertex depth bias that the vertex shader adds).

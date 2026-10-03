@@ -59,7 +59,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   `glOrthox`, `glPointSizex`, `glPolygonOffsetx`, `glRotatex`, `glScalex`, `glTexEnvx(v)`, `glTexParameterx(v)`, `glTranslatex`
 * [x] `glLightx(v)`, `glLightModelx(v)`, `glMaterialx(v)`, `glGetLightxv`, `glGetMaterialxv`, `glMultiTexCoord4x`
 * [x] `glFogx(v)`, `glClipPlanex`, `glGetClipPlanex`
-* [ ] `x` entry points that come with their features: `glPointParameterx(v)`, `glSampleCoveragex`
+* [x] `glPointParameterx(v)`
+* [ ] `x` entry points that come with their features: `glSampleCoveragex`
 
 ## Lighting
 
@@ -70,8 +71,10 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `GL_NORMALIZE`, `GL_RESCALE_NORMAL`
 * [x] Normals from `glNormal*`, normal arrays and evaluators (`GL_MAP*_NORMAL`, `GL_AUTO_NORMAL`)
 * [x] Lighting state in `glPushAttrib` (`GL_LIGHTING_BIT`, `GL_ENABLE_BIT`, `GL_TRANSFORM_BIT`)
-* [~] Performance: CPU lighting halves the frame rate of the lighting example (~17k lit vertices per frame, 20 -> 10
-  FPS in Azahar); a vertex shader path for the common case (filled, smooth) would fix it
+* [x] Lit vertices are cached (position, normal, color) while the lighting state is unchanged: shared mesh vertices
+  are lit once
+* [~] Performance: CPU lighting is still the most expensive part of the lighting example (~23k vertices per frame,
+  75 ms CPU in Azahar); a vertex shader path for the common case (filled, smooth) would fix it
 
 ## Fog
 
@@ -107,7 +110,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glGetTexEnv*` (`iv`, `fv`, `xv`)
 * [x] `GL_COMBINE` with all functions (incl. `GL_DOT3_RGB(A)`, `GL_SUBTRACT`), sources, operands,
   `GL_RGB_SCALE`/`GL_ALPHA_SCALE`; also `GL_TEXTUREn` sources (crossbar, GL 1.4)
-* [ ] `GL_COORD_REPLACE_OES` (ES, with point sprites)
+* [x] `GL_COORD_REPLACE_OES` per texture unit (ES, with point sprites; also as GL 2.0 `GL_COORD_REPLACE`)
 
 ## Multitexturing (ES)
 
@@ -143,9 +146,12 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] Polygon offset: `glPolygonOffset` (with slope factor), `GL_POLYGON_OFFSET_FILL`, `_LINE`/`_POINT` (GL)
 * [x] Polygon mode: `glPolygonMode` fill/line/point per face (GL)
 * [x] Lines: `glLineWidth`, CPU line expansion
-* [x] Points: `glPointSize`
-* [ ] Point parameters: `glPointParameter*`, attenuation (ES)
-* [ ] Point sprites `GL_POINT_SPRITE_OES` (ES, required extension)
+* [x] Points: `glPointSize` (`GL_INVALID_VALUE` for size <= 0), size range queries (1..256, any size)
+* [x] Point parameters: `glPointParameterf/fv/i/iv/x/xv`, `GL_POINT_SIZE_MIN/MAX`, distance attenuation per point
+  (eye distance), in `GL_POINT_BIT`. `GL_POINT_FADE_THRESHOLD_SIZE` is stored only: the fade applies with
+  multisampling, which PICA does not have
+* [x] Point sprites `GL_POINT_SPRITE_OES` (ES, required extension): sprite texcoords (0, 0) top left to (1, 1) bottom
+  right on the units with `GL_COORD_REPLACE_OES`, without the texture matrix; also for `glPolygonMode(GL_POINT)`
 * [ ] Smooth points/lines/polygons (`GL_POINT_SMOOTH`, `GL_LINE_SMOOTH`, `GL_POLYGON_SMOOTH` (GL)) — accepted, no effect
 * [ ] Line stipple, polygon stipple (GL)
 
@@ -180,7 +186,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] `glGetFixedv` (ES), `glGetPointerv`, `glGetBufferParameteriv` (ES)
 * [x] `glGetLight*`, `glGetMaterial*`, lighting state in `glGet*`
 * [x] `glGetClipPlane*`
-* [ ] `GL_EXTENSIONS` lists nothing yet (ES 1.1 requires the point sprite / point size array / paletted texture names)
+* [~] `GL_EXTENSIONS` lists `GL_OES_point_sprite`; ES 1.1 also requires the point size array and paletted texture names
 * [~] `glHint` — accepted, hints have no effect (allowed by the spec)
 
 ## Error Handling
@@ -199,6 +205,9 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 * [x] Top and bottom screen, `c3dglSetScreen`, `c3dglSwapBuffers`
 * [ ] Stereoscopic 3D (right eye, 3D slider)
+* [x] Examples show CPU/GPU time and command buffer usage (bottom screen rows 2-4)
+* [x] Resource use: only changed GPU state is sent per batch (command buffer about halved), one vertex cache flush per
+  command list submission instead of one per batch, `glEvalMesh2` evaluates each grid point once
 * [ ] Real hardware verification (everything so far is verified in Azahar only)
   * [x] Fixed: GPU lockup on the first draw (since bf91bd4): the vertex shader left `outtc0.w` unwritten
 
@@ -217,7 +226,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [ ] Compressed / paletted textures    [ ] Texture copies, glReadPixels
 [ ] Smooth points/lines (GL)          [ ] Feedback / selection (GL)
 [ ] Point size array (ES)             [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
-[ ] Point parameters + sprites (ES)   [ ] Accumulation buffer (GL)
+                                      [ ] Accumulation buffer (GL)
 [ ] Logic op, sample coverage         [ ] 1D textures, texgen (GL)
 [ ] Complete state queries            [ ] Stipple (GL)
 ```
@@ -236,4 +245,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Mipmapping (+ GL_GENERATE_MIPMAP) [x] Attribute stacks (GL)
 [x] Lighting (CPU, per vertex)        [x] Evaluators (GL)
 [x] Fog (PICA fog table)              [x] User clip planes (CPU)
+[x] Point parameters + sprites (ES)
 ```

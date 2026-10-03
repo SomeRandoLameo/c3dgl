@@ -4,6 +4,7 @@
 #include <3ds.h>
 #include <GL/gl.h>
 #include <c3dgl.h>
+#include <citro3d.h>
 
 #include <cmath>
 #include <cstdio>
@@ -494,6 +495,15 @@ void printExpected() {
 
 } // namespace
 
+static void printStats() {
+    // Rows 2-4 of the console, timings of the last frame; the cursor stays where the text ended
+    std::printf("\x1b[s");
+    std::printf("\x1b[2;1HCPU:     %6.2fms\x1b[K", C3D_GetProcessingTime());
+    std::printf("\x1b[3;1HGPU:     %6.2fms\x1b[K", C3D_GetDrawingTime());
+    std::printf("\x1b[4;1HCmdBuf:  %6.2f%%\x1b[K", C3D_GetCmdBufUsage()*100.0f);
+    std::printf("\x1b[u");
+}
+
 int main() {
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, nullptr);
@@ -509,7 +519,7 @@ int main() {
         return 1;
     }
 
-    std::printf("c3dgl lighting\n");
+    std::printf("c3dgl lighting\n\n\n\n");
     testDefaults();
     testParameters();
     testErrors();
@@ -533,6 +543,7 @@ int main() {
 
     while (aptMainLoop()) {
         hidScanInput();
+        printStats();
         if (hidKeysDown() & KEY_START) break;
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

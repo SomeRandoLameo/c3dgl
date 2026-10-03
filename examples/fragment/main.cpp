@@ -4,6 +4,7 @@
 #include <3ds.h>
 #include <GL/gl.h>
 #include <c3dgl.h>
+#include <citro3d.h>
 
 #include <cmath>
 #include <cstdio>
@@ -391,7 +392,7 @@ void drawStencilClearKeepsDepth(int column, int row) {
 
 void printPage(int page) {
     consoleClear();
-    std::printf("c3dgl fragment test, page %i/2\n\n", page + 1);
+    std::printf("c3dgl fragment test, page %i/2\n\n\n\n\n", page + 1);
     if (page == 0) {
         std::printf("Expected on the top screen,\n"
                     "left to right, top row (alpha test):\n"
@@ -435,6 +436,15 @@ void printPage(int page) {
 
 } // namespace
 
+static void printStats() {
+    // Rows 2-4 of the console, timings of the last frame; the cursor stays where the text ended
+    std::printf("\x1b[s");
+    std::printf("\x1b[2;1HCPU:     %6.2fms\x1b[K", C3D_GetProcessingTime());
+    std::printf("\x1b[3;1HGPU:     %6.2fms\x1b[K", C3D_GetDrawingTime());
+    std::printf("\x1b[4;1HCmdBuf:  %6.2f%%\x1b[K", C3D_GetCmdBufUsage()*100.0f);
+    std::printf("\x1b[u");
+}
+
 int main() {
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, nullptr);
@@ -459,6 +469,7 @@ int main() {
 
     while (aptMainLoop()) {
         hidScanInput();
+        printStats();
         const u32 keys = hidKeysDown();
         if (keys & KEY_START) break;
         if (keys & KEY_A) {

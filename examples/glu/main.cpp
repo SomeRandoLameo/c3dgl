@@ -6,6 +6,7 @@
 #include <GL/gl.h>
 #include <GL/glu.h>
 #include <c3dgl.h>
+#include <citro3d.h>
 
 #include <cmath>
 #include <cstdio>
@@ -439,7 +440,7 @@ void drawNurbsRendererPage(const Renderers& r, float angle, GLuint checker) {
 
 void printPage(int page) {
     consoleClear();
-    std::printf("c3dgl glu test, page %i/3\n%i/%i checks passed\n\n", page + 1, checks - failures, checks);
+    std::printf("c3dgl glu test, page %i/3\n\n\n\n\n%i/%i checks passed\n\n", page + 1, checks - failures, checks);
     if (page == 0) {
         std::printf("Expected on the top screen,\n"
                     "left to right, top row:\n"
@@ -490,6 +491,15 @@ void printPage(int page) {
 
 } // namespace
 
+static void printStats() {
+    // Rows 2-4 of the console, timings of the last frame; the cursor stays where the text ended
+    std::printf("\x1b[s");
+    std::printf("\x1b[2;1HCPU:     %6.2fms\x1b[K", C3D_GetProcessingTime());
+    std::printf("\x1b[3;1HGPU:     %6.2fms\x1b[K", C3D_GetDrawingTime());
+    std::printf("\x1b[4;1HCmdBuf:  %6.2f%%\x1b[K", C3D_GetCmdBufUsage()*100.0f);
+    std::printf("\x1b[u");
+}
+
 int main() {
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, nullptr);
@@ -512,7 +522,7 @@ int main() {
     GLUnurbs* nurbs = newNurbs();
     initBumpPatch();
     const Renderers renderers = {newRenderer(GLU_FILL), newRenderer(GLU_OUTLINE_POLYGON), newRenderer(GLU_OUTLINE_PATCH)};
-    int page = 2;
+    int page = 0;
     printPage(page);
 
     glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
@@ -520,6 +530,7 @@ int main() {
 
     while (aptMainLoop()) {
         hidScanInput();
+        printStats();
         const u32 keys = hidKeysDown();
         if (keys & KEY_START) break;
         if (keys & KEY_A) {
