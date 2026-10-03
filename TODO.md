@@ -171,7 +171,11 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 ## Pixel Operations
 
 * [x] `glPixelStorei/f`: alignment, row length, skip rows/pixels, swap bytes (row length etc. GL only)
-* [ ] `glReadPixels` — stub returning black, and it can overflow the caller's buffer
+* [x] `glReadPixels`: color (`GL_RGBA`, `GL_RGB`, `GL_RED/GREEN/BLUE/ALPHA`, `GL_LUMINANCE(_ALPHA)`) in all GL 1.1
+  types plus `GL_UNSIGNED_SHORT_5_6_5/4_4_4_4/5_5_5_1`, `GL_DEPTH_COMPONENT`, `GL_STENCIL_INDEX` (also `GL_BITMAP`);
+  pack store modes, clipped to the window, ES `GL_IMPLEMENTATION_COLOR_READ_FORMAT/TYPE_OES` (`GL_RGBA`/ubyte).
+  Within a frame the frame is ended without presenting (runs the draws so far), the rows are copied out by a display
+  transfer and the frame is begun again; GPU time stats then cover only the part after the last read
 * [ ] `glDrawPixels`, `glCopyPixels`, `glBitmap`, `glRasterPos*`, `glPixelZoom` (GL)
 * [ ] `glPixelTransfer*`, `glPixelMap*`, `glGetPixelMap*` (GL)
 
@@ -222,7 +226,6 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 ## Known Bugs / Limits
 
 * [ ] `glTexSubImage2D` during a frame also changes draws issued earlier in that frame
-* [ ] `glReadPixels` writes `w*h*4` bytes regardless of format
 * [ ] 64K vertices per frame and 511 texture ids, the rest is dropped
 
 ---
@@ -231,7 +234,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 ```text
 [ ] Lighting in the vertex shader     [ ] Display lists (GL)
-[ ] Logic op, sample coverage         [ ] Texture copies, glReadPixels
+[ ] Logic op, sample coverage         [ ] Texture copies (glCopyTexImage2D)
 [ ] Smooth points/lines (GL)          [ ] Feedback / selection (GL)
                                       [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
                                       [ ] Accumulation buffer (GL)

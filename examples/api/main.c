@@ -448,6 +448,117 @@ static void testAttribStacks(void)
 // Four white 60x60 squares with different vertex calls, pixel coordinates y down
 // Compressed textures: paletted images expand to the palette format (read back with glGetTexImage), ETC1 is stored
 // as is; formats, image sizes and levels are validated
+// glReadPixels within a frame: orientation (GL window coordinates, bottom-left origin), formats and types, pack
+// layout, clipping, depth and stencil, drawing on after a read. Leaves a frame in progress, the main loop clears it
+static void testReadPixels(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, 400.0, 0.0, 240.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    glClearColor(0.2f, 0.4f, 0.6f, 0.8f);       // 51, 102, 153, 204
+    glClearDepth(0.25);
+    glClearStencil(0x5B);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    glColor3ub(255, 0, 0);
+    glRecti(0, 0, 8, 8);                        // Bottom left
+    glColor3ub(0, 0, 255);
+    glRecti(392, 232, 400, 240);                // Top right
+
+    GLubyte p[64];
+    memset(p, 0, sizeof(p));
+    glReadPixels(3, 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 255 && p[1] == 0 && p[2] == 0 && p[3] == 255);
+    glReadPixels(396, 236, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 0 && p[1] == 0 && p[2] == 255 && p[3] == 255);
+    glReadPixels(200, 120, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 51 && p[1] == 102 && p[2] == 153 && p[3] == 204);
+
+    // Rows go up from y: row 0 is y = 7 (red), row 1 y = 8 (clear color); columns 7 and 8 likewise
+    glReadPixels(7, 7, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 255 && p[4] == 51 && p[8] == 51 && p[12] == 51);
+
+    // Formats and types
+    glReadPixels(3, 3, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 255 && p[1] == 0 && p[2] == 0);
+    glReadPixels(200, 120, 1, 1, GL_ALPHA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 204);
+    glReadPixels(200, 120, 1, 1, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 255 && p[1] == 204);          // L = R + G + B, clamped
+    GLfloat f[4];
+    glReadPixels(200, 120, 1, 1, GL_RGBA, GL_FLOAT, f);
+    CHECK(near(f[0], 0.2) && near(f[1], 0.4) && near(f[2], 0.6) && near(f[3], 0.8));
+    GLushort us[2];
+    glReadPixels(3, 3, 1, 1, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, us);
+    CHECK(us[0] == 0xF800);
+    glReadPixels(396, 236, 1, 1, GL_BLUE, GL_UNSIGNED_SHORT, us);
+    CHECK(us[0] == 0xFFFF);
+    GLshort ss[1];
+    glReadPixels(3, 3, 1, 1, GL_RED, GL_SHORT, ss);
+    CHECK(ss[0] == 32767);
+    glPixelStorei(GL_PACK_SWAP_BYTES, GL_TRUE);
+    glReadPixels(3, 3, 1, 1, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, us);
+    glPixelStorei(GL_PACK_SWAP_BYTES, GL_FALSE);
+    CHECK(us[0] == 0x00F8);
+
+    // Pack layout: rows of 3 RGB pixels = 9 bytes, rows padded to 12 by GL_PACK_ALIGNMENT 4; skipped pixels stay untouched
+    memset(p, 0xAA, sizeof(p));
+    glPixelStorei(GL_PACK_ROW_LENGTH, 3);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 1);
+    glReadPixels(6, 7, 2, 2, GL_RGB, GL_UNSIGNED_BYTE, p);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    CHECK(p[0] == 0xAA && p[3] == 255 && p[6] == 255 && p[9] == 0xAA);     // Row 0: y = 7, x = 6, 7 red
+    CHECK(p[12] == 0xAA && p[15] == 51 && p[18] == 51 && p[21] == 0xAA);   // Row 1 at 12: y = 8
+    CHECK(glGetError() == GL_NO_ERROR);
+
+    // Clipped: only the pixel inside the window is written
+    memset(p, 0xAA, sizeof(p));
+    glReadPixels(-1, -1, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 0xAA && p[4] == 0xAA && p[8] == 0xAA && p[12] == 255);
+
+    // Depth (cleared to 0.25, a quad at z = 0 is at 0.5) and stencil
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_ALWAYS);
+    glRecti(100, 100, 108, 108);
+    glDisable(GL_DEPTH_TEST);
+    glReadPixels(50, 50, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, f);
+    glReadPixels(104, 104, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, f + 1);
+    CHECK(fabsf(f[0] - 0.25f) < 1e-3f && fabsf(f[1] - 0.5f) < 1e-3f);
+    glReadPixels(50, 50, 1, 1, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 0x5B);
+    glReadPixels(50, 50, 8, 1, GL_STENCIL_INDEX, GL_BITMAP, p);
+    CHECK(p[0] == 0xFF);                        // Bit 0 of 0x5B
+
+    // Drawing goes on after a read, earlier draws stay
+    glColor3ub(0, 255, 0);
+    glRecti(200, 200, 208, 208);
+    glReadPixels(204, 204, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    glReadPixels(3, 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p + 4);
+    CHECK(p[0] == 0 && p[1] == 255 && p[2] == 0 && p[4] == 255 && p[5] == 0);
+
+    // Errors and the ES implementation read format
+    glReadPixels(0, 0, 1, 1, GL_COLOR_INDEX, GL_UNSIGNED_BYTE, p);
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_SHORT_5_6_5, p);
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    glReadPixels(0, 0, -1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_BITMAP, p);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glReadPixels(0, 0, 1, 1, 0x1234, GL_UNSIGNED_BYTE, p);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    GLint v[2];
+    glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT_OES, v);
+    glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_TYPE_OES, v + 1);
+    CHECK(v[0] == GL_RGBA && v[1] == GL_UNSIGNED_BYTE);
+
+    glPopAttrib();
+}
+
 static void testCompressed(void)
 {
     GLint n = 0, formats[16] = {0};
@@ -740,6 +851,7 @@ int main(void)
     testBuffers();
     testAttribStacks();
     testCompressed();
+    testReadPixels();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

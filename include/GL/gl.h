@@ -903,6 +903,11 @@ void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei widt
 // GL 1.2, only so that GLU links: always fails with GL_INVALID_ENUM (no 3D textures)
 void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth,
                   GLint border, GLenum format, GLenum type, const GLvoid *pixels);
+
+// Reading the framebuffer: color (all GL 1.1 formats and types, plus the packed 16-bit types), GL_DEPTH_COMPONENT and
+// GL_STENCIL_INDEX. Waits for the GPU to finish the draws so far
+#define GL_IMPLEMENTATION_COLOR_READ_TYPE_OES   0x8B9A      // ES 1.1: GL_UNSIGNED_BYTE
+#define GL_IMPLEMENTATION_COLOR_READ_FORMAT_OES 0x8B9B      // ES 1.1: GL_RGBA
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels);
 
 // OpenGL ES 1.1: float variants and the fixed-point API (more x functions come with their features)

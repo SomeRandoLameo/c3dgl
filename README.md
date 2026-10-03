@@ -158,13 +158,15 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - Fog: `GL_LINEAR`, `GL_EXP`, `GL_EXP2`, per pixel; `glFog*` and the fog queries
 - User clip planes: 6 (`glClipPlane`, ES `glClipPlanef/x`, `glGetClipPlane*`)
 - Dithering and smoothing can be enabled and queried but have no effect yet
+- `glReadPixels`: color in all GL 1.1 formats and types (plus the packed 16-bit ES types), depth and stencil;
+  waits for the GPU to finish the draws so far
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
 
 ## Not supported
 
-Display lists, `glReadPixels`, round points (`GL_POINT_SMOOTH`) and stereoscopic 3D. Mipmap levels
+Display lists, round points (`GL_POINT_SMOOTH`) and stereoscopic 3D. Mipmap levels
 below 8x8 are accepted but not sampled (PICA stops at 8x8).
 `GL_REPEAT` on non-power-of-two textures samples the padding.
 

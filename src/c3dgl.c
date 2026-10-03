@@ -26,7 +26,7 @@
 //   - Depth and stencil share one D24S8 buffer that a memory fill can only clear as a whole. glClear uses the
 //     fill when that is equivalent, otherwise it draws a full-screen quad (scissor, masks, depth or stencil only).
 //
-// Known limitations: no glReadPixels, REPEAT wrap on non-power-of-two textures samples the padding.
+// Known limitations: REPEAT wrap on non-power-of-two textures samples the padding.
 #include "GL/gl.h"
 #include "c3dgl.h"
 
@@ -2460,6 +2460,8 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_TEXTURE_BINDING_2D: v[0] = gl.boundTexture[gl.activeTexture]; return 1;
         case GL_MAX_TEXTURE_SIZE: v[0] = C3DGL_MAX_TEXTURE_SIZE; return 1;
         case GL_NUM_COMPRESSED_TEXTURE_FORMATS: v[0] = COMPRESSED_FORMAT_COUNT; return 1;
+        case GL_IMPLEMENTATION_COLOR_READ_TYPE_OES: v[0] = GL_UNSIGNED_BYTE; return 1;
+        case GL_IMPLEMENTATION_COLOR_READ_FORMAT_OES: v[0] = GL_RGBA; return 1;
         case GL_COMPRESSED_TEXTURE_FORMATS: for (int i = 0; i < COMPRESSED_FORMAT_COUNT; i++) v[i] = compressedFormats[i]; return COMPRESSED_FORMAT_COUNT;
 
         // Render target: RGBA8 color, D24S8 depth/stencil
@@ -5583,6 +5585,173 @@ void glPopClientAttrib(void)
 }
 
 //----------------------------------------------------------------------------------
+// OpenGL: reading the framebuffer
+//----------------------------------------------------------------------------------
+#define READ_LINE_BYTES     (C3DGL_SCREEN_HEIGHT*4)
+
+// Copy framebuffer lines [line0, line0 + lines) of the current screen into linear memory (free with linearFree), both
+// multiples of 8 (a line of tiles). Line x is window column x with 240 pixels from y = 0 to the top, 4 bytes each:
+// color A, B, G, R; depth/stencil the D24S8 word (stored depth = 1 - window depth, stencil in the top byte).
+// citro3d only starts the GX queue in C3D_FrameEnd, so a frame in progress is ended without presenting it (no target
+// marked as used), which runs the draws so far, and begun again after the transfer
+static u8 *readFramebuffer(bool depthStencil, int line0, int lines)
+{
+    size_t size = (size_t)lines*READ_LINE_BYTES;
+    u8 *out = linearAlloc(size);
+    if (out == NULL) { LOG("Out of memory for reading pixels\n"); setError(GL_OUT_OF_MEMORY); return NULL; }
+    GSPGPU_FlushDataCache(out, size);       // No dirty cache lines may be written back over the transfer
+
+    bool resume = gl.frameActive, used[C3DGL_SCREEN_COUNT];
+    if (resume)
+    {
+        flushVertexCache();
+        for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) { used[i] = gl.targets[i]->used; gl.targets[i]->used = false; }
+        C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    }
+
+    // Outside a frame this waits for the GPU, then for the transfer
+    const C3D_FrameBuf *fb = &gl.targets[gl.screen]->frameBuf;
+    u8 *in = (u8 *)(depthStencil? fb->depthBuf : fb->colorBuf) + (size_t)line0*READ_LINE_BYTES;
+    u32 dim = GX_BUFFER_DIM(C3DGL_SCREEN_HEIGHT, lines);
+    C3D_SyncDisplayTransfer((u32 *)in, dim, (u32 *)out, dim, DISPLAY_TRANSFER_FLAGS | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8));
+    GSPGPU_InvalidateDataCache(out, size);
+
+    if (resume)
+    {
+        C3D_FrameBegin(0);
+        C3D_FrameDrawOn(gl.targets[gl.screen]);
+        for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) gl.targets[i]->used = used[i];
+        gl.batchValid = false;
+    }
+    return out;
+}
+
+// Components of a color format: indices into r, g, b, a, 4 = luminance (r + g + b); count, 0 if not a color format
+static int colorComponents(GLenum format, int comp[4])
+{
+    switch (format)
+    {
+        case GL_RGBA: comp[0] = 0; comp[1] = 1; comp[2] = 2; comp[3] = 3; return 4;
+        case GL_RGB: comp[0] = 0; comp[1] = 1; comp[2] = 2; return 3;
+        case GL_RED: comp[0] = 0; return 1;
+        case GL_GREEN: comp[0] = 1; return 1;
+        case GL_BLUE: comp[0] = 2; return 1;
+        case GL_ALPHA: comp[0] = 3; return 1;
+        case GL_LUMINANCE: comp[0] = 4; return 1;
+        case GL_LUMINANCE_ALPHA: comp[0] = 4; comp[1] = 3; return 2;
+        default: return 0;
+    }
+}
+
+// Store one element of type `type`: v is a normalized value in [0, 1] (GL 1.1 table 2.9 inverted), or an index
+static void storeElement(u8 *dst, GLenum type, double v, bool index, bool swap)
+{
+    union { u8 b[4]; u8 ub; s8 sb; u16 us; s16 ss; u32 ui; s32 si; float f; } e;
+    int size = typeSize(type);
+    switch (type)
+    {
+        case GL_UNSIGNED_BYTE: e.ub = (u8)(index? v : lround(v*255.0)); break;
+        case GL_BYTE: e.sb = (s8)(index? v : lround((v*255.0 - 1.0)/2.0)); break;
+        case GL_UNSIGNED_SHORT: e.us = (u16)(index? v : lround(v*65535.0)); break;
+        case GL_SHORT: e.ss = (s16)(index? v : lround((v*65535.0 - 1.0)/2.0)); break;
+        case GL_UNSIGNED_INT: e.ui = (u32)(index? v : llround(v*4294967295.0)); break;
+        case GL_INT: e.si = (s32)(index? v : llround((v*4294967295.0 - 1.0)/2.0)); break;
+        default: e.f = (float)v; break;     // GL_FLOAT
+    }
+    for (int i = 0; i < size; i++) dst[i] = e.b[swap? size - 1 - i : i];
+}
+
+// Packed 16-bit types: valid format, 0 if the type is not packed
+static GLenum packedFormat(GLenum type)
+{
+    switch (type)
+    {
+        case GL_UNSIGNED_SHORT_5_6_5: return GL_RGB;
+        case GL_UNSIGNED_SHORT_4_4_4_4: case GL_UNSIGNED_SHORT_5_5_5_1: return GL_RGBA;
+        default: return 0;
+    }
+}
+
+void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels)
+{
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    if ((width < 0) || (height < 0)) { setError(GL_INVALID_VALUE); return; }
+
+    int comp[4], n = colorComponents(format, comp);
+    bool depth = (format == GL_DEPTH_COMPONENT), stencil = (format == GL_STENCIL_INDEX);
+    if (stencil || depth) n = 1;
+    else if (format == GL_COLOR_INDEX) { setError(GL_INVALID_OPERATION); return; }    // RGBA framebuffer only
+    else if (n == 0) { setError(GL_INVALID_ENUM); return; }
+
+    GLenum packed = packedFormat(type);
+    bool bitmap = (type == GL_BITMAP);
+    if (!packed && !bitmap && ((typeSize(type) == 0) || (type == GL_DOUBLE) || (type == GL_FIXED))) { setError(GL_INVALID_ENUM); return; }
+    if (bitmap && !stencil) { setError(GL_INVALID_ENUM); return; }
+    if (packed && (format != packed)) { setError(GL_INVALID_OPERATION); return; }
+
+    // Window rectangle; pixels outside the window are undefined in GL and left untouched
+    int x0 = (x < 0)? 0 : x, x1 = x + width, y0 = (y < 0)? 0 : y, y1 = y + height;
+    if (x1 > screenWidth(gl.screen)) x1 = screenWidth(gl.screen);
+    if (y1 > C3DGL_SCREEN_HEIGHT) y1 = C3DGL_SCREEN_HEIGHT;
+    if ((pixels == NULL) || (x0 >= x1) || (y0 >= y1)) return;
+
+    int line0 = x0 & ~7;
+    u8 *fb = readFramebuffer(depth || stencil, line0, ((x1 + 7) & ~7) - line0);
+    if (fb == NULL) return;
+
+    // Pack layout (GL 1.1 section 3.6.4, applied to packing): rows of rowLength groups, padded to the alignment
+    // when the element size is smaller than it
+    const PixelStore *ps = &gl.pack;
+    int elemSize = packed? 2 : bitmap? 1 : typeSize(type), groupSize = packed? 2 : n*elemSize;
+    size_t rowGroups = (size_t)((ps->rowLength > 0)? ps->rowLength : width);
+    size_t rowBytes = bitmap? (rowGroups + 7)/8 : rowGroups*groupSize;
+    if (bitmap || (elemSize < ps->alignment)) rowBytes = (rowBytes + ps->alignment - 1)/ps->alignment*ps->alignment;
+    bool swap = ps->swapBytes && (elemSize > 1);
+
+    u8 *base = (u8 *)pixels + (size_t)ps->skipRows*rowBytes;
+    for (int wy = y0; wy < y1; wy++)
+    {
+        u8 *row = base + (size_t)(wy - y)*rowBytes;
+        for (int wx = x0; wx < x1; wx++)
+        {
+            const u8 *p = fb + (size_t)(wx - line0)*READ_LINE_BYTES + (size_t)wy*4;
+            int col = ps->skipPixels + (wx - x);
+
+            if (bitmap)     // Stencil bit 0, MSB first unless GL_PACK_LSB_FIRST
+            {
+                u8 bit = ps->lsbFirst? (u8)(1 << (col & 7)) : (u8)(0x80 >> (col & 7));
+                if (p[3] & 1) row[col/8] |= bit;
+                else row[col/8] &= (u8)~bit;
+                continue;
+            }
+
+            u8 *dst = row + (size_t)col*groupSize;
+            if (stencil) { storeElement(dst, type, p[3], true, swap); continue; }
+            if (depth)
+            {
+                u32 d = p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16);
+                storeElement(dst, type, 1.0 - d/16777215.0, false, swap);
+                continue;
+            }
+
+            int c[5] = { p[3], p[2], p[1], p[0], 0 };
+            c[4] = (c[0] + c[1] + c[2] > 255)? 255 : c[0] + c[1] + c[2];
+            if (packed)
+            {
+                int rgba[4] = { c[0], c[1], c[2], c[3] };
+                GPU_TEXCOLOR f = (type == GL_UNSIGNED_SHORT_5_6_5)? GPU_RGB565 : (type == GL_UNSIGNED_SHORT_5_5_5_1)? GPU_RGBA5551 : GPU_RGBA4;
+                u16 v = pack16(f, rgba);
+                dst[swap? 1 : 0] = (u8)v;
+                dst[swap? 0 : 1] = (u8)(v >> 8);
+            }
+            else if (type == GL_UNSIGNED_BYTE) for (int i = 0; i < n; i++) dst[i] = (u8)c[comp[i]];
+            else for (int i = 0; i < n; i++) storeElement(dst + i*elemSize, type, c[comp[i]]/255.0, false, swap);
+        }
+    }
+    linearFree(fb);
+}
+
+//----------------------------------------------------------------------------------
 // Not implemented yet (declared so that code like GLU links; see gl.h)
 //----------------------------------------------------------------------------------
 #define NOT_IMPLEMENTED(name) do { WARN_ONCE(name " not implemented yet\n"); setError(GL_INVALID_OPERATION); } while (0)
@@ -5603,13 +5772,6 @@ void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei widt
     (void)target; (void)level; (void)internalformat; (void)width; (void)height; (void)depth; (void)border;
     (void)format; (void)type; (void)pixels;
     setError(GL_INVALID_ENUM);
-}
-
-void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels)
-{
-    (void)x; (void)y; (void)format; (void)type;
-    WARN_ONCE("glReadPixels not supported, returning black\n");
-    memset(pixels, 0, (size_t)width*height*4);
 }
 
 //----------------------------------------------------------------------------------
