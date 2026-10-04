@@ -3341,6 +3341,86 @@ static void testAccum(void)
     glPopAttrib();
 }
 
+// Color of window pixel (x, y) within tol (filtered texels in Azahar's upscaled renderers); prints it otherwise
+static bool pixelAbout(int x, int y, int r, int g, int b, int tol)
+{
+    GLubyte p[4];
+    glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    bool ok = (abs(p[0] - r) <= tol) && (abs(p[1] - g) <= tol) && (abs(p[2] - b) <= tol);
+    if (!ok) printf("  pixel (%i, %i): %i %i %i\n", x, y, p[0], p[1], p[2]);
+    return ok;
+}
+
+// Wrap modes on a non-power-of-two texture (12x10, stored 16x16): the padding holds what GL samples past the image, so
+// linear filtering across the edges and clamped coordinates past 1 see the image, not the padding. Blue first column
+// and row, red elsewhere, magnified 10 times
+static void testNpotWrap(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    GLubyte texels[10][12][4];
+    for (int y = 0; y < 10; y++)
+        for (int x = 0; x < 12; x++)
+        {
+            bool blue = (x == 0) || (y == 0);
+            texels[y][x][0] = blue? 0 : 255;
+            texels[y][x][1] = 0;
+            texels[y][x][2] = blue? 255 : 0;
+            texels[y][x][3] = 255;
+        }
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 12, 10, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+    windowProjection();
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+    // s over 120 pixels at the middle of row 4, t over 120 pixels in the middle of column 5
+    const float tRow = 4.5f/10.0f, sCol = 5.5f/12.0f;
+    for (int pass = 0; pass < 2; pass++)
+    {
+        bool repeat = (pass == 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, repeat? GL_REPEAT : GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, repeat? GL_REPEAT : GL_CLAMP_TO_EDGE);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBegin(GL_QUADS);
+        glTexCoord2f(0.0f, tRow); glVertex2i(10, 50);
+        glTexCoord2f(1.0f, tRow); glVertex2i(130, 50);
+        glTexCoord2f(1.0f, tRow); glVertex2i(130, 60);
+        glTexCoord2f(0.0f, tRow); glVertex2i(10, 60);
+        glTexCoord2f(sCol, 0.0f); glVertex2i(200, 50);
+        glTexCoord2f(sCol, 0.0f); glVertex2i(210, 50);
+        glTexCoord2f(sCol, 1.0f); glVertex2i(210, 170);
+        glTexCoord2f(sCol, 1.0f); glVertex2i(200, 170);
+        glTexCoord2f(0.0f, tRow); glVertex2i(10, 80);       // Clamped up to s = 2
+        glTexCoord2f(2.0f, tRow); glVertex2i(130, 80);
+        glTexCoord2f(2.0f, tRow); glVertex2i(130, 90);
+        glTexCoord2f(0.0f, tRow); glVertex2i(10, 90);
+        glEnd();
+
+        // Last pixel: 0.45 of the texel past the image end; first pixel: 0.45 of the texel before the image start.
+        // Repeat: the other edge (blue, red); clamp: the edge itself
+        if (repeat)
+        {
+            CHECK(pixelAbout(129, 55, 140, 0, 115, 25) && pixelAbout(10, 55, 115, 0, 140, 25));
+            CHECK(pixelAbout(205, 169, 140, 0, 115, 25) && pixelAbout(205, 50, 115, 0, 140, 25));
+        }
+        else
+        {
+            CHECK(pixelAbout(129, 55, 255, 0, 0, 25) && pixelAbout(10, 55, 0, 0, 255, 25));
+            CHECK(pixelAbout(205, 169, 255, 0, 0, 25) && pixelAbout(205, 50, 0, 0, 255, 25));
+            CHECK(pixelAbout(120, 85, 255, 0, 0, 25) && pixelAbout(100, 85, 255, 0, 0, 25));
+        }
+    }
+    glDisable(GL_TEXTURE_2D);
+    glDeleteTextures(1, &tex);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glPopAttrib();
+}
+
 int main(void)
 {
     gfxInitDefault();
@@ -3382,6 +3462,7 @@ int main(void)
     testFeedback();
     testStipple();
     testAccum();
+    testNpotWrap();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

@@ -15,8 +15,9 @@
 //   - Lighting is computed per vertex on the CPU when the vertex is submitted (exact GL 1.1 formula); the lit color
 //     replaces the vertex color, so flat shading, lines and points need nothing special. Two-sided lighting also
 //     computes the back color, emitPolygon() picks one per polygon from its facing.
-//   - Textures are padded to power-of-two sizes and Morton-swizzled. The shader applies the texture matrix
-//     combined with the scale back from the padded size; a projective texture matrix uses PICA's projection mode.
+//   - Textures are padded to power-of-two sizes and Morton-swizzled; the padding repeats the image's edges as the wrap
+//     modes sample them (fillPadding()). The shader applies the texture matrix combined with the scale back from the
+//     padded size; a projective texture matrix uses PICA's projection mode.
 //     Paletted textures are expanded on load; ETC1 blocks are stored as they are, upside down (see uploadEtc1()).
 //     Images of any format/type are converted to the PICA format closest to their internal format (see loadTexels());
 //     1D textures are 2D textures whose rows all hold the image.
@@ -37,7 +38,8 @@
 //   - Display lists record the commands with their arguments (client data like pixels, control points and vertex
 //     arrays copied at compile time) and replay them through the same gl* entry points, see listSave().
 //
-// Known limitations: REPEAT wrap on non-power-of-two textures samples the padding.
+// Known limitations: REPEAT wrap on non-power-of-two textures is exact only for texture coordinates in [0, 1] (the
+// padding holds the image wrapped around its edges, see fillPadding(); the GPU wraps at the padded size).
 #include "GL/gl.h"
 #include "c3dgl.h"
 
@@ -5851,8 +5853,52 @@ static bool ensureMipmapStorage(Texture *t)
     return true;
 }
 
+// Image column (row) whose texels go to padding column (row) x of a level `size` texels wide (high), stored `stored` wide
+// (high), for the wrap mode: the sampler wraps or clamps at the stored size, so the padding holds what GL samples past
+// the image: the edge (clamp), the image again after its end and before the stored end (repeat; filtering across both
+// seams sees the right neighbors), the image mirrored (mirrored repeat)
+static int paddingSource(int x, int size, int stored, GLenum wrap)
+{
+    int pad = x - size, back = stored - x;      // Distance to the image end, to the stored end
+    switch (wrap)
+    {
+        case GL_REPEAT: return (pad < back)? pad % size : size - 1 - (back - 1) % size;
+        case GL_MIRRORED_REPEAT: return size - 1 - pad % size;
+        default: return size - 1;
+    }
+}
+
+// Fill the padding of stored `level` around a non-power-of-two image, see paddingSource(); the padded columns first,
+// then the padded rows over the full stored width. 1D textures only have padded columns (every row holds the image).
+// ETC1 textures keep zeros there
+static void fillPadding(Texture *t, int level)
+{
+    const TexLevel *lv = &t->level[level];
+    int bpp = t->format.bpp, texWidth, texHeight;
+    if (!lv->defined || (bpp == 0)) return;
+    u8 *data = levelData(t, level, &texWidth, &texHeight);
+    bool oneD = (t->target == GL_TEXTURE_1D);
+    int w = (lv->width < texWidth)? lv->width : texWidth, h = oneD? texHeight : (lv->height < texHeight)? lv->height : texHeight;
+    if ((w <= 0) || (h <= 0)) return;
+
+    for (int x = w; x < texWidth; x++)
+    {
+        int src = paddingSource(x, w, texWidth, t->wrapS);
+        for (int y = 0; y < h; y++)
+            memcpy(data + tiledOffset(texWidth, texHeight, x, y, bpp), data + tiledOffset(texWidth, texHeight, src, y, bpp), bpp);
+    }
+    for (int y = h; y < texHeight; y++)
+    {
+        int src = paddingSource(y, h, texHeight, t->wrapT);
+        for (int x = 0; x < texWidth; x++)
+            memcpy(data + tiledOffset(texWidth, texHeight, x, y, bpp), data + tiledOffset(texWidth, texHeight, x, src, bpp), bpp);
+    }
+}
+
+// After the texels or the wrap modes changed: the padding of every stored level, then the CPU cache
 static void flushTexture(Texture *t)
 {
+    for (int level = 0; level < t->levels; level++) fillPadding(t, level);
     GSPGPU_FlushDataCache(t->tex.data, C3D_TexCalcTotalSize(t->tex.size, t->levels - 1));
 }
 
@@ -6238,6 +6284,11 @@ static void setTexParameter(GLenum target, GLenum pname, const GLfloat *v)
             }
             if (pname == GL_TEXTURE_WRAP_S) t->wrapS = param;
             else t->wrapT = param;
+            if (t->loaded)
+            {
+                textureModified(textureSlotOf(t));
+                flushTexture(t);        // The padding depends on the wrap modes
+            }
             break;
         case GL_GENERATE_MIPMAP:
             t->generateMipmap = (param != 0);
@@ -7742,6 +7793,7 @@ void glPopAttrib(void)
             Texture *t = &gl.textures[slot];
             t->minFilter = p->minFilter;
             t->magFilter = p->magFilter;
+            bool wrapChanged = (t->wrapS != p->wrapS) || (t->wrapT != p->wrapT);
             t->wrapS = p->wrapS;
             t->wrapT = p->wrapT;
             t->generateMipmap = p->generateMipmap;
@@ -7751,6 +7803,7 @@ void glPopAttrib(void)
             {
                 textureModified(slot);
                 applyTextureParams(t);
+                if (wrapChanged) flushTexture(t);
             }
         }
         gl.activeTexture = a->activeTexture;

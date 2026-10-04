@@ -130,7 +130,13 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   stored, every texture is resident. `GL_TEXTURE_BORDER_COLOR` stored only (no border texels)
 * [x] Default texture objects: texture 0 of `GL_TEXTURE_1D` and `GL_TEXTURE_2D` is a texture of its own (GL 1.0 style
   code without `glBindTexture`), shared by all units; deleting a bound texture falls back to it. Verified in Azahar (api checks)
-* [ ] `GL_REPEAT` on NPOT textures samples the padding
+* [x] NPOT textures (an extension, GL 1.1/ES 1.1 require power-of-two sizes): the padding is filled from the image per
+  wrap mode (edge for `GL_CLAMP`/`GL_CLAMP_TO_EDGE`, the image wrapped around both edges for `GL_REPEAT`, mirrored for
+  `GL_MIRRORED_REPEAT`), refilled on every texel or wrap change, all stored levels: clamping past 1 and linear filtering
+  across the edges are exact. Verified in Azahar (api checks in Vulkan; the software renderer does not filter linearly)
+  * [~] `GL_REPEAT` past [0, 1] wraps at the padded size (left as is: NPOT is out of scope for GL 1.1/ES 1.1, ES 2.0
+    does not allow it either); ETC1 textures keep zeros in the padding
+  * [ ] Not yet verified on real hardware
 
 ## Texture Environment
 

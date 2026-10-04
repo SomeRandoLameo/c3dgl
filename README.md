@@ -217,7 +217,9 @@ The full list of functions is `include/GL/gl.h`.
 
 Round points (`GL_POINT_SMOOTH`) and stereoscopic 3D. Mipmap levels
 below 8x8 are accepted but not sampled (PICA stops at 8x8).
-`GL_REPEAT` on non-power-of-two textures samples the padding.
+`GL_REPEAT` on non-power-of-two textures (an extension: GL 1.1 and ES 1.1 require power-of-two sizes) is exact for
+texture coordinates in [0, 1] only: past that the GPU wraps at the padded size. Clamping and linear filtering across the
+edges are exact (the padding holds the clamped or wrapped image), except for ETC1 textures.
 
 ## How it works
 
