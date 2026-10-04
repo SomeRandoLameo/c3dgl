@@ -87,7 +87,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
   edge flags, polygon offset, depth range
 - `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks, display lists,
   texgen, texture formats, 1D textures, color buffers, pixel drawing and transfer (rendered and read back), feedback
-  and selection, line and polygon stipple (rendered and read back) and the ES API; green screen = all passed
+  and selection, line and polygon stipple, the accumulation buffer (rendered and read back) and the ES API; green
+  screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
   page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps, page 5: compressed textures (paletted, ETC1)
@@ -115,6 +116,9 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `stipple`: line stipple (dashes, factor 2, dash-dot, dots, a wide line, a turning star as one line loop), two
   rectangles with complementary halftone patterns that fill each other in, and in perspective a textured screen door
   cube (polygon stipple fixed to the window) circling an opaque cube with dashed `glPolygonMode(GL_LINE)` edges
+- `accum`: the accumulation buffer; left: motion blur (a fading trail from `GL_MULT` and `GL_ACCUM` every frame),
+  right: depth of field (6 views from points on a lens, focused on the middle cube, averaged with `GL_LOAD`/`GL_ACCUM`);
+  the scissor box keeps the halves apart. B switches the accumulation buffer off for comparison
 
 Every example shows the CPU and GPU time of the last frame, the command buffer usage and the frames per second
 (averaged over one second) in rows 2-5 of the bottom screen (`C3D_GetProcessingTime`, `C3D_GetDrawingTime`,
@@ -201,6 +205,10 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
   (`glPolygonStipple`, `glGetPolygonStipple`, `GL_POLYGON_STIPPLE`) with their queries, attribute groups and display
   lists. Polygon stipple needs texture unit 2 to be unused (drawn without stipple otherwise); with the alpha test off,
   stippled fragments of alpha exactly 1/255 are dropped too
+- Accumulation buffer: `glAccum` (`GL_ACCUM`, `GL_LOAD`, `GL_ADD`, `GL_MULT`, `GL_RETURN`), `glClearAccum`,
+  `glClear(GL_ACCUM_BUFFER_BIT)`, 16 bits per component, one per screen (allocated at its first use, 750 KB for the
+  top screen). Operations work on the CPU within the scissor box; `GL_ACCUM`/`GL_LOAD` wait for the GPU like
+  `glReadPixels`, so each costs a few milliseconds
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
@@ -272,6 +280,11 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
   to the window under perspective). GL texture units 0 and 1 move to PICA units 1 and 2 meanwhile (a projective
   texcoord of unit 0 is then divided per vertex). TexEnv stage 3 gives the fragments outside the pattern an alpha that
   fails the alpha test, which is set up to combine with the GL alpha test.
+- The accumulation buffer lives in normal memory, two 16-bit components per word, so that the ARMv6 SIMD and DSP
+  instructions (`QADD16`, `SMLAWB`/`SMLAWT`, `SSAT`/`USAT`) handle a pair at a time. `GL_ACCUM` and `GL_LOAD` read
+  the color buffer like `glReadPixels` (the frame so far is run, then copied out by a display transfer). `GL_RETURN`
+  converts the result to RGBA8 textures that are drawn over the scissor box like `glDrawPixels` images, with only the
+  scissor test and the color mask, so it is queued between the draws without waiting.
 - Display lists store each command with its arguments; client memory is copied at compile time (texture images
   tightly packed, vertex array elements as the immediate mode calls they stand for). `glCallList` runs the commands
   through the same entry points, so a list renders exactly like the calls it recorded; it costs about as much CPU

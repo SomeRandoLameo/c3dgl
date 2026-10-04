@@ -1073,6 +1073,21 @@ GLboolean glIsList(GLuint list);
 void glDrawBuffer(GLenum mode);
 void glReadBuffer(GLenum mode);
 
+// Accumulation buffer (GL): 16 bits per component in [-1, 1], one per screen (allocated at its first use). Operations
+// apply to the scissor box; GL_ACCUM and GL_LOAD read the color buffer on the CPU and wait for the GPU like
+// glReadPixels, GL_RETURN draws without waiting (scissor test and color mask only)
+#define GL_ACCUM                            0x0100
+#define GL_LOAD                             0x0101
+#define GL_RETURN                           0x0102
+#define GL_MULT                             0x0103
+#define GL_ACCUM_RED_BITS                   0x0D58
+#define GL_ACCUM_GREEN_BITS                 0x0D59
+#define GL_ACCUM_BLUE_BITS                  0x0D5A
+#define GL_ACCUM_ALPHA_BITS                 0x0D5B
+#define GL_ACCUM_CLEAR_VALUE                0x0B80
+void glAccum(GLenum op, GLfloat value);
+void glClearAccum(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+
 // Feedback and selection (GL): in GL_FEEDBACK and GL_SELECT mode nothing is drawn (glClear neither); primitives are
 // clipped on the CPU and reported in window coordinates (feedback colors have 8 bits per component)
 #define GL_RENDER                           0x1C00

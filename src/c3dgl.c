@@ -32,6 +32,8 @@
 //     copy queued between the draws (copyColorRect()). Depth/stencil images are written on the CPU (drawDepthStencil()).
 //   - Feedback and selection (glRenderMode) take the primitives after user clipping, culling and polygon mode, clip them
 //     against the view volume on the CPU and write tokens or hit records instead of drawing (see the feedback section).
+//   - The accumulation buffer is kept on the CPU (see glAccum()): GL_ACCUM/GL_LOAD read the color buffer back, GL_RETURN
+//     draws the result like a glDrawPixels image.
 //   - Display lists record the commands with their arguments (client data like pixels, control points and vertex
 //     arrays copied at compile time) and replay them through the same gl* entry points, see listSave().
 //
@@ -41,6 +43,8 @@
 
 #include <3ds.h>
 #include <citro3d.h>
+
+#include <arm_acle.h>
 
 #include <math.h>
 #include <stdarg.h>
@@ -347,6 +351,8 @@ typedef struct {
     X(CLEAR_DEPTH,      glClearDepth(listDouble(&w[0]))) \
     X(CLEAR_STENCIL,    glClearStencil(w[0].i)) \
     X(CLEAR,            glClear(w[0].u)) \
+    X(CLEAR_ACCUM,      glClearAccum(w[0].f, w[1].f, w[2].f, w[3].f)) \
+    X(ACCUM,            glAccum(w[0].u, w[1].f)) \
     X(COLOR_MASK,       glColorMask(w[0].i, w[1].i, w[2].i, w[3].i)) \
     X(DEPTH_MASK,       glDepthMask(w[0].i)) \
     X(DEPTH_FUNC,       glDepthFunc(w[0].u)) \
@@ -630,6 +636,10 @@ static struct {
     float hitMinZ, hitMaxZ;             // Window depth range of those hits
     GLuint names[C3DGL_MAX_NAME_STACK];
     int nameDepth;
+
+    // Accumulation buffer (GL), see glAccum()
+    u32 *accum[C3DGL_SCREEN_COUNT];     // Per screen, NULL until used
+    float clearAccum[4];                // glClearAccum
 } gl;
 
 // Display list recording, see the display list section
@@ -638,6 +648,7 @@ static ListWord *listBegin(ListCommand command, int words);
 static void listEnd(void);
 static void listSaveImage(ListCommand command, const GLint args[8], GLsizei width, GLsizei height, bool sizeValid,
                           bool oneD, const void *pixels);
+static void clearAccum(void);
 static void listArrayElement(int index);
 static void listPixels(const ListWord *w, bool bitmap);
 static void setRasterPos(float x, float y, float z, float w);
@@ -2972,6 +2983,7 @@ void c3dglClose(void)
     for (int i = 0; i < gl.listCount; i++) free(gl.lists[i].words);
     free(gl.lists);
     free(gl.listWords);
+    for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) free(gl.accum[i]);
 
     if (gl.dvlb != NULL) { shaderProgramFree(&gl.program); DVLB_Free(gl.dvlb); }
     if (gl.dummyTexture.data != NULL) C3D_TexDelete(&gl.dummyTexture);
@@ -3454,6 +3466,7 @@ static int getState(GLenum pname, double v[16], bool *normalized)
             return 4;
         case GL_DEPTH_CLEAR_VALUE: v[0] = gl.clearDepth; *normalized = true; return 1;
         case GL_STENCIL_CLEAR_VALUE: v[0] = gl.clearStencil; return 1;
+        case GL_ACCUM_CLEAR_VALUE: for (int i = 0; i < 4; i++) v[i] = gl.clearAccum[i]; *normalized = true; return 4;
 
         case GL_COLOR_WRITEMASK:
             v[0] = (gl.state.colorMask & GPU_WRITE_RED) != 0;
@@ -3534,10 +3547,11 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_IMPLEMENTATION_COLOR_READ_FORMAT_OES: v[0] = GL_RGBA; return 1;
         case GL_COMPRESSED_TEXTURE_FORMATS: for (int i = 0; i < COMPRESSED_FORMAT_COUNT; i++) v[i] = compressedFormats[i]; return COMPRESSED_FORMAT_COUNT;
 
-        // Render target: RGBA8 color, D24S8 depth/stencil
+        // Render target: RGBA8 color, D24S8 depth/stencil; accumulation buffer: 16 bits per component, see glAccum()
         case GL_RED_BITS: case GL_GREEN_BITS: case GL_BLUE_BITS: case GL_ALPHA_BITS: v[0] = 8; return 1;
         case GL_DEPTH_BITS: v[0] = 24; return 1;
         case GL_STENCIL_BITS: v[0] = 8; return 1;
+        case GL_ACCUM_RED_BITS: case GL_ACCUM_GREEN_BITS: case GL_ACCUM_BLUE_BITS: case GL_ACCUM_ALPHA_BITS: v[0] = 16; return 1;
 
         default:
             // Capabilities can be queried with glGet too
@@ -3696,7 +3710,14 @@ static void clearWithQuad(bool color, bool depth, bool stencil)
 void glClear(GLbitfield mask)
 {
     LIST_SAVE(CLEAR, "u", mask);
+    if (mask & ~(GLbitfield)(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT | GL_ACCUM_BUFFER_BIT))
+    {
+        setError(GL_INVALID_VALUE);
+        return;
+    }
     if (gl.renderMode != GL_RENDER) return;     // Like Mesa: feedback and selection draw nothing
+    if (mask & GL_ACCUM_BUFFER_BIT) clearAccum();
+
     // Write masks apply to clears, glDrawBuffer(GL_NONE) clears no color
     bool color = (mask & GL_COLOR_BUFFER_BIT) && (gl.state.colorMask != 0) && (gl.drawBuffer != GL_NONE);
     bool depth = (mask & GL_DEPTH_BUFFER_BIT) && gl.state.depthMask;
@@ -7366,7 +7387,7 @@ void glGetMapiv(GLenum target, GLenum query, GLint *v)
 // OpenGL: attribute stacks (glPushAttrib, glPushClientAttrib)
 //
 // A push saves a snapshot of everything; a pop restores only the groups of the pushed mask (GL 1.1 tables
-// 6.x). Groups of features that do not exist yet (accumulation) save nothing so far. When a feature moves out of ignoredCaps, its state has to be added here.
+// 6.x). When a feature moves out of ignoredCaps, its state has to be added here.
 //----------------------------------------------------------------------------------
 typedef struct {
     GLuint id;                  // Texture bound to the unit (and target) at push time
@@ -7397,6 +7418,7 @@ typedef struct {
     bool sampleCoverageInvert;
     float clearDepth;
     u8 clearStencil;
+    float clearAccum[4];
     bool texture1D[C3DGL_TEXTURE_UNITS], texture2D[C3DGL_TEXTURE_UNITS];
     SavedTexParams texParams[2][C3DGL_TEXTURE_UNITS];      // GL_TEXTURE_1D, GL_TEXTURE_2D
     TexGenState texGen[C3DGL_TEXTURE_UNITS];
@@ -7476,6 +7498,7 @@ void glPushAttrib(GLbitfield mask)
     a->clearColor = gl.clearColor;
     a->clearDepth = gl.clearDepth;
     a->clearStencil = gl.clearStencil;
+    memcpy(a->clearAccum, gl.clearAccum, sizeof(a->clearAccum));
     memcpy(a->texture1D, gl.texture1D, sizeof(a->texture1D));
     memcpy(a->texture2D, gl.texture2D, sizeof(a->texture2D));
     memcpy(a->texGen, gl.texGen, sizeof(a->texGen));
@@ -7625,6 +7648,7 @@ void glPopAttrib(void)
         st->stencilPass = sv->stencilPass;
         gl.clearStencil = a->clearStencil;
     }
+    if (mask & GL_ACCUM_BUFFER_BIT) memcpy(gl.clearAccum, a->clearAccum, sizeof(gl.clearAccum));
     if (mask & GL_VIEWPORT_BIT)
     {
         memcpy(st->viewport, sv->viewport, sizeof(st->viewport));
@@ -8755,6 +8779,258 @@ void glReadBuffer(GLenum mode)
     GLenum error = colorBufferError(mode, false);
     if (error != GL_NO_ERROR) { setError(error); return; }
     gl.readBuffer = mode;
+}
+
+//----------------------------------------------------------------------------------
+// OpenGL: accumulation buffer (GL). One per screen in normal memory, allocated at its first use: signed 16 bits per
+// component (GL_ACCUM_*_BITS), ACCUM_ONE = 1.0, values saturate at about +-1 (outside [-1, 1] GL leaves the result
+// undefined). Window column by column like the framebuffer lines, see readLines(). All operations work on the CPU and
+// only on the pixels in the scissor box; GL_ACCUM and GL_LOAD read the color buffer like glReadPixels (wait for the
+// GPU), GL_RETURN draws the result as RGBA8 textures over the scissor box (queued like glDrawPixels, no wait)
+//----------------------------------------------------------------------------------
+#define ACCUM_ONE   32767
+
+// Each word holds two components of a pixel, R | G << 16 and B | A << 16, processed together with the ARMv6 SIMD and
+// DSP instructions (saturating halfword adds, 32x16-bit multiplies); [-32768, 32767], -32768 is about -1 too
+static u32 *accumBuffer(void)
+{
+    u32 **acc = &gl.accum[gl.screen];
+    if (*acc == NULL)
+    {
+        *acc = calloc((size_t)screenWidth(gl.screen)*C3DGL_SCREEN_HEIGHT*2, sizeof(u32));
+        if (*acc == NULL) { LOG("Out of memory for the accumulation buffer\n"); setError(GL_OUT_OF_MEMORY); }
+    }
+    return *acc;
+}
+
+static u32 *accumPixel(u32 *acc, int x, int y)
+{
+    return acc + ((size_t)x*C3DGL_SCREEN_HEIGHT + y)*2;
+}
+
+static s16 accumClamp(float v)
+{
+    return (s16)lrintf((v > ACCUM_ONE)? ACCUM_ONE : (v < -ACCUM_ONE)? -ACCUM_ONE : v);
+}
+
+static u32 accumPair(s32 low, s32 high)
+{
+    return (u16)low | ((u32)high << 16);
+}
+
+// The window rectangle [x0, x1) x [y0, y1) that accumulation buffer operations change: the scissor box if enabled
+static bool accumRect(int *x0, int *y0, int *x1, int *y1)
+{
+    *x0 = *y0 = 0;
+    *x1 = screenWidth(gl.screen);
+    *y1 = C3DGL_SCREEN_HEIGHT;
+    if (gl.state.scissor)
+    {
+        const GLint *b = gl.state.scissorBox;
+        if (b[0] > *x0) *x0 = b[0];
+        if (b[1] > *y0) *y0 = b[1];
+        if (b[0] + b[2] < *x1) *x1 = b[0] + b[2];
+        if (b[1] + b[3] < *y1) *y1 = b[1] + b[3];
+    }
+    return (*x0 < *x1) && (*y0 < *y1);
+}
+
+// glClear(GL_ACCUM_BUFFER_BIT)
+static void clearAccum(void)
+{
+    int x0, y0, x1, y1;
+    if (!accumRect(&x0, &y0, &x1, &y1)) return;
+    u32 *acc = accumBuffer();
+    if (acc == NULL) return;
+    const float *c = gl.clearAccum;
+    u32 rg = accumPair(accumClamp(c[0]*ACCUM_ONE), accumClamp(c[1]*ACCUM_ONE));
+    u32 ba = accumPair(accumClamp(c[2]*ACCUM_ONE), accumClamp(c[3]*ACCUM_ONE));
+    for (int x = x0; x < x1; x++)
+    {
+        u32 *a = accumPixel(acc, x, y0);
+        for (int y = y0; y < y1; y++, a += 2) { a[0] = rg; a[1] = ba; }
+    }
+}
+
+// GL_ACCUM (load false) and GL_LOAD: accumulation buffer (+)= value*color buffer
+static void accumColor(u32 *acc, int x0, int y0, int x1, int y1, float value, bool load)
+{
+    // value*c for every 8-bit component c in the low and the high halfword
+    u32 low[256], high[256];
+    for (int c = 0; c < 256; c++)
+    {
+        s16 v = accumClamp(value*ACCUM_ONE*c/255.0f);
+        low[c] = (u16)v;
+        high[c] = (u32)(u16)v << 16;
+    }
+
+    int line0 = x0 & ~7;
+    u8 *fb = readFramebuffer(false, line0, ((x1 + 7) & ~7) - line0);
+    if (fb == NULL) return;
+    for (int x = x0; x < x1; x++)
+    {
+        // Framebuffer bytes A, B, G, R: the word A | B << 8 | G << 16 | R << 24
+        const u32 *p = (const u32 *)(fb + (size_t)(x - line0)*READ_LINE_BYTES) + y0;
+        u32 *a = accumPixel(acc, x, y0);
+        if (load)
+        {
+            for (int y = y0; y < y1; y++, p++, a += 2)
+            {
+                a[0] = low[*p >> 24] | high[(*p >> 16) & 0xFF];
+                a[1] = low[(*p >> 8) & 0xFF] | high[*p & 0xFF];
+            }
+        }
+        else
+        {
+            for (int y = y0; y < y1; y++, p++, a += 2)
+            {
+                a[0] = (u32)__qadd16((int16x2_t)a[0], (int16x2_t)(low[*p >> 24] | high[(*p >> 16) & 0xFF]));
+                a[1] = (u32)__qadd16((int16x2_t)a[1], (int16x2_t)(low[(*p >> 8) & 0xFF] | high[*p & 0xFF]));
+            }
+        }
+    }
+    linearFree(fb);
+}
+
+// The 8-bit color of the low or high value of word times m: f = m (the color per accumulation buffer unit) in 8.24 fixed
+// point, the product in 1/256 is rounded and saturated
+static u32 accumReturnComponent(s32 f, u32 word, bool high)
+{
+    s32 v = high? __smlawt(f, (s32)word, 128) : __smlawb(f, (s32)word, 128);
+    return (u32)__usat(v >> 8, 8);
+}
+
+// GL_RETURN: value*accumulation buffer, clamped to [0, 1], into the color buffer through the scissor test and color mask
+// only (GL 1.1 section 4.2.4): RGBA8 textures in tiles of up to PIXEL_TILE^2 pixels drawn like a pixel rectangle without
+// any other fragment operation
+static void accumReturn(u32 *acc, int x0, int y0, int x1, int y1, float value)
+{
+    if ((gl.drawBuffer == GL_NONE) || (gl.state.colorMask == 0)) return;
+
+    // m in 8.24 fixed point fits 32 bits for |value| < 16; larger values (rare) take the float path
+    float m = value*255.0f/ACCUM_ONE;
+    bool fast = fabsf(value) < 16.0f;
+    s32 f = fast? (s32)lrintf(m*16777216.0f) : 0;
+    float sw = 2.0f/screenWidth(gl.screen), sh = 2.0f/C3DGL_SCREEN_HEIGHT;
+    for (int ty = y0; ty < y1; ty += PIXEL_TILE)
+    {
+        for (int tx = x0; tx < x1; tx += PIXEL_TILE)
+        {
+            int tw = (x1 - tx < PIXEL_TILE)? x1 - tx : PIXEL_TILE, th = (y1 - ty < PIXEL_TILE)? y1 - ty : PIXEL_TILE;
+            int texWidth = nextPow2(tw), texHeight = nextPow2(th);
+            C3D_Tex *tex = pixelTexture(texWidth, texHeight, GPU_RGBA8, 4);
+            if (tex == NULL) return;
+
+            u32 yOffset[PIXEL_TILE];
+            for (int y = 0; y < th; y++) yOffset[y] = tiledY(texWidth, texHeight, y, 4);
+            for (int x = 0; x < tw; x++)
+            {
+                u8 *col = (u8 *)tex->data + tiledX(x, 4);
+                const u32 *a = accumPixel(acc, tx + x, ty);
+                for (int y = 0; y < th; y++, a += 2)
+                {
+                    u32 r, g, b, alpha;     // PICA RGBA8 is ABGR: the word A | B << 8 | G << 16 | R << 24
+                    if (fast)
+                    {
+                        r = accumReturnComponent(f, a[0], false);
+                        g = accumReturnComponent(f, a[0], true);
+                        b = accumReturnComponent(f, a[1], false);
+                        alpha = accumReturnComponent(f, a[1], true);
+                    }
+                    else
+                    {
+                        float c[4] = { (s16)a[0]*m, (s16)(a[0] >> 16)*m, (s16)a[1]*m, (s16)(a[1] >> 16)*m };
+                        u32 out[4];
+                        for (int i = 0; i < 4; i++) out[i] = (c[i] <= 0.0f)? 0 : (c[i] >= 255.0f)? 255 : (u32)(c[i] + 0.5f);
+                        r = out[0]; g = out[1]; b = out[2]; alpha = out[3];
+                    }
+                    *(u32 *)(col + yOffset[y]) = alpha | (b << 8) | (g << 16) | (r << 24);
+                }
+            }
+
+            DrawState key;
+            memset(&key, 0, sizeof(key));
+            key.clipSpace = true;
+            key.viewport[2] = screenWidth(gl.screen);
+            key.viewport[3] = C3DGL_SCREEN_HEIGHT;
+            key.scissor = gl.state.scissor;
+            memcpy(key.scissorBox, gl.state.scissorBox, sizeof(key.scissorBox));
+            key.colorMask = gl.state.colorMask;
+            key.depthFar = 1.0f;
+            key.pixelMode = PIXEL_IMAGE;
+            key.pixelTex = tex;
+            useState(&key);
+
+            float wx0 = tx*sw - 1.0f, wx1 = (tx + tw)*sw - 1.0f, wy0 = ty*sh - 1.0f, wy1 = (ty + th)*sh - 1.0f;
+            float s1 = (float)tw/texWidth, t1 = (float)th/texHeight;
+            Vertex q[4];
+            memset(q, 0, sizeof(q));
+            for (int i = 0; i < 4; i++)
+            {
+                bool right = (i == 1) || (i == 2), top = (i >= 2);
+                q[i].pos[0] = right? wx1 : wx0;
+                q[i].pos[1] = top? wy1 : wy0;
+                q[i].tex[0] = right? s1 : 0.0f;
+                q[i].tex[1] = top? t1 : 0.0f;
+                q[i].tex[2] = 1.0f;
+                memset(q[i].color, 255, sizeof(q[i].color));
+            }
+            emitTriangle(&q[0], &q[1], &q[2]);
+            emitTriangle(&q[0], &q[2], &q[3]);
+        }
+    }
+}
+
+void glAccum(GLenum op, GLfloat value)
+{
+    LIST_SAVE(ACCUM, "uf", op, value);
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    if ((op != GL_ACCUM) && (op != GL_LOAD) && (op != GL_RETURN) && (op != GL_MULT) && (op != GL_ADD))
+    {
+        setError(GL_INVALID_ENUM);
+        return;
+    }
+    if (gl.renderMode != GL_RENDER) return;     // Like Mesa: nothing changes in feedback and selection mode
+
+    int x0, y0, x1, y1;
+    if (!accumRect(&x0, &y0, &x1, &y1)) return;
+    u32 *acc = accumBuffer();
+    if (acc == NULL) return;
+
+    switch (op)
+    {
+        case GL_ACCUM: case GL_LOAD: accumColor(acc, x0, y0, x1, y1, value, op == GL_LOAD); break;
+        case GL_RETURN: accumReturn(acc, x0, y0, x1, y1, value); break;
+        case GL_ADD:    // In two halves, so that +-2 saturates the whole range
+        {
+            s16 k = accumClamp(value*ACCUM_ONE/2.0f);
+            int16x2_t kk = (int16x2_t)accumPair(k, k);
+            for (int x = x0; x < x1; x++)
+            {
+                u32 *a = accumPixel(acc, x, y0);
+                for (int i = 0; i < (y1 - y0)*2; i++) a[i] = (u32)__qadd16(__qadd16((int16x2_t)a[i], kk), kk);
+            }
+            break;
+        }
+        case GL_MULT:   // value in 16.16 fixed point (beyond +-32767 every nonzero value saturates anyway)
+        {
+            s32 f = (s32)lrintf(((value > 32767.0f)? 32767.0f : (value < -32767.0f)? -32767.0f : value)*65536.0f);
+            for (int x = x0; x < x1; x++)
+            {
+                u32 *a = accumPixel(acc, x, y0);
+                for (int i = 0; i < (y1 - y0)*2; i++)
+                    a[i] = accumPair(__ssat(__smlawb(f, (s32)a[i], 0), 16), __ssat(__smlawt(f, (s32)a[i], 0), 16));
+            }
+            break;
+        }
+    }
+}
+
+void glClearAccum(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
+{
+    LIST_SAVE(CLEAR_ACCUM, "ffff", red, green, blue, alpha);
+    const float c[4] = { red, green, blue, alpha };
+    for (int i = 0; i < 4; i++) gl.clearAccum[i] = (c[i] < -1.0f)? -1.0f : (c[i] > 1.0f)? 1.0f : c[i];
 }
 
 //----------------------------------------------------------------------------------

@@ -3170,6 +3170,165 @@ static void testStipple(void)
     glPopAttrib();
 }
 
+// Accumulation buffer: queries, clamping, errors, attribute group, display lists, then rendered and read back: clear,
+// load/accumulate (averaging two frames), add, mult, return with clamping, scissor box, color mask, return without the
+// other fragment operations, draws before and after the operations, nothing in feedback mode
+static void testAccum(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    GLint bits[4] = { 0 };
+    glGetIntegerv(GL_ACCUM_RED_BITS, &bits[0]);
+    glGetIntegerv(GL_ACCUM_GREEN_BITS, &bits[1]);
+    glGetIntegerv(GL_ACCUM_BLUE_BITS, &bits[2]);
+    glGetIntegerv(GL_ACCUM_ALPHA_BITS, &bits[3]);
+    CHECK((bits[0] == 16) && (bits[1] == 16) && (bits[2] == 16) && (bits[3] == 16));
+    GLfloat c[4] = { -9.0f, -9.0f, -9.0f, -9.0f };
+    glGetFloatv(GL_ACCUM_CLEAR_VALUE, c);
+    CHECK((c[0] == 0.0f) && (c[1] == 0.0f) && (c[2] == 0.0f) && (c[3] == 0.0f));
+    glClearAccum(2.0f, -3.0f, 0.5f, -0.25f);        // Clamped to [-1, 1]
+    glGetFloatv(GL_ACCUM_CLEAR_VALUE, c);
+    CHECK((c[0] == 1.0f) && (c[1] == -1.0f) && (c[2] == 0.5f) && (c[3] == -0.25f));
+
+    glAccum(0x1234, 1.0f);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glBegin(GL_POINTS);
+    glAccum(GL_RETURN, 1.0f);
+    glEnd();
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    glClear(GL_CURRENT_BIT);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+
+    // GL_ACCUM_BUFFER_BIT holds the clear value, GL_COLOR_BUFFER_BIT does not
+    glPushAttrib(GL_ACCUM_BUFFER_BIT);
+    glClearAccum(0.1f, 0.2f, 0.3f, 0.4f);
+    glPopAttrib();
+    glGetFloatv(GL_ACCUM_CLEAR_VALUE, c);
+    CHECK((c[0] == 1.0f) && (c[3] == -0.25f));
+    glPushAttrib(GL_COLOR_BUFFER_BIT);
+    glClearAccum(0.1f, 0.2f, 0.3f, 0.4f);
+    glPopAttrib();
+    glGetFloatv(GL_ACCUM_CLEAR_VALUE, c);
+    CHECK(fabsf(c[0] - 0.1f) < 1e-6f);
+
+    // Rendered: window coordinates, the accumulation buffer returned with value 1 is read back
+    windowProjection();
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glClearAccum(0.25f, 0.5f, 0.75f, 1.0f);
+    glClear(GL_ACCUM_BUFFER_BIT);
+    glAccum(GL_RETURN, 1.0f);
+    CHECK(pixelNear(0, 0, 64, 128, 191, 255) && pixelNear(399, 239, 64, 128, 191, 255));
+    glAccum(GL_RETURN, 4.0f);                       // Clamped to 1
+    CHECK(pixelNear(200, 100, 255, 255, 255, 255));
+
+    // Two frames averaged; GL_LOAD replaces, GL_ACCUM adds
+    glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glAccum(GL_LOAD, 0.5f);
+    glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glColor3f(0.0f, 1.0f, 0.0f);
+    glRectf(100.0f, 100.0f, 110.0f, 110.0f);        // Drawn before the read: in the accumulated image
+    glAccum(GL_ACCUM, 0.5f);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glAccum(GL_RETURN, 1.0f);
+    CHECK(pixelNear(10, 10, 128, 0, 128, 255) && pixelNear(105, 105, 128, 128, 0, 255));
+
+    // GL_MULT and GL_ADD on every component, negative values clamp to 0 when returned
+    glAccum(GL_MULT, 0.5f);
+    glAccum(GL_RETURN, 2.0f);
+    CHECK(pixelNear(10, 10, 128, 0, 128, 255));
+    glAccum(GL_ADD, 0.25f);                         // (0.25, 0, 0.25, 0.5) + 0.25
+    glAccum(GL_RETURN, 1.0f);
+    CHECK(pixelNear(10, 10, 128, 64, 128, 191));
+    glAccum(GL_ADD, -1.0f);
+    glAccum(GL_RETURN, 1.0f);
+    CHECK(pixelNear(10, 10, 0, 0, 0, 0));
+    glAccum(GL_ADD, -1.0f);
+    glAccum(GL_ADD, 0.5f);                          // -1 (clamped) + 0.5
+    glAccum(GL_RETURN, -1.0f);
+    CHECK(pixelNear(10, 10, 128, 128, 128, 128));
+
+    // Scissor box: clears and operations change only the pixels in it, the return writes only them
+    glClearAccum(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_ACCUM_BUFFER_BIT);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(20, 20, 10, 10);
+    glClearAccum(1.0f, 1.0f, 1.0f, 1.0f);
+    glClear(GL_ACCUM_BUFFER_BIT);
+    glAccum(GL_ADD, -0.5f);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glScissor(0, 0, 25, 240);
+    glEnable(GL_SCISSOR_TEST);
+    glAccum(GL_RETURN, 1.0f);
+    glDisable(GL_SCISSOR_TEST);
+    CHECK(pixelNear(20, 20, 128, 128, 128, 128) && pixelNear(24, 29, 128, 128, 128, 128));
+    CHECK(pixelNear(19, 20, 0, 0, 0, 255) && pixelNear(20, 30, 0, 0, 0, 255) && pixelNear(25, 20, 0, 0, 255, 255));
+
+    // The return goes through the color mask, but not blending, alpha, depth or stencil tests, logic ops or fog; draws
+    // after it are drawn over it
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glClearAccum(1.0f, 0.5f, 1.0f, 1.0f);
+    glClear(GL_ACCUM_BUFFER_BIT);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ZERO, GL_ZERO);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_NEVER, 0.0f);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_NEVER);
+    glEnable(GL_STENCIL_TEST);
+    glStencilFunc(GL_NEVER, 0, 0xFF);
+    glEnable(GL_FOG);
+    glColorMask(GL_TRUE, GL_TRUE, GL_FALSE, GL_TRUE);
+    glAccum(GL_RETURN, 1.0f);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_FOG);
+    glColor3f(0.0f, 1.0f, 0.0f);
+    glRectf(50.0f, 50.0f, 60.0f, 60.0f);
+    CHECK(pixelNear(40, 40, 255, 128, 0, 255) && pixelNear(55, 55, 0, 255, 0, 255));
+    glDrawBuffer(GL_NONE);                          // Returns nothing
+    glClearAccum(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_ACCUM_BUFFER_BIT);
+    glAccum(GL_RETURN, 1.0f);
+    glDrawBuffer(GL_BACK);
+    CHECK(pixelNear(40, 40, 255, 128, 0, 255));
+
+    // Display lists: compiled, executed when called
+    GLuint list = glGenLists(1);
+    glNewList(list, GL_COMPILE);
+    glClearAccum(0.0f, 1.0f, 0.0f, 1.0f);
+    glClear(GL_ACCUM_BUFFER_BIT);
+    glAccum(GL_RETURN, 1.0f);
+    glEndList();
+    glGetFloatv(GL_ACCUM_CLEAR_VALUE, c);
+    CHECK(c[1] == 0.0f);
+    CHECK(pixelNear(40, 40, 255, 128, 0, 255));
+    glCallList(list);
+    CHECK(pixelNear(40, 40, 0, 255, 0, 255));
+    glDeleteLists(list, 1);
+
+    // Feedback mode: no accumulation buffer operation
+    GLfloat feedback[8];
+    glFeedbackBuffer(8, GL_2D, feedback);
+    glRenderMode(GL_FEEDBACK);
+    glAccum(GL_ADD, -1.0f);
+    glRenderMode(GL_RENDER);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glAccum(GL_RETURN, 1.0f);
+    CHECK(pixelNear(40, 40, 0, 255, 0, 255));
+    CHECK(glGetError() == GL_NO_ERROR);
+    glPopAttrib();
+}
+
 int main(void)
 {
     gfxInitDefault();
@@ -3210,6 +3369,7 @@ int main(void)
     testDefaultTextures();
     testFeedback();
     testStipple();
+    testAccum();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

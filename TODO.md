@@ -204,7 +204,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 * [x] `glClear`, `glClearColor`, `glClearDepth`, `glClearStencil`
 * [x] Honors color/depth/stencil masks and scissor
-* [ ] `glClearAccum`, `glClearIndex` (GL)
+* [x] `glClearAccum`, `glClear(GL_ACCUM_BUFFER_BIT)` (GL, scissor box only); invalid `glClear` bits are `GL_INVALID_VALUE`
+* [ ] `glClearIndex` (GL)
 
 ## Pixel Operations
 
@@ -264,7 +265,15 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   select example with `gluPickMatrix`)
   * [~] Feedback colors are the 8-bit vertex colors; with texgen on unit 0 the fed back r is 0; polygon offset is not
     applied to fed back depths
-* [ ] Accumulation buffer: `glAccum`, `glClearAccum`
+* [x] Accumulation buffer: `glAccum` (`GL_ACCUM`, `GL_LOAD`, `GL_ADD`, `GL_MULT`, `GL_RETURN`), `glClearAccum`,
+  `GL_ACCUM_*_BITS` (16), `GL_ACCUM_CLEAR_VALUE`, `GL_ACCUM_BUFFER_BIT`, display lists; nothing in feedback/selection
+  mode (like Mesa). One buffer per screen in normal memory (allocated at first use), two signed 16-bit components per
+  word processed with the ARMv6 SIMD/DSP instructions, only within the scissor box. `GL_ACCUM`/`GL_LOAD` read the color
+  buffer like `glReadPixels`; `GL_RETURN` draws RGBA8 textures over the scissor box with only the scissor test and color
+  mask (queued, no wait). Verified in Azahar (api checks in Vulkan at 2x and the software renderer, accum example)
+  * [~] Performance: CPU bound, ~4 ms per operation on half the top screen in Azahar (the accum example: motion blur
+    plus 6 depth of field views at ~12 FPS); each `GL_ACCUM`/`GL_LOAD` also ends the frame so far and waits for the GPU
+  * [ ] Not yet verified on real hardware
 * [x] `glDrawBuffer`, `glReadBuffer`: double-buffered, no stereo or aux buffers (`GL_INVALID_OPERATION` for them).
   Front buffers are drawn/read like the back buffer (the frame is presented by `c3dglSwapBuffers()`), `GL_NONE` draws
   and clears no color. `GL_DRAW_BUFFER`, `GL_READ_BUFFER`, `GL_DOUBLEBUFFER`, `GL_STEREO`, `GL_AUX_BUFFERS`; in
@@ -303,7 +312,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   command list submission instead of one per batch, `glEvalMesh2` evaluates each grid point once
 * [~] Real hardware verification (all features up to color buffers verified on hardware; display lists, texgen, internal
   formats, 1D textures, color buffers, drawing pixels, pixel transfer and default textures through the api checks,
-  2026-10-04; feedback and selection, stipple not yet)
+  2026-10-04; feedback and selection, stipple, accumulation buffer not yet)
   * [x] Fixed: GPU lockup on the first draw (since bf91bd4): the vertex shader left `outtc0.w` unwritten
   * [x] Fixed: GPU lockup when a readback followed `glCopyPixels(GL_COLOR)` or a `glClear` after draws in a frame: the
     command list split before the GX command was not flushed from the CPU cache (`C3D_FrameSplit(0)`), and
@@ -322,7 +331,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 ```text
 [ ] Lighting in the vertex shader
-[ ] Smooth points/lines (GL)           [ ] Accumulation buffer (GL)
+[ ] Smooth points/lines (GL)
 [ ] Complete state queries
 ```
 
@@ -347,4 +356,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] glDrawBuffer / glReadBuffer (GL)   [x] Default texture objects (GL)
 [x] Pixel ops: draw/copy, transfer, maps (GL)
 [x] Feedback / selection (GL)           [x] Line and polygon stipple (GL)
+[x] Accumulation buffer (GL)
 ```
