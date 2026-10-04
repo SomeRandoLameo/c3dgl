@@ -1062,6 +1062,41 @@ GLboolean glIsList(GLuint list);
 void glDrawBuffer(GLenum mode);
 void glReadBuffer(GLenum mode);
 
+// Feedback and selection (GL): in GL_FEEDBACK and GL_SELECT mode nothing is drawn (glClear neither); primitives are
+// clipped on the CPU and reported in window coordinates (feedback colors have 8 bits per component)
+#define GL_RENDER                           0x1C00
+#define GL_FEEDBACK                         0x1C01
+#define GL_SELECT                           0x1C02
+#define GL_2D                               0x0600
+#define GL_3D                               0x0601
+#define GL_3D_COLOR                         0x0602
+#define GL_3D_COLOR_TEXTURE                 0x0603
+#define GL_4D_COLOR_TEXTURE                 0x0604
+#define GL_PASS_THROUGH_TOKEN               0x0700
+#define GL_POINT_TOKEN                      0x0701
+#define GL_LINE_TOKEN                       0x0702
+#define GL_POLYGON_TOKEN                    0x0703
+#define GL_BITMAP_TOKEN                     0x0704
+#define GL_DRAW_PIXEL_TOKEN                 0x0705
+#define GL_COPY_PIXEL_TOKEN                 0x0706
+#define GL_LINE_RESET_TOKEN                 0x0707
+#define GL_RENDER_MODE                      0x0C40
+#define GL_MAX_NAME_STACK_DEPTH             0x0D37      // 64
+#define GL_NAME_STACK_DEPTH                 0x0D70
+#define GL_FEEDBACK_BUFFER_POINTER          0x0DF0
+#define GL_FEEDBACK_BUFFER_SIZE             0x0DF1
+#define GL_FEEDBACK_BUFFER_TYPE             0x0DF2
+#define GL_SELECTION_BUFFER_POINTER         0x0DF3
+#define GL_SELECTION_BUFFER_SIZE            0x0DF4
+GLint glRenderMode(GLenum mode);
+void glFeedbackBuffer(GLsizei size, GLenum type, GLfloat *buffer);
+void glSelectBuffer(GLsizei size, GLuint *buffer);
+void glPassThrough(GLfloat token);
+void glInitNames(void);
+void glLoadName(GLuint name);
+void glPushName(GLuint name);
+void glPopName(void);
+
 // GL 1.2, only so that GLU links: always fails with GL_INVALID_ENUM (no 3D textures)
 void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth,
                   GLint border, GLenum format, GLenum type, const GLvoid *pixels);

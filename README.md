@@ -86,8 +86,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `primitives`: every primitive mode with culling on to catch wrong winding; page 2: flat shading, polygon modes,
   edge flags, polygon offset, depth range
 - `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks, display lists,
-  texgen, texture formats, 1D textures, color buffers, pixel drawing and transfer (rendered and read back) and the ES
-  API; green screen = all passed
+  texgen, texture formats, 1D textures, color buffers, pixel drawing and transfer (rendered and read back), feedback
+  and selection and the ES API; green screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
   page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps, page 5: compressed textures (paletted, ETC1)
@@ -109,6 +109,9 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
   (`glRasterPos` in 3D, depth tested), the cube's reflection by `glCopyPixels` with zoom 1 x -0.5, an animated
   color index `glDrawPixels` image (palette in the `glPixelMap` tables, cycled by `GL_INDEX_OFFSET`) with a pulsing
   `glPixelZoom` and its mirror image (zoom -1, drawn as luminance tinted by `glPixelTransfer` scale/bias)
+- `select`: picking with a cursor (circle pad / D-pad): `GL_SELECT` with `gluPickMatrix` finds the nearest cube under
+  it in a turning ring, `GL_FEEDBACK` gives back the picked cube's front faces in window coordinates, drawn as a yellow
+  outline that must sit exactly on the cube; the hit records are listed on the bottom screen
 
 Every example shows the CPU and GPU time of the last frame, the command buffer usage and the frames per second
 (averaged over one second) in rows 2-5 of the bottom screen (`C3D_GetProcessingTime`, `C3D_GetDrawingTime`,
@@ -187,6 +190,10 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
   `GL_MAP_COLOR`, `GL_MAP_STENCIL`), `glPixelMap{fv,uiv,usv}` and `glGetPixelMap*` (all 10 tables, 256 entries) for
   `glDrawPixels`, `glReadPixels`, `glCopyPixels` and texture images and copies; `GL_COLOR_INDEX` images (also
   `GL_BITMAP`) drawn or loaded as textures through the `I_TO_*` tables
+- Feedback and selection: `glRenderMode`, `glFeedbackBuffer` (all 5 types), `glPassThrough`, `glSelectBuffer`,
+  `glInitNames`, `glLoadName`, `glPushName`, `glPopName` (64 names); points, lines (with `GL_LINE_RESET_TOKEN`),
+  polygons (clipped, culled, polygon mode) and the raster position of `glBitmap`/`glDrawPixels`/`glCopyPixels`.
+  Feedback colors have 8 bits per component, nothing is drawn or cleared meanwhile
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
@@ -247,6 +254,10 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
 - The pixel transfer runs on the CPU while images are converted (unsigned byte images through 256-entry tables).
   `glCopyPixels(GL_COLOR)` with an active color transfer is read back like `glReadPixels` (waits for the GPU) and
   drawn like `glDrawPixels`.
+- Feedback and selection reuse the CPU primitive assembly: after user clip planes, a primitive is clipped against the
+  view volume in clip space (Sutherland-Hodgman for polygons, with colors and texcoords interpolated), culled and split
+  by polygon mode like for drawing, then written as tokens in window coordinates or recorded as a hit instead of being
+  drawn. `GL_POLYGON` is kept whole so that it comes back as one polygon.
 - Display lists store each command with its arguments; client memory is copied at compile time (texture images
   tightly packed, vertex array elements as the immediate mode calls they stand for). `glCallList` runs the commands
   through the same entry points, so a list renders exactly like the calls it recorded; it costs about as much CPU

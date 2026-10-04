@@ -30,6 +30,8 @@
 //   - glDrawPixels/glBitmap draw textured quads in window coordinates; their textures live in per-frame linear memory,
 //     bitmaps share an atlas (see drawBitmap()). glCopyPixels copies the color buffer into such a texture with a GX texture
 //     copy queued between the draws (copyColorRect()). Depth/stencil images are written on the CPU (drawDepthStencil()).
+//   - Feedback and selection (glRenderMode) take the primitives after user clipping, culling and polygon mode, clip them
+//     against the view volume on the CPU and write tokens or hit records instead of drawing (see the feedback section).
 //   - Display lists record the commands with their arguments (client data like pixels, control points and vertex
 //     arrays copied at compile time) and replay them through the same gl* entry points, see listSave().
 //
@@ -66,6 +68,7 @@
 #define C3DGL_MAX_CLIP_PLANES   6           // User clip planes, clipped on the CPU (GL minimum 6, ES 1)
 #define C3DGL_MAX_TEXTURE_SIZE  1024
 #define C3DGL_MAX_PIXEL_MAP_TABLE 256       // Entries of a glPixelMap table (GL minimum 32)
+#define C3DGL_MAX_NAME_STACK    64          // Selection name stack depth (GL minimum 64)
 #define C3DGL_MAX_POINT_SIZE    256.0f      // Points are quads, so any size works; a bit more than the screen height
 #define MAX_TEXTURE_LEVEL       10          // log2(C3DGL_MAX_TEXTURE_SIZE)
 
@@ -96,6 +99,7 @@ typedef struct {
     float texExtra[C3DGL_TEXTURE_UNITS - 1][3];     // Units 1, 2: s, t, q
     u8 backColor[4];            // Lit color of back faces (two-sided lighting only); not sent to the GPU
     float pointSize;            // From the point size array (GL_OES_point_size_array), < 0: glPointSize; not sent
+    float texR;                 // Unit 0 r, only for feedback (0 with texgen on unit 0); not sent
 } Vertex;
 
 #define GPU_VERTEX_SIZE     offsetof(Vertex, texExtra)
@@ -425,7 +429,12 @@ typedef struct {
     X(POP_ATTRIB,       glPopAttrib()) \
     X(CALL_LIST,        glCallList(w[0].u)) \
     X(CALL_LISTS,       glCallLists(w[0].i, w[1].u, &w[2])) \
-    X(LIST_BASE,        glListBase(w[0].u))
+    X(LIST_BASE,        glListBase(w[0].u)) \
+    X(PASS_THROUGH,     glPassThrough(w[0].f)) \
+    X(INIT_NAMES,       glInitNames()) \
+    X(LOAD_NAME,        glLoadName(w[0].u)) \
+    X(PUSH_NAME,        glPushName(w[0].u)) \
+    X(POP_NAME,         glPopName())
 
 typedef enum {
     #define X(name, call) LIST_##name,
@@ -591,6 +600,24 @@ static struct {
     int listWordCount, listWordCapacity;
     int listLast;                       // Index of the last recorded command, -1 if it was dropped (out of memory)
     int listDepth;                      // Nesting of lists being executed
+
+    // Feedback and selection (glRenderMode), see the feedback section
+    GLenum renderMode;                  // GL_RENDER, GL_FEEDBACK or GL_SELECT
+    GLfloat *feedbackBuffer;
+    GLsizei feedbackSize;
+    GLenum feedbackType;
+    bool feedbackBufferSet;             // glFeedbackBuffer was called
+    int feedbackCount;                  // Values written; size + 1: overflow
+    bool lineReset;                     // The next line starts a strip, loop or outline: GL_LINE_RESET_TOKEN
+    GLuint *selectBuffer;
+    GLsizei selectSize;
+    bool selectBufferSet;               // glSelectBuffer was called
+    int selectCount;                    // Values written; size + 1: overflow
+    int hits;                           // Hit records written
+    bool hit;                           // A primitive was hit since the last hit record
+    float hitMinZ, hitMaxZ;             // Window depth range of those hits
+    GLuint names[C3DGL_MAX_NAME_STACK];
+    int nameDepth;
 } gl;
 
 // Display list recording, see the display list section
@@ -1506,6 +1533,7 @@ static void lerpVertex(Vertex *out, const Vertex *a, const Vertex *b, float t)
     for (int i = 0; i < 4; i++) out->color[i] = (u8)(a->color[i] + ((float)b->color[i] - a->color[i])*t);
     for (int i = 0; i < 4; i++) out->backColor[i] = (u8)(a->backColor[i] + ((float)b->backColor[i] - a->backColor[i])*t);
     out->pointSize = a->pointSize + (b->pointSize - a->pointSize)*t;
+    out->texR = a->texR + (b->texR - a->texR)*t;
 }
 
 //----------------------------------------------------------------------------------
@@ -1639,6 +1667,185 @@ static int clipPolygon(const Vertex *const **vs, const bool **edges, int n)
 
 #define CLIP_W_MIN  1e-5f       // Lines and points are clipped against w > CLIP_W_MIN before the divide
 
+//----------------------------------------------------------------------------------
+// Feedback and selection (GL 1.1 sections 5.2, 5.3): in GL_FEEDBACK and GL_SELECT render mode nothing is drawn. Points,
+// lines and polygons (after user clip planes, culling and polygon mode) are clipped against the view volume in clip
+// space here and either written to the feedback buffer as tokens with their vertices in window coordinates, or
+// recorded as a hit with their window depth range. glRasterPos hits, glBitmap/glDrawPixels/glCopyPixels feed back the
+// raster position
+//----------------------------------------------------------------------------------
+// A vertex as feedback sees it: clip coordinates, color, texcoords of unit 0 with the texture matrix applied
+typedef struct {
+    float clip[4], color[4], tex[4];
+} FeedbackVertex;
+
+static void feedbackVertexOf(const Vertex *v, FeedbackVertex *out)
+{
+    mat4Transform(projectionModelview(), v->pos, out->clip);
+    for (int i = 0; i < 4; i++) out->color[i] = v->color[i]*(1.0f/255.0f);
+    float tc[4] = { v->tex[0], v->tex[1], v->texR, v->tex[2] };
+    if (gl.texGen[0].enabled) { memcpy(out->tex, tc, sizeof(tc)); return; }    // Generated: matrix applied already
+
+    const float *tm = gl.stack[2][gl.stackDepth[2]].m;
+    for (int r = 0; r < 4; r++) out->tex[r] = tm[r]*tc[0] + tm[4 + r]*tc[1] + tm[8 + r]*tc[2] + tm[12 + r]*tc[3];
+}
+
+static void lerpFeedbackVertex(FeedbackVertex *out, const FeedbackVertex *a, const FeedbackVertex *b, float t)
+{
+    for (int i = 0; i < 4; i++)
+    {
+        out->clip[i] = a->clip[i] + (b->clip[i] - a->clip[i])*t;
+        out->color[i] = a->color[i] + (b->color[i] - a->color[i])*t;
+        out->tex[i] = a->tex[i] + (b->tex[i] - a->tex[i])*t;
+    }
+}
+
+// Distance to view volume plane 0..5 (-w <= x, x <= w, y, z), >= 0 inside
+static float viewPlaneDistance(const float c[4], int plane)
+{
+    return (plane & 1)? (c[3] - c[plane >> 1]) : (c[3] + c[plane >> 1]);
+}
+
+static void windowCoords(const float clip[4], float out[3])
+{
+    const GLint *vp = gl.state.viewport;
+    float n = gl.state.depthNear, f = gl.state.depthFar;
+    out[0] = vp[0] + 0.5f*(clip[0]/clip[3] + 1.0f)*vp[2];
+    out[1] = vp[1] + 0.5f*(clip[1]/clip[3] + 1.0f)*vp[3];
+    out[2] = n + 0.5f*(clip[2]/clip[3] + 1.0f)*(f - n);
+}
+
+static void feedbackValue(GLfloat value)
+{
+    if (gl.feedbackCount < gl.feedbackSize) gl.feedbackBuffer[gl.feedbackCount] = value;
+    if (gl.feedbackCount <= gl.feedbackSize) gl.feedbackCount++;
+}
+
+// One vertex in the layout of the feedback type: window x, y, z, clip w, color, texcoords
+static void feedbackWrite(const float win[3], float w, const float color[4], const float tex[4])
+{
+    GLenum type = gl.feedbackType;
+    feedbackValue(win[0]);
+    feedbackValue(win[1]);
+    if (type != GL_2D) feedbackValue(win[2]);
+    if (type == GL_4D_COLOR_TEXTURE) feedbackValue(w);
+    if ((type == GL_2D) || (type == GL_3D)) return;
+    for (int i = 0; i < 4; i++) feedbackValue(color[i]);
+    if (type != GL_3D_COLOR) for (int i = 0; i < 4; i++) feedbackValue(tex[i]);
+}
+
+static void selectHit(float z)
+{
+    gl.hit = true;
+    gl.hitMinZ = fminf(gl.hitMinZ, z);
+    gl.hitMaxZ = fmaxf(gl.hitMaxZ, z);
+}
+
+// A clipped primitive: token (and vertex count for polygons) with its vertices, or a hit
+static void feedbackPrimitive(GLenum token, const FeedbackVertex *vs, int n)
+{
+    if (gl.renderMode == GL_SELECT)
+    {
+        for (int i = 0; i < n; i++)
+        {
+            float win[3];
+            windowCoords(vs[i].clip, win);
+            selectHit(win[2]);
+        }
+        return;
+    }
+
+    feedbackValue((GLfloat)token);
+    if (token == GL_POLYGON_TOKEN) feedbackValue((GLfloat)n);
+    for (int i = 0; i < n; i++)
+    {
+        float win[3];
+        windowCoords(vs[i].clip, win);
+        feedbackWrite(win, vs[i].clip[3], vs[i].color, vs[i].tex);
+    }
+}
+
+// Points are kept or dropped whole
+static void feedbackPoint(const Vertex *v)
+{
+    FeedbackVertex f;
+    feedbackVertexOf(v, &f);
+    for (int p = 0; p < 6; p++) if (viewPlaneDistance(f.clip, p) < 0.0f) return;
+    if (f.clip[3] <= 0.0f) return;      // Only the origin is left, which has no window position
+    feedbackPrimitive(GL_POINT_TOKEN, &f, 1);
+}
+
+static void feedbackLine(const Vertex *a, const Vertex *b)
+{
+    FeedbackVertex f[2], clipped[2];
+    feedbackVertexOf(a, &f[0]);
+    feedbackVertexOf(b, &f[1]);
+    float t0 = 0.0f, t1 = 1.0f;
+    for (int p = 0; p < 6; p++)
+    {
+        float da = viewPlaneDistance(f[0].clip, p), db = viewPlaneDistance(f[1].clip, p);
+        if ((da < 0.0f) && (db < 0.0f)) return;
+        if (da < 0.0f) t0 = fmaxf(t0, da/(da - db));
+        else if (db < 0.0f) t1 = fminf(t1, da/(da - db));
+    }
+    if (t0 > t1) return;
+    lerpFeedbackVertex(&clipped[0], &f[0], &f[1], t0);
+    lerpFeedbackVertex(&clipped[1], &f[0], &f[1], t1);
+    if ((clipped[0].clip[3] <= 0.0f) || (clipped[1].clip[3] <= 0.0f)) return;
+
+    feedbackPrimitive(gl.lineReset? GL_LINE_RESET_TOKEN : GL_LINE_TOKEN, clipped, 2);
+    gl.lineReset = false;
+}
+
+// Filled polygon: Sutherland-Hodgman against the view volume
+static void feedbackFilledPolygon(const Vertex *const *vs, int n, const Vertex *pv, bool back)
+{
+    FeedbackVertex *in = malloc((size_t)n*sizeof(FeedbackVertex)), *out = NULL;
+    if (in == NULL) { setError(GL_OUT_OF_MEMORY); return; }
+    for (int i = 0; i < n; i++)
+    {
+        Vertex shaded = *vs[i];
+        const Vertex *src = (pv != NULL)? pv : vs[i];
+        memcpy(shaded.color, back? src->backColor : src->color, sizeof(shaded.color));
+        feedbackVertexOf(&shaded, &in[i]);
+    }
+
+    for (int p = 0; (p < 6) && (n >= 3); p++)
+    {
+        // Every edge adds at most two vertices
+        FeedbackVertex *grown = realloc(out, 2*(size_t)n*sizeof(FeedbackVertex));
+        if (grown == NULL) { setError(GL_OUT_OF_MEMORY); n = 0; break; }
+        out = grown;
+        int m = 0;
+        float da = viewPlaneDistance(in[0].clip, p);
+        for (int i = 0; i < n; i++)
+        {
+            const FeedbackVertex *a = &in[i], *b = &in[(i + 1) % n];
+            float db = viewPlaneDistance(b->clip, p);
+            if (da >= 0.0f) out[m++] = *a;
+            if ((da >= 0.0f) != (db >= 0.0f)) lerpFeedbackVertex(&out[m++], a, b, da/(da - db));
+            da = db;
+        }
+        n = m;
+        FeedbackVertex *t = in; in = out; out = t;
+    }
+    for (int i = 0; i < n; i++) if (in[i].clip[3] <= 0.0f) n = 0;     // Degenerate: collapsed onto the eye
+    if (n >= 3) feedbackPrimitive(GL_POLYGON_TOKEN, in, n);
+    free(in);
+    free(out);
+}
+
+// glBitmap, glDrawPixels, glCopyPixels in feedback mode: the token and the raster position (in selection mode the
+// raster position counted as a hit already)
+static void feedbackRaster(GLenum token)
+{
+    if ((gl.renderMode != GL_FEEDBACK) || !gl.raster.valid) return;
+    float color[4];
+    for (int i = 0; i < 4; i++) color[i] = gl.raster.color[i]*(1.0f/255.0f);
+    feedbackValue((GLfloat)token);
+    feedbackWrite(gl.raster.pos, gl.raster.pos[3], color, gl.raster.tex);
+}
+
 // Quad around the NDC positions a and b, widened by (nx, ny) perpendicular and (ex, ey) along a -> b
 static void emitExpandedQuad(const Vertex *a, const Vertex *b, const float pa[3], const float pb[3],
                              float nx, float ny, float ex, float ey)
@@ -1659,6 +1866,7 @@ static void emitLine(const Vertex *a, const Vertex *b, float zBias)
 {
     Vertex clippedA, clippedB;
     if (!clipSegment(&a, &b, &clippedA, &clippedB)) return;
+    if (gl.renderMode != GL_RENDER) { feedbackLine(a, b); return; }
 
     const Mat4 *pmv = projectionModelview();
 
@@ -1722,6 +1930,7 @@ static float pointSize(const Vertex *v)
 static void emitPoint(const Vertex *v, float zBias)
 {
     if (pointClipped(v)) return;
+    if (gl.renderMode != GL_RENDER) { feedbackPoint(v); return; }
 
     float c[4];
     mat4Transform(projectionModelview(), v->pos, c);
@@ -1824,11 +2033,37 @@ static float polygonOffset(const Vertex *const *vs, int n)
     return gl.offsetFactor*m + gl.offsetUnits*DEPTH_RESOLUTION;
 }
 
+// Polygon in feedback/selection mode (see the feedback section): culled, then filled, outlined or as vertices like
+// emitPolygon() does
+static void feedbackPolygon(const Vertex *const *vs, const bool *edges, int n, const Vertex *pv)
+{
+    bool front = (polygonArea(vs, n) > 0.0f) == (gl.state.frontFace == GL_CCW);
+    if (gl.state.cull && ((gl.state.cullFace == GL_FRONT_AND_BACK) || ((gl.state.cullFace == GL_FRONT) == front))) return;
+    bool back = gl.lightingEnabled && gl.lighting.twoSide && !front;
+
+    GLenum mode = gl.polygonMode[front? 0 : 1];
+    if (mode == GL_FILL) { feedbackFilledPolygon(vs, n, pv, back); return; }
+
+    gl.lineReset = true;
+    for (int i = 0; i < n; i++)
+    {
+        if (!edges[i]) continue;
+        Vertex a = shadeVertex(vs[i], pv, 0.0f, back);
+        if (mode == GL_LINE)
+        {
+            Vertex b = shadeVertex(vs[(i + 1) % n], pv, 0.0f, back);
+            feedbackLine(&a, &b);
+        }
+        else feedbackPoint(&a);
+    }
+}
+
 // A polygon (triangle, quad, polygon) with edge flags: filled, outlined or as vertices depending on
 // glPolygonMode of the side that faces the viewer. pv: provoking vertex for flat shading
 static void emitPolygon(const Vertex *const *vs, const bool *edges, int n, const Vertex *pv)
 {
     if (gl.clipEnabled && ((n = clipPolygon(&vs, &edges, n)) < 3)) return;
+    if (gl.renderMode != GL_RENDER) { feedbackPolygon(vs, edges, n, pv); return; }
 
     GLenum mode = GL_FILL;
     bool polygonModes = (gl.polygonMode[0] != GL_FILL) || (gl.polygonMode[1] != GL_FILL);
@@ -1892,11 +2127,14 @@ static bool beginPrimitive(GLenum mode)
     }
 
     bool lineOrPoint = (mode == GL_POINTS) || (mode == GL_LINES) || (mode == GL_LINE_STRIP) || (mode == GL_LINE_LOOP);
-    prepareDraw(lineOrPoint, mode == GL_POINTS);
+    bool render = (gl.renderMode == GL_RENDER);
+    if (render) prepareDraw(lineOrPoint, mode == GL_POINTS);
     gl.primitive = mode;
     gl.primCount = 0;
     gl.primTotal = 0;
-    gl.collectPolygon = (mode == GL_POLYGON) && ((gl.polygonMode[0] != GL_FILL) || (gl.polygonMode[1] != GL_FILL));
+    gl.lineReset = true;
+    // Feedback reports a polygon as one, not as the triangles it is filled with
+    gl.collectPolygon = (mode == GL_POLYGON) && (!render || (gl.polygonMode[0] != GL_FILL) || (gl.polygonMode[1] != GL_FILL));
     gl.polyCount = 0;
     return true;
 }
@@ -1937,7 +2175,7 @@ static void submitVertex(const Vertex *v, bool edge)
             break;
         case GL_LINES:
             p[gl.primCount++] = *v;
-            if (gl.primCount == 2) { emitShadedLine(&p[0], &p[1], FLAT(&p[1])); gl.primCount = 0; }
+            if (gl.primCount == 2) { gl.lineReset = true; emitShadedLine(&p[0], &p[1], FLAT(&p[1])); gl.primCount = 0; }
             break;
         case GL_LINE_STRIP:
         case GL_LINE_LOOP:
@@ -2380,6 +2618,7 @@ static void generateTexCoords(Vertex *v, const float normal[3])
             for (int i = 0; i < 3; i++) out[i] += x->sphere[i][0]*sphere[0] + x->sphere[i][1]*sphere[1];
         }
         memcpy(tc, out, sizeof(out));
+        if (unit == 0) v->texR = 0.0f;      // Not generated (see Vertex)
     }
 }
 
@@ -2524,6 +2763,9 @@ bool c3dglInit(void)
     gl.raster = (RasterState){ .pos = { 0, 0, 0, 1 }, .valid = true, .color = { 255, 255, 255, 255 }, .tex = { 0, 0, 0, 1 } };
     gl.zoomX = gl.zoomY = 1.0f;
     gl.transfer = noTransfer;
+    gl.renderMode = GL_RENDER;
+    gl.feedbackType = GL_2D;
+    gl.hitMinZ = 1.0f;
     for (int i = 0; i < PIXEL_MAP_COUNT; i++) gl.pixelMaps[i].size = 1;    // One entry, 0
     memset(gl.current.color, 255, 4);
     gl.current.tex[2] = 1.0f;
@@ -3013,6 +3255,12 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_LIST_INDEX: v[0] = gl.listName; return 1;
         case GL_LIST_MODE: v[0] = gl.listName? gl.listMode : 0; return 1;
         case GL_MAX_LIST_NESTING: v[0] = C3DGL_MAX_LIST_NESTING; return 1;
+        case GL_RENDER_MODE: v[0] = gl.renderMode; return 1;
+        case GL_FEEDBACK_BUFFER_SIZE: v[0] = gl.feedbackSize; return 1;
+        case GL_FEEDBACK_BUFFER_TYPE: v[0] = gl.feedbackType; return 1;
+        case GL_SELECTION_BUFFER_SIZE: v[0] = gl.selectSize; return 1;
+        case GL_NAME_STACK_DEPTH: v[0] = gl.nameDepth; return 1;
+        case GL_MAX_NAME_STACK_DEPTH: v[0] = C3DGL_MAX_NAME_STACK; return 1;
         case GL_MAX_ATTRIB_STACK_DEPTH: case GL_MAX_CLIENT_ATTRIB_STACK_DEPTH: v[0] = C3DGL_ATTRIB_STACK; return 1;
 
         // Client arrays
@@ -3285,6 +3533,7 @@ static void clearWithQuad(bool color, bool depth, bool stencil)
 void glClear(GLbitfield mask)
 {
     LIST_SAVE(CLEAR, "u", mask);
+    if (gl.renderMode != GL_RENDER) return;     // Like Mesa: feedback and selection draw nothing
     // Write masks apply to clears, glDrawBuffer(GL_NONE) clears no color
     bool color = (mask & GL_COLOR_BUFFER_BIT) && (gl.state.colorMask != 0) && (gl.drawBuffer != GL_NONE);
     bool depth = (mask & GL_DEPTH_BUFFER_BIT) && gl.state.depthMask;
@@ -3656,7 +3905,8 @@ static void markTexQ(void)
 {
     if (gl.texQUsed) return;
     gl.texQUsed = true;
-    if (gl.inBegin) prepareDraw(gl.batch.clipSpace, gl.primitive == GL_POINTS);    // The batch of the current primitive needs it already
+    // The batch of the current primitive needs it already
+    if (gl.inBegin && (gl.renderMode == GL_RENDER)) prepareDraw(gl.batch.clipSpace, gl.primitive == GL_POINTS);
 }
 
 void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q)
@@ -3665,6 +3915,7 @@ void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q)
     gl.current.tex[0] = s;
     gl.current.tex[1] = t;
     gl.current.tex[2] = q;
+    gl.current.texR = r;
     gl.currentTexR[0] = r;
     if (q != 1.0f) markTexQ();
 }
@@ -4378,6 +4629,8 @@ void glGetPointerv(GLenum pname, GLvoid **params)
         case GL_TEXTURE_COORD_ARRAY_POINTER: *params = (GLvoid *)gl.arrays[ARRAY_TEXCOORD].pointer; break;
         case GL_EDGE_FLAG_ARRAY_POINTER: *params = (GLvoid *)gl.arrays[ARRAY_EDGEFLAG].pointer; break;
         case GL_POINT_SIZE_ARRAY_POINTER_OES: *params = (GLvoid *)gl.arrays[ARRAY_POINTSIZE].pointer; break;
+        case GL_FEEDBACK_BUFFER_POINTER: *params = gl.feedbackBuffer; break;
+        case GL_SELECTION_BUFFER_POINTER: *params = gl.selectBuffer; break;
         default: setError(GL_INVALID_ENUM); break;
     }
 }
@@ -4455,6 +4708,7 @@ static void submitArrayVertex(int index)
         dst[0] = t[0];
         dst[1] = t[1];
         dst[2] = t[3];
+        if (unit == 0) v.texR = t[2];
     }
     if (arrayActive(ARRAY_COLOR))
     {
@@ -4484,6 +4738,7 @@ static void submitArrayVertex(int index)
     if (!arrayActive(ARRAY_VERTEX))
     {
         memcpy(gl.current.tex, v.tex, sizeof(v.tex));
+        gl.current.texR = gl.currentTexR[0] = v.texR;
         memcpy(gl.current.texExtra, v.texExtra, sizeof(v.texExtra));
         memcpy(gl.current.color, v.color, 4);
         gl.currentEdge = edge;
@@ -6598,6 +6853,7 @@ static void buildEvaluated(EvalVertex *e, const float *pos, int posSize, const f
         v->tex[0] = tex[0];
         v->tex[1] = (texSize > 1)? tex[1] : 0.0f;
         v->tex[2] = (texSize > 3)? tex[3] : 1.0f;
+        v->texR = (texSize > 2)? tex[2] : 0.0f;
         if (v->tex[2] != 1.0f) markTexQ();
     }
     memcpy(e->normal, (normal != NULL)? normal : gl.currentNormal, sizeof(e->normal));
@@ -7580,10 +7836,7 @@ static void setRasterPos(float x, float y, float z, float w)
     }
     if (!inside) { gl.raster.valid = false; return; }
 
-    const GLint *vp = gl.state.viewport;
-    float n = gl.state.depthNear, f = gl.state.depthFar;
-    gl.raster.pos[0] = vp[0] + 0.5f*(clip[0]/clip[3] + 1.0f)*vp[2];
-    gl.raster.pos[1] = vp[1] + 0.5f*(clip[1]/clip[3] + 1.0f)*vp[3];
+    windowCoords(clip, gl.raster.pos);
 
     // Float matrices put integer positions slightly off (glOrtho(0, 400, ...) maps x = 210 to 209.99998), which
     // glBitmap's floor(x - xorig) would move by a whole pixel: snap what is within 1/1024 of an integer
@@ -7592,9 +7845,9 @@ static void setRasterPos(float x, float y, float z, float w)
         float r = roundf(gl.raster.pos[i]);
         if (fabsf(gl.raster.pos[i] - r) < 1.0f/1024.0f) gl.raster.pos[i] = r;
     }
-    gl.raster.pos[2] = n + 0.5f*(clip[2]/clip[3] + 1.0f)*(f - n);
     gl.raster.pos[3] = clip[3];
     gl.raster.valid = true;
+    if (gl.renderMode == GL_SELECT) selectHit(gl.raster.pos[2]);
     float ew = (eye[3] != 0.0f)? eye[3] : 1.0f;
     gl.raster.distance = sqrtf(eye[0]*eye[0] + eye[1]*eye[1] + eye[2]*eye[2])/fabsf(ew);
 
@@ -8094,6 +8347,13 @@ void glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig, GLflo
     if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
     if ((width < 0) || (height < 0)) { setError(GL_INVALID_VALUE); return; }
     if (!gl.raster.valid) return;
+    if (gl.renderMode != GL_RENDER)
+    {
+        feedbackRaster(GL_BITMAP_TOKEN);
+        gl.raster.pos[0] += xmove;
+        gl.raster.pos[1] += ymove;
+        return;
+    }
 
     // The fragments have the raster color: the alpha test is decided here, the bitmap modes discard where no bit is set
     u8 alpha = gl.raster.color[3];
@@ -8120,6 +8380,7 @@ void glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, con
     int elemSize, groupSize;
     GLenum error = pixelImageLayout(format, type, &elemSize, &groupSize);
     if (error != GL_NO_ERROR) { setError(error); return; }
+    if (gl.renderMode != GL_RENDER) { feedbackRaster(GL_DRAW_PIXEL_TOKEN); return; }
     if (!gl.raster.valid || (width == 0) || (height == 0) || (pixels == NULL)) return;
 
     bool depth = (format == GL_DEPTH_COMPONENT), stencil = (format == GL_STENCIL_INDEX);
@@ -8160,6 +8421,7 @@ void glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type)
     if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
     if ((type != GL_COLOR) && (type != GL_DEPTH) && (type != GL_STENCIL)) { setError(GL_INVALID_ENUM); return; }
     if ((width < 0) || (height < 0)) { setError(GL_INVALID_VALUE); return; }
+    if (gl.renderMode != GL_RENDER) { feedbackRaster(GL_COPY_PIXEL_TOKEN); return; }
     if (!gl.raster.valid || (width == 0) || (height == 0)) return;
 
     if ((type == GL_COLOR) && !colorTransferActive()) { copyColorRect(x, y, width, height); return; }
@@ -8241,6 +8503,128 @@ void glReadBuffer(GLenum mode)
     GLenum error = colorBufferError(mode, false);
     if (error != GL_NO_ERROR) { setError(error); return; }
     gl.readBuffer = mode;
+}
+
+//----------------------------------------------------------------------------------
+// OpenGL: feedback and selection (GL). glRenderMode, glFeedbackBuffer and glSelectBuffer are executed immediately (not
+// compiled into display lists); the primitives are handled in the feedback section
+//----------------------------------------------------------------------------------
+// Selection: a hit record (name stack depth, min and max window depth scaled to 2^32 - 1, the names), written when the
+// name stack changes or selection mode ends after a hit
+static void selectValue(GLuint value)
+{
+    if (gl.selectCount < gl.selectSize) gl.selectBuffer[gl.selectCount] = value;
+    if (gl.selectCount <= gl.selectSize) gl.selectCount++;
+}
+
+static void writeHitRecord(void)
+{
+    selectValue((GLuint)gl.nameDepth);
+    selectValue((GLuint)(gl.hitMinZ*4294967295.0));
+    selectValue((GLuint)(gl.hitMaxZ*4294967295.0));
+    for (int i = 0; i < gl.nameDepth; i++) selectValue(gl.names[i]);
+    gl.hits++;
+    gl.hit = false;
+    gl.hitMinZ = 1.0f;
+    gl.hitMaxZ = 0.0f;
+}
+
+GLint glRenderMode(GLenum mode)
+{
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return 0; }
+    if ((mode != GL_RENDER) && (mode != GL_FEEDBACK) && (mode != GL_SELECT)) { setError(GL_INVALID_ENUM); return 0; }
+    if (((mode == GL_FEEDBACK) && !gl.feedbackBufferSet) || ((mode == GL_SELECT) && !gl.selectBufferSet))
+    {
+        setError(GL_INVALID_OPERATION);
+        return 0;
+    }
+
+    // Leaving a mode returns its result: the number of hit records or feedback values, -1 on overflow
+    GLint result = 0;
+    if (gl.renderMode == GL_SELECT)
+    {
+        if (gl.hit) writeHitRecord();
+        result = (gl.selectCount > gl.selectSize)? -1 : gl.hits;
+    }
+    else if (gl.renderMode == GL_FEEDBACK) result = (gl.feedbackCount > gl.feedbackSize)? -1 : gl.feedbackCount;
+
+    gl.renderMode = mode;
+    gl.feedbackCount = gl.selectCount = gl.hits = 0;
+    gl.hit = false;
+    gl.hitMinZ = 1.0f;
+    gl.hitMaxZ = 0.0f;
+    gl.nameDepth = 0;
+    return result;
+}
+
+void glFeedbackBuffer(GLsizei size, GLenum type, GLfloat *buffer)
+{
+    if (gl.inBegin || (gl.renderMode == GL_FEEDBACK)) { setError(GL_INVALID_OPERATION); return; }
+    if ((type != GL_2D) && (type != GL_3D) && (type != GL_3D_COLOR) && (type != GL_3D_COLOR_TEXTURE) &&
+        (type != GL_4D_COLOR_TEXTURE)) { setError(GL_INVALID_ENUM); return; }
+    if (size < 0) { setError(GL_INVALID_VALUE); return; }
+    gl.feedbackBuffer = buffer;
+    gl.feedbackSize = (buffer != NULL)? size : 0;
+    gl.feedbackType = type;
+    gl.feedbackBufferSet = true;
+}
+
+void glSelectBuffer(GLsizei size, GLuint *buffer)
+{
+    if (gl.inBegin || (gl.renderMode == GL_SELECT)) { setError(GL_INVALID_OPERATION); return; }
+    if (size < 0) { setError(GL_INVALID_VALUE); return; }
+    gl.selectBuffer = buffer;
+    gl.selectSize = (buffer != NULL)? size : 0;
+    gl.selectBufferSet = true;
+}
+
+void glPassThrough(GLfloat token)
+{
+    LIST_SAVE(PASS_THROUGH, "f", token);
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    if (gl.renderMode != GL_FEEDBACK) return;
+    feedbackValue((GLfloat)GL_PASS_THROUGH_TOKEN);
+    feedbackValue(token);
+}
+
+// The name stack commands are ignored outside selection mode
+void glInitNames(void)
+{
+    LIST_SAVE(INIT_NAMES, "");
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    if (gl.renderMode != GL_SELECT) return;
+    if (gl.hit) writeHitRecord();
+    gl.nameDepth = 0;
+}
+
+void glLoadName(GLuint name)
+{
+    LIST_SAVE(LOAD_NAME, "u", name);
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    if (gl.renderMode != GL_SELECT) return;
+    if (gl.nameDepth == 0) { setError(GL_INVALID_OPERATION); return; }
+    if (gl.hit) writeHitRecord();
+    gl.names[gl.nameDepth - 1] = name;
+}
+
+void glPushName(GLuint name)
+{
+    LIST_SAVE(PUSH_NAME, "u", name);
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    if (gl.renderMode != GL_SELECT) return;
+    if (gl.hit) writeHitRecord();
+    if (gl.nameDepth == C3DGL_MAX_NAME_STACK) { setError(GL_STACK_OVERFLOW); return; }
+    gl.names[gl.nameDepth++] = name;
+}
+
+void glPopName(void)
+{
+    LIST_SAVE(POP_NAME, "");
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    if (gl.renderMode != GL_SELECT) return;
+    if (gl.hit) writeHitRecord();
+    if (gl.nameDepth == 0) { setError(GL_STACK_UNDERFLOW); return; }
+    gl.nameDepth--;
 }
 
 //----------------------------------------------------------------------------------

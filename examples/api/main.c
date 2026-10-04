@@ -2624,6 +2624,306 @@ static void testDefaultTextures(void)
     glPopAttrib();
 }
 
+// Feedback (tokens in window coordinates, clipped, culled, polygon modes, raster tokens, overflow) and selection (hit
+// records, name stack); nothing is drawn meanwhile
+static bool nearf(float a, float b) { return fabsf(a - b) < 1e-3f; }
+
+// Values of a feedback vertex in window coordinates
+static bool fbVertex(const GLfloat *f, float x, float y, float z)
+{
+    return nearf(f[0], x) && nearf(f[1], y) && nearf(f[2], z);
+}
+
+static bool hitDepth(GLuint z, double expected) { return fabs(z/4294967295.0 - expected) < 1e-4; }
+
+static void testFeedback(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    windowProjection();
+
+    GLint v = -1;
+    glGetIntegerv(GL_RENDER_MODE, &v);
+    CHECK(v == GL_RENDER);
+    glGetIntegerv(GL_FEEDBACK_BUFFER_TYPE, &v);
+    CHECK(v == GL_2D);
+    glGetIntegerv(GL_MAX_NAME_STACK_DEPTH, &v);
+    CHECK(v >= 64);
+
+    // Errors: no buffer yet, bad arguments
+    CHECK(glRenderMode(GL_FEEDBACK) == 0 && glGetError() == GL_INVALID_OPERATION);
+    CHECK(glRenderMode(GL_SELECT) == 0 && glGetError() == GL_INVALID_OPERATION);
+    CHECK(glRenderMode(0x1234) == 0 && glGetError() == GL_INVALID_ENUM);
+    static GLfloat fb[256];
+    glFeedbackBuffer(-1, GL_3D, fb);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glFeedbackBuffer(256, 0x1234, fb);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glPopName();                                // Ignored outside selection mode
+    glLoadName(1);
+    CHECK(glGetError() == GL_NO_ERROR);
+
+    // GL_3D: a point (and one outside), a pass-through, a line clipped at the window edge, a triangle; z = 0 is window
+    // depth 0.5
+    glFeedbackBuffer(256, GL_3D, fb);
+    void *ptr = NULL;
+    glGetPointerv(GL_FEEDBACK_BUFFER_POINTER, &ptr);
+    glGetIntegerv(GL_FEEDBACK_BUFFER_SIZE, &v);
+    CHECK(ptr == fb && v == 256);
+    CHECK(glRenderMode(GL_FEEDBACK) == 0);
+    glGetIntegerv(GL_RENDER_MODE, &v);
+    CHECK(v == GL_FEEDBACK);
+    glFeedbackBuffer(256, GL_3D, fb);
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    glBegin(GL_POINTS);
+    glVertex2f(10.0f, 20.0f);
+    glVertex2f(-5.0f, 20.0f);
+    glEnd();
+    glPassThrough(7.0f);
+    glBegin(GL_LINES);
+    glVertex2f(100.0f, 50.0f);
+    glVertex2f(500.0f, 50.0f);
+    glEnd();
+    glBegin(GL_TRIANGLES);
+    glVertex2f(100.0f, 100.0f);
+    glVertex2f(200.0f, 100.0f);
+    glVertex2f(150.0f, 200.0f);
+    glEnd();
+    CHECK(glRenderMode(GL_RENDER) == 24);
+    CHECK(fb[0] == GL_POINT_TOKEN && fbVertex(&fb[1], 10, 20, 0.5f));
+    CHECK(fb[4] == GL_PASS_THROUGH_TOKEN && fb[5] == 7.0f);
+    CHECK(fb[6] == GL_LINE_RESET_TOKEN && fbVertex(&fb[7], 100, 50, 0.5f) && fbVertex(&fb[10], 400, 50, 0.5f));
+    CHECK(fb[13] == GL_POLYGON_TOKEN && fb[14] == 3 && fbVertex(&fb[15], 100, 100, 0.5f) &&
+          fbVertex(&fb[18], 200, 100, 0.5f) && fbVertex(&fb[21], 150, 200, 0.5f));
+
+    // GL_2D: line strips and loops reset the stipple once, separate lines each time; a polygon stays one; a quad
+    // clipped at x = 0; a culled triangle; outlines and vertices of polygons (an edge flag off)
+    glFeedbackBuffer(256, GL_2D, fb);
+    glRenderMode(GL_FEEDBACK);
+    glBegin(GL_LINE_LOOP);
+    glVertex2i(10, 10); glVertex2i(20, 10); glVertex2i(20, 20);
+    glEnd();
+    glBegin(GL_LINES);
+    glVertex2i(10, 10); glVertex2i(20, 10); glVertex2i(30, 10); glVertex2i(40, 10);
+    glEnd();
+    int n = glRenderMode(GL_RENDER);
+    CHECK(n == 5*5);
+    CHECK(fb[0] == GL_LINE_RESET_TOKEN && fb[5] == GL_LINE_TOKEN && fb[10] == GL_LINE_TOKEN);
+    CHECK(nearf(fb[11], 20) && nearf(fb[12], 20) && nearf(fb[13], 10) && nearf(fb[14], 10));    // Closing segment
+    CHECK(fb[15] == GL_LINE_RESET_TOKEN && fb[20] == GL_LINE_RESET_TOKEN && nearf(fb[21], 30));
+
+    glRenderMode(GL_FEEDBACK);
+    glBegin(GL_POLYGON);
+    glVertex2i(10, 10); glVertex2i(30, 10); glVertex2i(40, 20); glVertex2i(30, 30); glVertex2i(10, 30);
+    glEnd();
+    glRecti(-100, 50, 100, 60);
+    glEnable(GL_CULL_FACE);
+    glBegin(GL_TRIANGLES);
+    glVertex2i(10, 10); glVertex2i(10, 20); glVertex2i(20, 10);     // Clockwise: back facing
+    glEnd();
+    glDisable(GL_CULL_FACE);
+    n = glRenderMode(GL_RENDER);
+    CHECK(n == 12 + 10);
+    CHECK(fb[0] == GL_POLYGON_TOKEN && fb[1] == 5 && nearf(fb[6], 40));
+    CHECK(fb[12] == GL_POLYGON_TOKEN && fb[13] == 4 && nearf(fb[14], 0) && nearf(fb[16], 100) && nearf(fb[20], 0));
+
+    glRenderMode(GL_FEEDBACK);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    glBegin(GL_TRIANGLES);
+    glVertex2i(10, 10);
+    glEdgeFlag(GL_FALSE);
+    glVertex2i(20, 10);
+    glEdgeFlag(GL_TRUE);
+    glVertex2i(20, 20);
+    glEnd();
+    glPolygonMode(GL_FRONT_AND_BACK, GL_POINT);
+    glBegin(GL_TRIANGLES);
+    glVertex2i(10, 10); glVertex2i(20, 10); glVertex2i(20, 20);
+    glEnd();
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    n = glRenderMode(GL_RENDER);
+    CHECK(n == 2*5 + 3*3);
+    CHECK(fb[0] == GL_LINE_RESET_TOKEN && fb[5] == GL_LINE_TOKEN && nearf(fb[6], 20) && nearf(fb[8], 10));
+    CHECK(fb[10] == GL_POINT_TOKEN && fb[13] == GL_POINT_TOKEN && fb[16] == GL_POINT_TOKEN && nearf(fb[17], 20));
+
+    // User clip planes come first: x >= 50
+    static const GLdouble plane[4] = { 1.0, 0.0, 0.0, -50.0 };
+    glClipPlane(GL_CLIP_PLANE0, plane);
+    glEnable(GL_CLIP_PLANE0);
+    glRenderMode(GL_FEEDBACK);
+    glBegin(GL_LINES);
+    glVertex2i(0, 10); glVertex2i(100, 10);
+    glEnd();
+    glDisable(GL_CLIP_PLANE0);
+    CHECK(glRenderMode(GL_RENDER) == 5 && nearf(fb[1], 50) && nearf(fb[3], 100));
+
+    // Depth clipping: identity projection, a triangle reaching z = 2 is cut at the far plane (window depth 1)
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    glFeedbackBuffer(256, GL_3D, fb);
+    glRenderMode(GL_FEEDBACK);
+    glBegin(GL_TRIANGLES);
+    glVertex3f(-0.5f, -0.5f, 0.0f); glVertex3f(0.5f, -0.5f, 0.0f); glVertex3f(0.0f, 0.5f, 2.0f);
+    glEnd();
+    CHECK(glRenderMode(GL_RENDER) == 2 + 4*3);
+    CHECK(fb[1] == 4 && nearf(fb[4], 0.5f) && nearf(fb[10], 1.0f) && nearf(fb[13], 1.0f));
+    windowProjection();
+
+    // GL_3D_COLOR: 8-bit colors, flat shading takes the last vertex of a line
+    glFeedbackBuffer(256, GL_3D_COLOR, fb);
+    glRenderMode(GL_FEEDBACK);
+    glShadeModel(GL_FLAT);
+    glBegin(GL_LINES);
+    glColor4f(1.0f, 0.0f, 0.0f, 1.0f); glVertex2i(10, 10);
+    glColor4f(0.0f, 0.5f, 1.0f, 0.25f); glVertex2i(20, 10);
+    glEnd();
+    glShadeModel(GL_SMOOTH);
+    CHECK(glRenderMode(GL_RENDER) == 1 + 2*7);
+    CHECK(nearf(fb[4], 0.0f) && fabsf(fb[5] - 0.5f) < 0.01f && nearf(fb[6], 1.0f) && fabsf(fb[7] - 0.25f) < 0.01f);
+    CHECK(nearf(fb[11], 0.0f) && nearf(fb[13], 1.0f));
+
+    // GL_4D_COLOR_TEXTURE: w and texcoords through the texture matrix, also r from a texcoord array
+    glFeedbackBuffer(256, GL_4D_COLOR_TEXTURE, fb);
+    glMatrixMode(GL_TEXTURE);
+    glTranslatef(0.5f, 0.0f, 0.0f);
+    glMatrixMode(GL_MODELVIEW);
+    glRenderMode(GL_FEEDBACK);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    glTexCoord4f(0.25f, 0.5f, 0.75f, 1.0f);
+    glBegin(GL_POINTS);
+    glVertex2i(10, 10);
+    glEnd();
+    static const GLfloat arrayPos[2] = { 30.0f, 40.0f }, arrayTex[3] = { 0.0f, 0.125f, 0.375f };
+    glVertexPointer(2, GL_FLOAT, 0, arrayPos);
+    glTexCoordPointer(3, GL_FLOAT, 0, arrayTex);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDrawArrays(GL_POINTS, 0, 1);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glMatrixMode(GL_TEXTURE);
+    glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    CHECK(glRenderMode(GL_RENDER) == 2*13);
+    CHECK(fbVertex(&fb[1], 10, 10, 0.5f) && nearf(fb[4], 1.0f) && nearf(fb[8], 1.0f));
+    CHECK(nearf(fb[9], 0.75f) && nearf(fb[10], 0.5f) && nearf(fb[11], 0.75f) && nearf(fb[12], 1.0f));
+    CHECK(nearf(fb[14], 30.0f) && nearf(fb[22], 0.5f) && nearf(fb[23], 0.125f) && nearf(fb[24], 0.375f));
+
+    // Raster tokens: the raster position (glBitmap still moves it); nothing for an invalid one
+    static const GLubyte pixel[4] = { 0, 0, 255, 255 };
+    glFeedbackBuffer(256, GL_3D, fb);
+    glRenderMode(GL_FEEDBACK);
+    glRasterPos2i(30, 40);
+    glBitmap(0, 0, 0.0f, 0.0f, 5.0f, 0.0f, NULL);
+    glDrawPixels(1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    glCopyPixels(0, 0, 1, 1, GL_COLOR);
+    glRasterPos2i(-10, 0);
+    glBitmap(0, 0, 0.0f, 0.0f, 5.0f, 0.0f, NULL);
+    CHECK(glRenderMode(GL_RENDER) == 3*4);
+    CHECK(fb[0] == GL_BITMAP_TOKEN && fbVertex(&fb[1], 30, 40, 0.5f));
+    CHECK(fb[4] == GL_DRAW_PIXEL_TOKEN && fbVertex(&fb[5], 35, 40, 0.5f));
+    CHECK(fb[8] == GL_COPY_PIXEL_TOKEN && nearf(fb[9], 35));
+
+    // Overflow: -1, the buffer is filled as far as it goes
+    fb[3] = -2.0f;
+    glFeedbackBuffer(3, GL_3D, fb);
+    glRenderMode(GL_FEEDBACK);
+    glBegin(GL_POINTS);
+    glVertex2i(10, 10);
+    glEnd();
+    CHECK(glRenderMode(GL_RENDER) == -1 && fb[0] == GL_POINT_TOKEN && nearf(fb[2], 10) && fb[3] == -2.0f);
+
+    // Nothing is drawn or cleared
+    glColor3f(0.0f, 0.0f, 1.0f);
+    glRecti(380, 220, 390, 230);
+    glFeedbackBuffer(256, GL_2D, fb);
+    glRenderMode(GL_FEEDBACK);
+    glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glColor3f(1.0f, 1.0f, 1.0f);
+    glRecti(380, 220, 390, 230);
+    glRasterPos2i(380, 220);
+    glDrawPixels(1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    glRenderMode(GL_RENDER);
+    CHECK(pixelNear(385, 225, 0, 0, 255, 255));
+
+    // Display lists record glPassThrough and the name stack commands
+    GLuint list = glGenLists(1);
+    glNewList(list, GL_COMPILE);
+    glPassThrough(9.0f);
+    glInitNames();
+    glPushName(5);
+    glRecti(10, 10, 20, 20);
+    glEndList();
+    glRenderMode(GL_FEEDBACK);
+    glCallList(list);
+    CHECK(glRenderMode(GL_RENDER) == 2 + 2 + 4*2 && fb[0] == GL_PASS_THROUGH_TOKEN && fb[1] == 9.0f);
+
+    // Selection: a hit record per name stack change after a hit, with the window depth range
+    static GLuint sel[64];
+    glSelectBuffer(64, sel);
+    glGetPointerv(GL_SELECTION_BUFFER_POINTER, &ptr);
+    glGetIntegerv(GL_SELECTION_BUFFER_SIZE, &v);
+    CHECK(ptr == sel && v == 64);
+    CHECK(glRenderMode(GL_SELECT) == 0);
+    glLoadName(1);
+    CHECK(glGetError() == GL_INVALID_OPERATION);        // Empty stack
+    glPopName();
+    CHECK(glGetError() == GL_STACK_UNDERFLOW);
+    glInitNames();
+    glPushName(1);
+    glRecti(10, 10, 20, 20);                            // Hit at depth 0.5
+    glLoadName(2);
+    glBegin(GL_POINTS);
+    glVertex2i(-5, 10);                                 // Outside: no hit
+    glEnd();
+    glLoadName(3);
+    glPushName(4);
+    glBegin(GL_LINES);
+    glVertex3f(10.0f, 10.0f, 0.5f);                     // Window depth 0.25 .. 0.75
+    glVertex3f(20.0f, 10.0f, -0.5f);
+    glEnd();
+    glGetIntegerv(GL_NAME_STACK_DEPTH, &v);
+    CHECK(v == 2);
+    glLoadName(5);
+    glEnable(GL_CULL_FACE);
+    glRecti(20, 10, 10, 20);                            // Clockwise: culled, no hit
+    glDisable(GL_CULL_FACE);
+    glLoadName(6);
+    glRasterPos3f(10.0f, 10.0f, -0.8f);                 // A valid raster position hits (depth 0.9)
+    glPopName();
+    glPopName();
+    glCallList(list);                                   // glInitNames, name 5, a hit
+    CHECK(glRenderMode(GL_RENDER) == 4);
+    CHECK(sel[0] == 1 && hitDepth(sel[1], 0.5) && hitDepth(sel[2], 0.5) && sel[3] == 1);
+    CHECK(sel[4] == 2 && hitDepth(sel[5], 0.25) && hitDepth(sel[6], 0.75) && sel[7] == 3 && sel[8] == 4);
+    CHECK(sel[9] == 2 && hitDepth(sel[10], 0.9) && hitDepth(sel[11], 0.9) && sel[12] == 3 && sel[13] == 6);
+    CHECK(sel[14] == 1 && hitDepth(sel[15], 0.5) && sel[17] == 5);
+    glGetIntegerv(GL_NAME_STACK_DEPTH, &v);
+    CHECK(v == 0);
+
+    // Name stack overflow, selection buffer overflow
+    glSelectBuffer(2, sel);
+    glRenderMode(GL_SELECT);
+    for (int i = 0; i < 64; i++) glPushName(i);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glPushName(64);
+    CHECK(glGetError() == GL_STACK_OVERFLOW);
+    glRecti(10, 10, 20, 20);
+    CHECK(glRenderMode(GL_RENDER) == -1);
+    glDeleteLists(list, 1);
+
+    // glRenderMode between glBegin and glEnd
+    glBegin(GL_POINTS);
+    CHECK(glRenderMode(GL_SELECT) == 0);
+    glEnd();
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    glGetIntegerv(GL_RENDER_MODE, &v);
+    CHECK(v == GL_RENDER);
+
+    glPopAttrib();
+}
+
 int main(void)
 {
     gfxInitDefault();
@@ -2662,6 +2962,7 @@ int main(void)
     testPixels();
     testPixelTransfer();
     testDefaultTextures();
+    testFeedback();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

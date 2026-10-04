@@ -216,7 +216,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   * [x] Verified on real hardware (api checks, pixels example, 2026-10-04)
   * [~] Texturing does not apply to `glDrawPixels`/`glBitmap` fragments; depth images do not write the raster color
   * [x] `GL_COLOR_INDEX` images (also `GL_BITMAP`) through the `I_TO_*` pixel maps
-  * [~] Feedback/selection tokens come with feedback mode
+  * [x] Feedback tokens (`GL_BITMAP_TOKEN`, `GL_DRAW_PIXEL_TOKEN`, `GL_COPY_PIXEL_TOKEN`) and selection hits of the raster position
   * [~] Azahar's Vulkan renderer at `resolution_factor=2` reads back depth with ~1/256 error after a CPU depth write
     (exact at 1x and in the software renderer), so 2 api checks fail there
 * [x] Pixel transfer (GL): `glPixelTransfer{i,f}` (`GL_RED/GREEN/BLUE/ALPHA/DEPTH_SCALE/BIAS`, `GL_INDEX_SHIFT/OFFSET`,
@@ -241,7 +241,18 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] Attribute stacks: `glPushAttrib`/`glPopAttrib`, `glPushClientAttrib`/`glPopClientAttrib` (16 deep, all groups of the
   implemented state; groups of missing features fill in with them)
 * [x] Evaluators: `glMap1/2`, `glMapGrid*`, `glEvalCoord*`, `glEvalMesh*`, `glEvalPoint*`, `glGetMap*`, `GL_AUTO_NORMAL`
-* [ ] Feedback and selection: `glRenderMode`, `glFeedbackBuffer`, `glSelectBuffer`, `glInitNames`, `glPushName`, `glPopName`, `glLoadName`, `glPassThrough`
+* [x] Feedback and selection: `glRenderMode`, `glFeedbackBuffer` (`GL_2D` .. `GL_4D_COLOR_TEXTURE`), `glPassThrough`,
+  `glSelectBuffer`, `glInitNames`, `glLoadName`, `glPushName`, `glPopName` (`GL_MAX_NAME_STACK_DEPTH` 64), overflow
+  (-1), errors, queries (`GL_RENDER_MODE`, buffer pointers/sizes/type, name stack depth), the name commands and
+  `glPassThrough` recorded in display lists. Primitives after user clip planes are clipped against the view volume on
+  the CPU (polygons with colors and texcoords interpolated), culled and split by polygon mode like for drawing;
+  points, lines (`GL_LINE_RESET_TOKEN` at the start of strips, loops, separate lines and outlines), polygons
+  (`GL_POLYGON` whole) in window coordinates, clip w, lit/flat/two-sided colors and unit 0 texcoords through the
+  texture matrix (r too, also from arrays and evaluators). Selection hits with the window depth range. Nothing is
+  drawn or cleared in these modes (like Mesa). Verified in Azahar (api checks in Vulkan and the software renderer,
+  select example with `gluPickMatrix`)
+  * [~] Feedback colors are the 8-bit vertex colors; with texgen on unit 0 the fed back r is 0; polygon offset is not
+    applied to fed back depths
 * [ ] Accumulation buffer: `glAccum`, `glClearAccum`
 * [x] `glDrawBuffer`, `glReadBuffer`: double-buffered, no stereo or aux buffers (`GL_INVALID_OPERATION` for them).
   Front buffers are drawn/read like the back buffer (the frame is presented by `c3dglSwapBuffers()`), `GL_NONE` draws
@@ -281,7 +292,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   command list submission instead of one per batch, `glEvalMesh2` evaluates each grid point once
 * [~] Real hardware verification (all features up to color buffers verified on hardware; display lists, texgen, internal
   formats, 1D textures, color buffers, drawing pixels, pixel transfer and default textures through the api checks,
-  2026-10-04)
+  2026-10-04; feedback and selection not yet)
   * [x] Fixed: GPU lockup on the first draw (since bf91bd4): the vertex shader left `outtc0.w` unwritten
   * [x] Fixed: GPU lockup when a readback followed `glCopyPixels(GL_COLOR)` or a `glClear` after draws in a frame: the
     command list split before the GX command was not flushed from the CPU cache (`C3D_FrameSplit(0)`), and
@@ -299,7 +310,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 # Main Remaining Work
 
 ```text
-[ ] Lighting in the vertex shader     [ ] Feedback / selection (GL)
+[ ] Lighting in the vertex shader
 [ ] Smooth points/lines (GL)           [ ] Accumulation buffer (GL)
 [ ] Complete state queries            [ ] Stipple (GL)
 ```
@@ -324,4 +335,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Texture coordinate generation (GL) [x] 1D textures, all internal formats (GL)
 [x] glDrawBuffer / glReadBuffer (GL)   [x] Default texture objects (GL)
 [x] Pixel ops: draw/copy, transfer, maps (GL)
+[x] Feedback / selection (GL)
 ```
