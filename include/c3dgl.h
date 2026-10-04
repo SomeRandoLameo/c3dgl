@@ -32,6 +32,7 @@
 //   - Lighting: 8 lights, materials, glColorMaterial, two-sided, GL_NORMALIZE/GL_RESCALE_NORMAL (per vertex, on the CPU)
 //   - Fog: GL_LINEAR, GL_EXP, GL_EXP2 per pixel (PICA fog table, eye distance |z_eye|)
 //   - 6 user clip planes (glClipPlane), clipped on the CPU
+//   - Texture coordinate generation (glTexGen: object linear, eye linear, sphere map), per vertex on the CPU
 //   - GL_FLAT, glPolygonMode (with edge flags), glPolygonOffset, glDepthRange
 //   - Pixel store modes, texture borders, proxy textures, glGetTexLevelParameter
 //   - GLU: Mesa GLU as c3dgl::glu (<GL/glu.h>), see README

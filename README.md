@@ -85,8 +85,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `cube`: 3D, depth test, culling, textures (NPOT and PNG), scissor, sub-viewports
 - `primitives`: every primitive mode with culling on to catch wrong winding; page 2: flat shading, polygon modes,
   edge flags, polygon offset, depth range
-- `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks, display lists
-  and the ES API; green screen = all passed
+- `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks, display lists,
+  texgen (rendered and read back) and the ES API; green screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
   page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps, page 5: compressed textures (paletted, ETC1)
@@ -102,6 +102,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
   self-checks of the point API on the bottom screen
 - `lists`: display lists, the classic gears: each gear is a list (geometry, normals, material, shade model) drawn with
   `glCallList`; A switches to immediate mode, which looks identical
+- `texgen`: texture coordinate generation on tori without texcoords: `GL_SPHERE_MAP` (chrome from a generated
+  environment map), `GL_OBJECT_LINEAR` and `GL_EYE_LINEAR` stripes; A scrolls the stripes with the texture matrix
 
 Every example shows the CPU and GPU time of the last frame, the command buffer usage and the frames per second
 (averaged over one second) in rows 2-5 of the bottom screen (`C3D_GetProcessingTime`, `C3D_GetDrawingTime`,
@@ -163,6 +165,8 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
   two-sided lighting, local viewer, `GL_NORMALIZE`, `GL_RESCALE_NORMAL`; `glGetLight`, `glGetMaterial`
 - Fog: `GL_LINEAR`, `GL_EXP`, `GL_EXP2`, per pixel; `glFog*` and the fog queries
 - User clip planes: 6 (`glClipPlane`, ES `glClipPlanef/x`, `glGetClipPlane*`)
+- Texture coordinate generation (`glTexGen*`, `glGetTexGen*`): `GL_OBJECT_LINEAR`, `GL_EYE_LINEAR`, `GL_SPHERE_MAP`
+  for s, t, r, q of every texture unit
 - Dithering and smoothing can be enabled and queried but have no effect yet
 - Multisampling state (`glSampleCoverage`, `GL_MULTISAMPLE`, `GL_SAMPLE_ALPHA_TO_*`): stored and queried; there are no
   sample buffers (`GL_SAMPLE_BUFFERS` = 0), so as the spec says it has no effect
@@ -196,6 +200,11 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
   replaces the vertex color. Flat shading, lines and points therefore need nothing extra; two-sided lighting computes
   a back color too, and each polygon takes the one of the side it shows. It costs CPU time per lit vertex; a cache
   of recently lit vertices (keyed by position, normal and color) avoids lighting shared mesh vertices again.
+- Texture coordinate generation also runs per vertex on the CPU. Planes, modelview (for eye planes) and the texture
+  matrix are folded into one small matrix per unit when one of them changes, so a vertex costs a 3x4 product (plus
+  the reflection vector for `GL_SPHERE_MAP`). The texture matrix is applied there with the generated r, which the GPU
+  path drops (vertices carry s, t, q), so projective texturing with eye linear s, t, r, q works; the shader gets an
+  identity matrix for these units.
 - Assembling primitives on the CPU also gives flat shading (the provoking vertex's color on every vertex),
   `glPolygonMode` (outlines and vertices per polygon, culled on the CPU) and the slope part of `glPolygonOffset`
   (computed per polygon, passed as a per-vertex depth bias that the vertex shader adds).

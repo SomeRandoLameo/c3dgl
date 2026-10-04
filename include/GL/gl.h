@@ -187,6 +187,22 @@ typedef void            GLvoid;
 #define GL_CLIP_PLANE5                      0x3005
 #define GL_MAX_CLIP_PLANES                  0x0D32
 
+// Texture coordinate generation (glTexGen, GL)
+#define GL_S                                0x2000
+#define GL_T                                0x2001
+#define GL_R                                0x2002
+#define GL_Q                                0x2003
+#define GL_EYE_LINEAR                       0x2400
+#define GL_OBJECT_LINEAR                    0x2401
+#define GL_SPHERE_MAP                       0x2402
+#define GL_TEXTURE_GEN_MODE                 0x2500
+#define GL_OBJECT_PLANE                     0x2501
+#define GL_EYE_PLANE                        0x2502
+#define GL_TEXTURE_GEN_S                    0x0C60
+#define GL_TEXTURE_GEN_T                    0x0C61
+#define GL_TEXTURE_GEN_R                    0x0C62
+#define GL_TEXTURE_GEN_Q                    0x0C63
+
 // Lighting (glLight, glLightModel, glMaterial, glColorMaterial)
 #define GL_AMBIENT                          0x1200
 #define GL_DIFFUSE                          0x1201
@@ -912,6 +928,18 @@ void glFogiv(GLenum pname, const GLint *params);
 // clipped on the CPU
 void glClipPlane(GLenum plane, const GLdouble *equation);
 void glGetClipPlane(GLenum plane, GLdouble *equation);
+
+// Texture coordinate generation (GL): GL_OBJECT_LINEAR, GL_EYE_LINEAR (plane transformed by the inverse modelview of the
+// glTexGen call), GL_SPHERE_MAP, per texture unit; computed per vertex on the CPU
+void glTexGeni(GLenum coord, GLenum pname, GLint param);
+void glTexGenf(GLenum coord, GLenum pname, GLfloat param);
+void glTexGend(GLenum coord, GLenum pname, GLdouble param);
+void glTexGeniv(GLenum coord, GLenum pname, const GLint *params);
+void glTexGenfv(GLenum coord, GLenum pname, const GLfloat *params);
+void glTexGendv(GLenum coord, GLenum pname, const GLdouble *params);
+void glGetTexGeniv(GLenum coord, GLenum pname, GLint *params);
+void glGetTexGenfv(GLenum coord, GLenum pname, GLfloat *params);
+void glGetTexGendv(GLenum coord, GLenum pname, GLdouble *params);
 
 // Evaluators (GL): order up to 30
 void glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat *points);

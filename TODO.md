@@ -108,7 +108,14 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   flipped back by the texture matrix; any size (NPOT padded), mipmaps per level. `GL_GENERATE_MIPMAP` is not
   supported for ETC1 (would need an encoder)
 * [ ] 1D textures: `glTexImage1D` (stub), `glTexSubImage1D`, `glCopyTexImage1D`... (GL)
-* [ ] Texture coordinate generation `glTexGen*` (GL)
+* [x] Texture coordinate generation (GL): `glTexGen{i,f,d}[v]`, `glGetTexGen{i,f,d}v`, `GL_OBJECT_LINEAR`,
+  `GL_EYE_LINEAR` (plane in eye coordinates, via the inverse modelview of the call), `GL_SPHERE_MAP` (s, t), for s, t,
+  r, q of each texture unit; `GL_TEXTURE_GEN_S..Q` per unit, in `GL_TEXTURE_BIT`/`GL_ENABLE_BIT`, recorded in display
+  lists. Per vertex on the CPU, the texture matrix applied with the generated r (projective texturing); a coordinate
+  that is not generated keeps the vertex's value (r is 0 then, vertices keep no r). Verified in Azahar (api checks
+  render and read back every mode, texgen example); real hardware pending
+  * [~] Performance: ~1.3 us per vertex on top of the normal path (measured 51 -> 69 ms CPU for ~14k vertices; the texgen example now draws ~9k: 45 ms, 20 FPS in Azahar);
+    a cache of generated texcoords for shared mesh vertices (like the lit cache) would cut that for indexed meshes
 * [ ] `glPrioritizeTextures`, `glAreTexturesResident` (GL)
 * [ ] `GL_REPEAT` on NPOT textures samples the padding
 
@@ -250,7 +257,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [ ] Smooth points/lines (GL)
                                       [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
                                       [ ] Accumulation buffer (GL)
-                                      [ ] 1D textures, texgen (GL)
+                                      [ ] 1D textures (GL)       
 [ ] Complete state queries            [ ] Stipple (GL)
 ```
 
@@ -271,4 +278,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Point parameters + sprites (ES) [x] Point size array (ES)
 [x] Compressed textures: paletted + ETC1 (ES) [x] Texture copies (glCopyTexImage2D)
 [x] Logic ops, sample coverage state  [x] Display lists (GL)
+[x] Texture coordinate generation (GL)
 ```

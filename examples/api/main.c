@@ -916,6 +916,211 @@ static bool modelviewTranslation(float x, float y, float z)
 // Display lists: names, compile modes, state and errors at execution time, commands executed immediately while
 // compiling, nesting (late binding, self calls up to the nesting limit), glCallLists with glListBase, client data
 // (vertex arrays, pixels, control points) copied at compile time, drawing from lists. Leaves a frame in progress
+// Color of one pixel: 'r' red, 'b' blue (the two halves of the texgen texture), '?' anything else
+static char texGenPixel(int x, int y)
+{
+    GLubyte p[4];
+    glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    if (p[0] == 255 && p[1] == 0 && p[2] == 0) return 'r';
+    if (p[0] == 0 && p[1] == 0 && p[2] == 255) return 'b';
+    return '?';
+}
+
+static void testTexGen(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+
+    // Defaults: eye linear, s and t planes along x and y, all off
+    GLint mode = 0;
+    GLfloat plane[4];
+    glGetTexGeniv(GL_S, GL_TEXTURE_GEN_MODE, &mode);
+    CHECK(mode == GL_EYE_LINEAR);
+    glGetTexGenfv(GL_T, GL_OBJECT_PLANE, plane);
+    CHECK(plane[0] == 0.0f && plane[1] == 1.0f && plane[2] == 0.0f && plane[3] == 0.0f);
+    glGetTexGenfv(GL_R, GL_EYE_PLANE, plane);
+    CHECK(plane[0] == 0.0f && plane[1] == 0.0f && plane[2] == 0.0f && plane[3] == 0.0f);
+    CHECK(!glIsEnabled(GL_TEXTURE_GEN_S) && !glIsEnabled(GL_TEXTURE_GEN_Q));
+
+    // Errors: sphere map only for s and t, planes only through the v functions
+    glTexGeni(GL_R, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_LINEAR);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glTexGeni(0x1234, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glTexGenf(GL_S, GL_OBJECT_PLANE, 1.0f);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glGetTexGeniv(GL_S, 0x1234, &mode);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP);
+    glGetTexGeniv(GL_T, GL_TEXTURE_GEN_MODE, &mode);
+    CHECK(mode == GL_SPHERE_MAP && glGetError() == GL_NO_ERROR);
+
+    // The eye plane is transformed by the inverse modelview: (1, 0, 0, 0) under a translation by 1 in x is x - 1
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glTranslatef(1.0f, 0.0f, 0.0f);
+    const GLdouble eyePlane[4] = { 1.0, 0.0, 0.0, 0.0 };
+    glTexGendv(GL_S, GL_EYE_PLANE, eyePlane);
+    glLoadIdentity();
+    GLdouble d[4];
+    glGetTexGendv(GL_S, GL_EYE_PLANE, d);
+    CHECK(near(d[0], 1.0) && near(d[1], 0.0) && near(d[2], 0.0) && near(d[3], -1.0));
+    const GLint objectPlane[4] = { 2, 3, 4, 5 };
+    glTexGeniv(GL_Q, GL_OBJECT_PLANE, objectPlane);
+    GLint iv[4];
+    glGetTexGeniv(GL_Q, GL_OBJECT_PLANE, iv);
+    CHECK(iv[0] == 2 && iv[1] == 3 && iv[2] == 4 && iv[3] == 5);
+
+    // Per texture unit; enables in GL_ENABLE_BIT, all of it in GL_TEXTURE_BIT
+    glActiveTexture(GL_TEXTURE1);
+    glEnable(GL_TEXTURE_GEN_S);
+    glGetTexGeniv(GL_T, GL_TEXTURE_GEN_MODE, &mode);
+    CHECK(mode == GL_EYE_LINEAR && glIsEnabled(GL_TEXTURE_GEN_S));
+    glActiveTexture(GL_TEXTURE0);
+    GLboolean b = GL_TRUE;
+    glGetBooleanv(GL_TEXTURE_GEN_S, &b);
+    CHECK(b == GL_FALSE);
+    glPushAttrib(GL_ENABLE_BIT);
+    glEnable(GL_TEXTURE_GEN_T);
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR);
+    glPopAttrib();
+    glGetTexGeniv(GL_S, GL_TEXTURE_GEN_MODE, &mode);
+    CHECK(!glIsEnabled(GL_TEXTURE_GEN_T) && mode == GL_OBJECT_LINEAR);
+    glPushAttrib(GL_TEXTURE_BIT);
+    glEnable(GL_TEXTURE_GEN_T);
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_EYE_LINEAR);
+    glPopAttrib();
+    glGetTexGeniv(GL_S, GL_TEXTURE_GEN_MODE, &mode);
+    CHECK(!glIsEnabled(GL_TEXTURE_GEN_T) && mode == GL_OBJECT_LINEAR);
+
+    // Display lists record glTexGen
+    GLuint list = glGenLists(1);
+    glNewList(list, GL_COMPILE);
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP);
+    glTexGenfv(GL_S, GL_OBJECT_PLANE, (const GLfloat[]){ 6.0f, 7.0f, 8.0f, 9.0f });
+    glEndList();
+    glGetTexGeniv(GL_S, GL_TEXTURE_GEN_MODE, &mode);
+    CHECK(mode == GL_OBJECT_LINEAR);
+    glCallList(list);
+    glGetTexGeniv(GL_S, GL_TEXTURE_GEN_MODE, &mode);
+    glGetTexGenfv(GL_S, GL_OBJECT_PLANE, plane);
+    CHECK(mode == GL_SPHERE_MAP && plane[0] == 6.0f && plane[3] == 9.0f);
+    glDeleteLists(list, 1);
+    glPopAttrib();
+    CHECK(glGetError() == GL_NO_ERROR);
+
+    // Rendering. 8x8 texture, left half red, right half blue: s < 0.5 is red, s > 0.5 blue
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    GLubyte texels[8*8*4];
+    for (int i = 0; i < 8*8; i++)
+    {
+        bool right = (i % 8) >= 4;
+        texels[4*i] = right ? 0 : 255;
+        texels[4*i + 1] = 0;
+        texels[4*i + 2] = right ? 255 : 0;
+        texels[4*i + 3] = 255;
+    }
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+    glEnable(GL_TEXTURE_2D);
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, 400.0, 0.0, 240.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glColor3ub(255, 255, 255);
+
+    // Object linear s = x/16 replaces the current s (0.9: blue everywhere)
+    const GLfloat sPlane[4] = { 1.0f/16.0f, 0.0f, 0.0f, 0.0f };
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR);
+    glTexGenfv(GL_S, GL_OBJECT_PLANE, sPlane);
+    glEnable(GL_TEXTURE_GEN_S);
+    glTexCoord2f(0.9f, 0.0f);
+    glRecti(0, 20, 16, 36);
+    CHECK(texGenPixel(3, 28) == 'r' && texGenPixel(12, 28) == 'b');
+
+    // Eye linear: the plane was given under a translation by 100, so s = (x_eye - 100)/16
+    glTranslatef(100.0f, 0.0f, 0.0f);
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_EYE_LINEAR);
+    glTexGenfv(GL_S, GL_EYE_PLANE, sPlane);
+    glLoadIdentity();
+    glRecti(100, 20, 116, 36);
+    CHECK(texGenPixel(103, 28) == 'r' && texGenPixel(112, 28) == 'b');
+
+    // Generated r goes through the texture matrix (s' = r): s = 0, r = x/16
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR);
+    glTexGenfv(GL_S, GL_OBJECT_PLANE, (const GLfloat[]){ 0.0f, 0.0f, 0.0f, 0.0f });
+    glTexGeni(GL_R, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR);
+    glTexGenfv(GL_R, GL_OBJECT_PLANE, (const GLfloat[]){ 1.0f/16.0f, 0.0f, 0.0f, -200.0f/16.0f });
+    glEnable(GL_TEXTURE_GEN_R);
+    glMatrixMode(GL_TEXTURE);
+    const GLfloat swapSR[16] = { 0, 0, 0, 0,  0, 1, 0, 0,  1, 0, 0, 0,  0, 0, 0, 1 };   // Column-major: s' = r
+    glLoadMatrixf(swapSR);
+    glMatrixMode(GL_MODELVIEW);
+    glRecti(200, 20, 216, 36);
+    CHECK(texGenPixel(203, 28) == 'r' && texGenPixel(212, 28) == 'b');
+    glMatrixMode(GL_TEXTURE);
+    glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    glDisable(GL_TEXTURE_GEN_R);
+
+    // Generated q divides (projection mode on unit 0): s = x/16, q = 2
+    glTexGenfv(GL_S, GL_OBJECT_PLANE, (const GLfloat[]){ 1.0f/16.0f, 0.0f, 0.0f, -300.0f/16.0f });
+    glTexGeni(GL_Q, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR);
+    glTexGenfv(GL_Q, GL_OBJECT_PLANE, (const GLfloat[]){ 0.0f, 0.0f, 0.0f, 2.0f });
+    glEnable(GL_TEXTURE_GEN_Q);
+    glRecti(300, 20, 332, 36);
+    CHECK(texGenPixel(306, 28) == 'r' && texGenPixel(312, 28) == 'r' && texGenPixel(328, 28) == 'b');
+    glDisable(GL_TEXTURE_GEN_Q);
+
+    // Unit 1 (unit 0 off): object linear s = (x - 20)/16
+    glDisable(GL_TEXTURE_GEN_S);
+    glDisable(GL_TEXTURE_2D);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glEnable(GL_TEXTURE_2D);
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR);
+    glTexGenfv(GL_S, GL_OBJECT_PLANE, (const GLfloat[]){ 1.0f/16.0f, 0.0f, 0.0f, -20.0f/16.0f });
+    glEnable(GL_TEXTURE_GEN_S);
+    glRecti(20, 60, 36, 76);
+    CHECK(texGenPixel(23, 68) == 'r' && texGenPixel(32, 68) == 'b');
+    glDisable(GL_TEXTURE_GEN_S);
+    glDisable(GL_TEXTURE_2D);
+    glActiveTexture(GL_TEXTURE0);
+    glEnable(GL_TEXTURE_2D);
+
+    // Sphere map, seen straight on (eye position ~ (0, 0, -500)): normal (1, 0, 1) reflects to s ~ 0.85, (-1, 0, 1)
+    // to s ~ 0.15
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(-200.0, 200.0, -120.0, 120.0, -1000.0, 1000.0);
+    glMatrixMode(GL_MODELVIEW);
+    glTranslatef(0.0f, 0.0f, -500.0f);
+    glEnable(GL_NORMALIZE);
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP);
+    glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP);
+    glEnable(GL_TEXTURE_GEN_S);
+    glEnable(GL_TEXTURE_GEN_T);
+    glNormal3f(1.0f, 0.0f, 1.0f);
+    glRecti(-28, -8, -12, 8);
+    glNormal3f(-1.0f, 0.0f, 1.0f);
+    glRecti(12, -8, 28, 8);
+    CHECK(texGenPixel(180, 120) == 'b' && texGenPixel(220, 120) == 'r');
+
+    glDeleteTextures(1, &tex);
+    glPopAttrib();
+    CHECK(glGetError() == GL_NO_ERROR);
+}
+
 static void testDisplayLists(void)
 {
     glPushAttrib(GL_ALL_ATTRIB_BITS);
@@ -1426,6 +1631,7 @@ int main(void)
     testCopyTexImage();
     testLogicOpAndMultisample();
     testDisplayLists();
+    testTexGen();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

@@ -176,6 +176,23 @@ typedef struct {
     u8 rgbScale, alphaScale;    // 1, 2, 4
 } TexEnvState;
 
+// Texture coordinate generation of one unit (glTexGen), coordinates s, t, r, q; see generateTexCoords()
+typedef struct {
+    u8 enabled;                 // GL_TEXTURE_GEN_S..Q, bit per coordinate
+    GLenum mode[4];
+    float objectPlane[4][4];
+    float eyePlane[4][4];       // Eye coordinates (transformed by the inverse modelview of the glTexGen call)
+} TexGenState;
+
+// What generateTexCoords() does per vertex for one unit, derived from the texgen state, modelview and texture matrix:
+// (s, t, q) = gen * (x, y, z, 1) + pass * (s, t, q of the vertex) + sphere * (sphere map s, t)
+typedef struct {
+    float gen[3][4];
+    float pass[3][3];
+    float sphere[3][2];
+    bool usesPass, usesSphere;
+} TexGenTransform;
+
 typedef struct {
     GLuint texture;             // 0: unit not used (set in prepareDraw)
     TexEnvState env;            // Zeroed for unused units, so they don't split batches
@@ -188,6 +205,7 @@ typedef struct {
     u32 matrixSerial;           // Matrix version (0 for clipSpace)
     u32 texMatrixSerial;        // Texture matrix version (0 when untextured or only sprite units are textured)
     u8 spriteUnits;             // Point sprites: units with GL_COORD_REPLACE_OES, their texture matrix is not applied
+    u8 texGenUnits;             // Units with texgen: their texcoords come with the texture matrix applied (on the CPU)
     bool texQ;                  // Unit 0 texcoords with q != 1 were used (projection mode), only when textured
     bool blend;
     GLenum blendSrc, blendDst;
@@ -314,6 +332,7 @@ typedef struct {
     X(MATERIAL,         setMaterial(w[0].u, w[1].u, &w[2].f)) \
     X(COLOR_MATERIAL,   glColorMaterial(w[0].u, w[1].u)) \
     X(FOG,              setFog(w[0].u, &w[1].f)) \
+    X(TEX_GEN,          setTexGen(w[0].u, w[1].u, &w[3].f, w[2].i != 0)) \
     X(CLIP_PLANE,       setClipPlane(w[0].u, (const double[4]){ listDouble(&w[1]), listDouble(&w[3]), \
                                                                 listDouble(&w[5]), listDouble(&w[7]) })) \
     X(BIND_TEXTURE,     glBindTexture(w[0].u, w[1].u)) \
@@ -380,6 +399,10 @@ static struct {
     DrawState state;
     bool texture2D[C3DGL_TEXTURE_UNITS];
     GLuint boundTexture[C3DGL_TEXTURE_UNITS];
+    TexGenState texGen[C3DGL_TEXTURE_UNITS];
+    u32 texGenSerial;                   // Incremented on every texgen state change
+    TexGenTransform texGenTransform[C3DGL_TEXTURE_UNITS];   // For texGenTransformSerials, see updateTexGenTransforms()
+    u32 texGenTransformSerials[3];      // matrixSerial, texMatrixSerial, texGenSerial; all 0: stale
     int activeTexture, clientActiveTexture;     // glActiveTexture, glClientActiveTexture: 0..2
     PixelStore unpack, pack;
     ProxyLevel proxy2D[11];             // Per level, 1024 >> 10 = 1
@@ -1004,11 +1027,12 @@ static void setupTexEnv(C3D_TexEnv *env, int unit, const TexEnvState *e, GPU_TEX
 }
 
 // Texture matrix of `unit` as shader uniform rows s, t, q; s and t scaled from the image to the padded texture size.
-// sprite: the texcoords are point sprite coordinates, which GL does not transform
-static void applyTextureMatrix(int unit, const Texture *t, bool sprite, bool *projective)
+// identity: the texcoords need no texture matrix (point sprite coordinates, which GL does not transform, or generated
+// texcoords, transformed on the CPU already)
+static void applyTextureMatrix(int unit, const Texture *t, bool identity, bool *projective)
 {
-    static const Mat4 identity = {{ 1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1 }};
-    const Mat4 *tm = sprite? &identity : &gl.stack[2 + unit][gl.stackDepth[2 + unit]];
+    static const Mat4 identityMatrix = {{ 1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1 }};
+    const Mat4 *tm = identity? &identityMatrix : &gl.stack[2 + unit][gl.stackDepth[2 + unit]];
     float scale[2] = { (float)t->width/t->tex.width, (float)t->height/t->tex.height };
     for (int row = 0; row < 2; row++)
     {
@@ -1141,10 +1165,11 @@ static void applyState(const DrawState *s, const DrawState *prev)
     for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
     {
         const TexUnitState *u = &s->units[unit];
-        bool sprite = (s->spriteUnits >> unit) & 1;
+        bool sprite = (s->spriteUnits >> unit) & 1, texGen = (s->texGenUnits >> unit) & 1;
         if ((prev != NULL) && (memcmp(u, &prev->units[unit], sizeof(*u)) == 0) &&
             ((u->texture == 0) || ((s->texMatrixSerial == prev->texMatrixSerial) && (s->texQ == prev->texQ) &&
-                                   (sprite == ((prev->spriteUnits >> unit) & 1)))))
+                                   (sprite == ((prev->spriteUnits >> unit) & 1)) &&
+                                   (texGen == ((prev->texGenUnits >> unit) & 1)))))
             continue;
 
         C3D_TexEnv *env = C3D_GetTexEnv(unit);
@@ -1164,7 +1189,7 @@ static void applyState(const DrawState *s, const DrawState *prev)
 
         Texture *t = &gl.textures[u->texture];
         bool projective;
-        applyTextureMatrix(unit, t, sprite, &projective);
+        applyTextureMatrix(unit, t, sprite || texGen, &projective);
 
         // Unit 0 can let PICA divide s and t by q per pixel (projection mode); units 1/2 divide per vertex in the shader
         if (unit == 0)
@@ -1233,8 +1258,12 @@ static void prepareDraw(bool clipSpace, bool points)
         if (u->texture) textured |= 1u << unit;
     }
     key.spriteUnits = (points && gl.pointSprite)? (gl.coordReplace & textured) : 0;
-    key.texMatrixSerial = (textured & ~key.spriteUnits)? gl.texMatrixSerial : 0;
-    key.texQ = (key.units[0].texture != 0) && gl.texQUsed && !(key.spriteUnits & 1);
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) if (gl.texGen[unit].enabled) key.texGenUnits |= 1u << unit;
+    key.texGenUnits &= textured & ~key.spriteUnits;
+    key.texMatrixSerial = (textured & ~key.spriteUnits & ~key.texGenUnits)? gl.texMatrixSerial : 0;
+
+    // Generated texcoords may have any q (eye linear q, projective texture matrices): unit 0 in projection mode
+    key.texQ = (key.units[0].texture != 0) && (gl.texQUsed || (key.texGenUnits & 1)) && !(key.spriteUnits & 1);
     key.fog = gl.fog;
     if (gl.fog)
     {
@@ -1919,6 +1948,16 @@ static void updateNormalMatrix(void)
     gl.normalRescale = (len > 0.0f)? 1.0f/len : 1.0f;
 }
 
+// Object space normal -> eye space. Not normalized unless asked for, like GL (a scaling modelview changes the brightness)
+static void eyeNormal(const float normal[3], float n[3])
+{
+    updateNormalMatrix();
+    const float *nm = gl.normalMatrix;
+    for (int k = 0; k < 3; k++) n[k] = nm[k*3]*normal[0] + nm[k*3 + 1]*normal[1] + nm[k*3 + 2]*normal[2];
+    if (gl.normalize) normalize3(n);
+    else if (gl.rescaleNormal) for (int k = 0; k < 3; k++) n[k] *= gl.normalRescale;
+}
+
 // Lit color of one side: eye = vertex in eye space, n = eye space normal of that side
 static void shadeFace(const Material *m, const float eye[3], const float n[3], u8 out[4])
 {
@@ -1996,7 +2035,6 @@ static void shadeFace(const Material *m, const float eye[3], const float n[3], u
 static void lightVertex(Vertex *v, const float normal[3])
 {
     if (gl.colorMaterial) applyColorMaterial(v->color);
-    updateNormalMatrix();
 
     // The eye space position is only needed for positional lights and the local viewer
     bool needEye = gl.lighting.localViewer;
@@ -2009,12 +2047,8 @@ static void lightVertex(Vertex *v, const float normal[3])
         if ((eye[3] != 1.0f) && (eye[3] != 0.0f)) for (int k = 0; k < 3; k++) eye[k] /= eye[3];
     }
 
-    // Not normalized unless asked for, like GL (a scaling modelview changes the brightness)
-    const float *nm = gl.normalMatrix;
     float n[3];
-    for (int k = 0; k < 3; k++) n[k] = nm[k*3]*normal[0] + nm[k*3 + 1]*normal[1] + nm[k*3 + 2]*normal[2];
-    if (gl.normalize) normalize3(n);
-    else if (gl.rescaleNormal) for (int k = 0; k < 3; k++) n[k] *= gl.normalRescale;
+    eyeNormal(normal, n);
 
     shadeFace(&gl.lighting.material[0], eye, n, v->color);
     if (gl.lighting.twoSide)
@@ -2062,9 +2096,114 @@ static void lightVertexCached(Vertex *v, const float normal[3])
     memcpy(e->backColor, v->backColor, 4);
 }
 
-// Every vertex goes through here: lighting, then primitive assembly
+//----------------------------------------------------------------------------------
+// Texture coordinate generation (GL 1.1 section 2.10.4): per vertex on the CPU, when the vertex is submitted
+//----------------------------------------------------------------------------------
+// Generated coordinates of the units with texgen replace the vertex's ones; the other coordinates of such a unit stay
+// (r is 0 then: vertices keep no r). The unit's texture matrix is applied here too, with all of s, t, r, q, so that a
+// generated r takes part (projective texturing: eye linear s, t, r, q times the light's matrices); prepareDraw() gives
+// these units an identity matrix in the shader.
+// Everything linear is folded into one TexGenTransform per unit: eye planes times the modelview are object planes,
+// and the texture matrix rows s, t, q times the per-coordinate inputs give the final rows
+static void updateTexGenTransforms(void)
+{
+    u32 serials[3] = { gl.matrixSerial, gl.texMatrixSerial, gl.texGenSerial };
+    if (memcmp(serials, gl.texGenTransformSerials, sizeof(serials)) == 0) return;
+    memcpy(gl.texGenTransformSerials, serials, sizeof(serials));
+
+    const float *mv = gl.stack[0][gl.stackDepth[0]].m;
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+    {
+        const TexGenState *g = &gl.texGen[unit];
+        TexGenTransform *x = &gl.texGenTransform[unit];
+        memset(x, 0, sizeof(*x));
+        if (!g->enabled) continue;
+
+        // Input coordinate c (s, t, r, q) = gen[c] . (x, y, z, 1) + pass[c] . (s, t, q) + sphere[c] . (s, t)
+        float gen[4][4] = {{ 0 }}, pass[4][3] = {{ 0 }}, sphere[4][2] = {{ 0 }};
+        for (int c = 0; c < 4; c++)
+        {
+            if (!((g->enabled >> c) & 1))
+            {
+                if (c != 2) { pass[c][(c == 3)? 2 : c] = 1.0f; x->usesPass = true; }     // r stays 0
+                continue;
+            }
+            switch (g->mode[c])
+            {
+                case GL_OBJECT_LINEAR: memcpy(gen[c], g->objectPlane[c], sizeof(gen[c])); break;
+                case GL_EYE_LINEAR:
+                    // plane . (MV p) = (plane^T MV) . p
+                    for (int j = 0; j < 4; j++)
+                    {
+                        const float *p = g->eyePlane[c];
+                        gen[c][j] = p[0]*mv[j*4] + p[1]*mv[j*4 + 1] + p[2]*mv[j*4 + 2] + p[3]*mv[j*4 + 3];
+                    }
+                    break;
+                default: sphere[c][c] = 1.0f; x->usesSphere = true; break;     // GL_SPHERE_MAP: s, t only
+            }
+        }
+
+        const float *tm = gl.stack[2 + unit][gl.stackDepth[2 + unit]].m;
+        static const int rows[3] = { 0, 1, 3 };     // s, t, q
+        for (int i = 0; i < 3; i++)
+        {
+            const float r[4] = { tm[rows[i]], tm[4 + rows[i]], tm[8 + rows[i]], tm[12 + rows[i]] };
+            for (int c = 0; c < 4; c++)
+            {
+                for (int j = 0; j < 4; j++) x->gen[i][j] += r[c]*gen[c][j];
+                for (int j = 0; j < 3; j++) x->pass[i][j] += r[c]*pass[c][j];
+                for (int j = 0; j < 2; j++) x->sphere[i][j] += r[c]*sphere[c][j];
+            }
+        }
+    }
+}
+
+// GL_SPHERE_MAP s, t: r = u - 2 n (n.u) with u the unit vector from the eye to the vertex and n the eye space normal,
+// then s, t = r_x/m + 1/2, r_y/m + 1/2 with m = 2 sqrt(r_x^2 + r_y^2 + (r_z + 1)^2)
+static void sphereMap(const Vertex *v, const float normal[3], float out[2])
+{
+    float u[4], n[3], r[3];
+    mat4Transform(&gl.stack[0][gl.stackDepth[0]], v->pos, u);
+    if ((u[3] != 1.0f) && (u[3] != 0.0f)) for (int k = 0; k < 3; k++) u[k] /= u[3];
+    normalize3(u);
+    eyeNormal(normal, n);
+    float nu = 2.0f*dot3(n, u);
+    for (int k = 0; k < 3; k++) r[k] = u[k] - nu*n[k];
+    float m = 2.0f*sqrtf(r[0]*r[0] + r[1]*r[1] + (r[2] + 1.0f)*(r[2] + 1.0f));
+    float inv = (m > 0.0f)? 1.0f/m : 0.0f;
+    out[0] = r[0]*inv + 0.5f;
+    out[1] = r[1]*inv + 0.5f;
+}
+
+static void generateTexCoords(Vertex *v, const float normal[3])
+{
+    updateTexGenTransforms();
+    float sphere[2];
+    bool haveSphere = false;
+    const float *p = v->pos;
+
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+    {
+        if (!gl.texGen[unit].enabled) continue;
+        const TexGenTransform *x = &gl.texGenTransform[unit];
+        float *tc = (unit == 0)? v->tex : v->texExtra[unit - 1];
+        float out[3];
+        for (int i = 0; i < 3; i++) out[i] = x->gen[i][0]*p[0] + x->gen[i][1]*p[1] + x->gen[i][2]*p[2] + x->gen[i][3];
+        if (x->usesPass)
+            for (int i = 0; i < 3; i++) out[i] += x->pass[i][0]*tc[0] + x->pass[i][1]*tc[1] + x->pass[i][2]*tc[2];
+        if (x->usesSphere)
+        {
+            if (!haveSphere) { sphereMap(v, normal, sphere); haveSphere = true; }
+            for (int i = 0; i < 3; i++) out[i] += x->sphere[i][0]*sphere[0] + x->sphere[i][1]*sphere[1];
+        }
+        memcpy(tc, out, sizeof(out));
+    }
+}
+
+// Every vertex goes through here: texgen, lighting, then primitive assembly
 static void submitLitVertex(Vertex *v, const float normal[3], bool edge)
 {
+    if (gl.texGen[0].enabled | gl.texGen[1].enabled | gl.texGen[2].enabled) generateTexCoords(v, normal);
     if (gl.lightingEnabled) lightVertexCached(v, normal);
     submitVertex(v, edge);
 }
@@ -2167,6 +2306,12 @@ bool c3dglInit(void)
         e->operandRgb[2] = GL_SRC_ALPHA;
         e->operandAlpha[0] = e->operandAlpha[1] = e->operandAlpha[2] = GL_SRC_ALPHA;
         e->rgbScale = e->alphaScale = 1;
+
+        // glTexGen defaults: eye linear, s and t planes along x and y
+        TexGenState *g = &gl.texGen[unit];
+        for (int c = 0; c < 4; c++) g->mode[c] = GL_EYE_LINEAR;
+        g->objectPlane[0][0] = g->eyePlane[0][0] = 1.0f;
+        g->objectPlane[1][1] = g->eyePlane[1][1] = 1.0f;
     }
     for (int unit = 1; unit < C3DGL_TEXTURE_UNITS; unit++) gl.current.texExtra[unit - 1][2] = 1.0f;    // q
     gl.state.stencilFunc = GL_ALWAYS;
@@ -2302,6 +2447,11 @@ static void setCapability(GLenum cap, bool enable)
     switch (cap)
     {
         case GL_TEXTURE_2D: gl.texture2D[gl.activeTexture] = enable; break;
+        case GL_TEXTURE_GEN_S: case GL_TEXTURE_GEN_T: case GL_TEXTURE_GEN_R: case GL_TEXTURE_GEN_Q:
+            if (enable) gl.texGen[gl.activeTexture].enabled |= 1u << (cap - GL_TEXTURE_GEN_S);
+            else gl.texGen[gl.activeTexture].enabled &= ~(1u << (cap - GL_TEXTURE_GEN_S));
+            gl.texGenSerial++;
+            break;
         case GL_BLEND: gl.state.blend = enable; break;
         case GL_COLOR_LOGIC_OP: gl.state.logicOp = enable; break;
         case GL_DEPTH_TEST: gl.state.depthTest = enable; break;
@@ -2381,6 +2531,8 @@ GLboolean glIsEnabled(GLenum cap)
     switch (cap)
     {
         case GL_TEXTURE_2D: return gl.texture2D[gl.activeTexture];
+        case GL_TEXTURE_GEN_S: case GL_TEXTURE_GEN_T: case GL_TEXTURE_GEN_R: case GL_TEXTURE_GEN_Q:
+            return (gl.texGen[gl.activeTexture].enabled >> (cap - GL_TEXTURE_GEN_S)) & 1;
         case GL_BLEND: return gl.state.blend;
         case GL_COLOR_LOGIC_OP: return gl.state.logicOp;
         case GL_DEPTH_TEST: return gl.state.depthTest;
@@ -2648,6 +2800,7 @@ static int getState(GLenum pname, double v[16], bool *normalized)
                 ((pname >= GL_LIGHT0) && (pname <= GL_LIGHT7)) || (pname == GL_COLOR_MATERIAL) ||
                 ((pname >= GL_CLIP_PLANE0) && (pname < GL_CLIP_PLANE0 + C3DGL_MAX_CLIP_PLANES)) ||
                 (pname == GL_NORMALIZE) || (pname == GL_RESCALE_NORMAL) || (pname == GL_POINT_SPRITE_OES) ||
+                ((pname >= GL_TEXTURE_GEN_S) && (pname <= GL_TEXTURE_GEN_Q)) ||
                 ((pname >= GL_MAP1_COLOR_4) && (pname <= GL_MAP1_VERTEX_4)) || ((pname >= GL_MAP2_COLOR_4) && (pname <= GL_MAP2_VERTEX_4)))
             {
                 v[0] = glIsEnabled(pname);
@@ -3694,6 +3847,114 @@ void glGetClipPlane(GLenum plane, GLdouble *equation)
 {
     const float *p = getClipPlane(plane);
     if (p != NULL) for (int i = 0; i < 4; i++) equation[i] = p[i];
+}
+
+//----------------------------------------------------------------------------------
+// OpenGL: texture coordinate generation (glTexGen) of the active texture unit, see generateTexCoords()
+//----------------------------------------------------------------------------------
+static int texGenParamCount(GLenum pname) { return ((pname == GL_OBJECT_PLANE) || (pname == GL_EYE_PLANE))? 4 : 1; }
+
+// p: 1 value for GL_TEXTURE_GEN_MODE, 4 for the planes. scalar: from glTexGen{i,f,d}, which only take the mode
+static void setTexGen(GLenum coord, GLenum pname, const float *p, bool scalar)
+{
+    LIST_SAVE(TEX_GEN, "uuiF", coord, pname, (int)scalar, texGenParamCount(pname), p);
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    if ((coord < GL_S) || (coord > GL_Q)) { setError(GL_INVALID_ENUM); return; }
+    int c = coord - GL_S;
+    TexGenState *g = &gl.texGen[gl.activeTexture];
+    gl.texGenSerial++;
+
+    switch (pname)
+    {
+        case GL_TEXTURE_GEN_MODE:
+        {
+            GLenum mode = (GLenum)p[0];
+            if ((mode != GL_OBJECT_LINEAR) && (mode != GL_EYE_LINEAR) && ((mode != GL_SPHERE_MAP) || (c >= 2)))
+            {
+                setError(GL_INVALID_ENUM);
+                return;
+            }
+            g->mode[c] = mode;
+            return;
+        }
+        case GL_OBJECT_PLANE:
+            if (scalar) break;
+            memcpy(g->objectPlane[c], p, sizeof(g->objectPlane[c]));
+            return;
+        case GL_EYE_PLANE:
+        {
+            if (scalar) break;
+            // Stored in eye coordinates: p_eye = p * M^-1 with the current modelview, like clip planes
+            Mat4 inv;
+            mat4Invert(&gl.stack[0][gl.stackDepth[0]], &inv);
+            for (int i = 0; i < 4; i++)
+                g->eyePlane[c][i] = p[0]*inv.m[i*4] + p[1]*inv.m[i*4 + 1] + p[2]*inv.m[i*4 + 2] + p[3]*inv.m[i*4 + 3];
+            return;
+        }
+        default: break;
+    }
+    setError(GL_INVALID_ENUM);
+}
+
+void glTexGenf(GLenum coord, GLenum pname, GLfloat param)
+{
+    const float p[4] = { param, 0.0f, 0.0f, 0.0f };     // Padded: a list records 4 values for the plane names
+    setTexGen(coord, pname, p, true);
+}
+
+void glTexGeni(GLenum coord, GLenum pname, GLint param) { glTexGenf(coord, pname, (GLfloat)param); }
+void glTexGend(GLenum coord, GLenum pname, GLdouble param) { glTexGenf(coord, pname, (GLfloat)param); }
+void glTexGenfv(GLenum coord, GLenum pname, const GLfloat *params) { setTexGen(coord, pname, params, false); }
+
+void glTexGeniv(GLenum coord, GLenum pname, const GLint *params)
+{
+    float p[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    for (int i = 0; i < texGenParamCount(pname); i++) p[i] = (float)params[i];
+    setTexGen(coord, pname, p, false);
+}
+
+void glTexGendv(GLenum coord, GLenum pname, const GLdouble *params)
+{
+    float p[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    for (int i = 0; i < texGenParamCount(pname); i++) p[i] = (float)params[i];
+    setTexGen(coord, pname, p, false);
+}
+
+// Returns the count, 0 on error
+static int getTexGen(GLenum coord, GLenum pname, float v[4])
+{
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return 0; }
+    if ((coord < GL_S) || (coord > GL_Q)) { setError(GL_INVALID_ENUM); return 0; }
+    int c = coord - GL_S;
+    const TexGenState *g = &gl.texGen[gl.activeTexture];
+    switch (pname)
+    {
+        case GL_TEXTURE_GEN_MODE: v[0] = g->mode[c]; return 1;
+        case GL_OBJECT_PLANE: memcpy(v, g->objectPlane[c], 4*sizeof(float)); return 4;
+        case GL_EYE_PLANE: memcpy(v, g->eyePlane[c], 4*sizeof(float)); return 4;
+        default: setError(GL_INVALID_ENUM); return 0;
+    }
+}
+
+void glGetTexGenfv(GLenum coord, GLenum pname, GLfloat *params)
+{
+    float v[4];
+    int n = getTexGen(coord, pname, v);
+    for (int i = 0; i < n; i++) params[i] = v[i];
+}
+
+void glGetTexGeniv(GLenum coord, GLenum pname, GLint *params)
+{
+    float v[4];
+    int n = getTexGen(coord, pname, v);
+    for (int i = 0; i < n; i++) params[i] = (GLint)lroundf(v[i]);
+}
+
+void glGetTexGendv(GLenum coord, GLenum pname, GLdouble *params)
+{
+    float v[4];
+    int n = getTexGen(coord, pname, v);
+    for (int i = 0; i < n; i++) params[i] = v[i];
 }
 
 //----------------------------------------------------------------------------------
@@ -5597,6 +5858,7 @@ typedef struct {
     bool texture2D[C3DGL_TEXTURE_UNITS];
     GLuint boundTexture[C3DGL_TEXTURE_UNITS];
     SavedTexParams texParams[C3DGL_TEXTURE_UNITS];
+    TexGenState texGen[C3DGL_TEXTURE_UNITS];
     int activeTexture, matrixMode;
     bool map1Enabled[9], map2Enabled[9], autoNormal;
     int grid1n, grid2un, grid2vn;
@@ -5666,6 +5928,7 @@ void glPushAttrib(GLbitfield mask)
     a->clearStencil = gl.clearStencil;
     memcpy(a->texture2D, gl.texture2D, sizeof(a->texture2D));
     memcpy(a->boundTexture, gl.boundTexture, sizeof(a->boundTexture));
+    memcpy(a->texGen, gl.texGen, sizeof(a->texGen));
     for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
     {
         GLuint id = gl.boundTexture[unit];
@@ -5821,6 +6084,8 @@ void glPopAttrib(void)
         gl.offsetLine = a->offsetLine;
         gl.offsetPoint = a->offsetPoint;
         memcpy(gl.texture2D, a->texture2D, sizeof(gl.texture2D));
+        for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) gl.texGen[unit].enabled = a->texGen[unit].enabled;
+        gl.texGenSerial++;
         gl.lightingEnabled = a->lightingEnabled;
         gl.lightEnabled = a->lightEnabled;
         gl.colorMaterial = a->colorMaterial;
@@ -5855,9 +6120,12 @@ void glPopAttrib(void)
     }
     if (mask & GL_TEXTURE_BIT)
     {
-        // Enables, environments, bindings and the active unit, then the parameters of the textures bound at push time
+        // Enables, environments, texgen, bindings and the active unit, then the parameters of the textures bound at
+        // push time
         for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) st->units[unit].env = sv->units[unit].env;
         memcpy(gl.texture2D, a->texture2D, sizeof(gl.texture2D));
+        memcpy(gl.texGen, a->texGen, sizeof(gl.texGen));
+        gl.texGenSerial++;
         for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
         {
             const SavedTexParams *p = &a->texParams[unit];
