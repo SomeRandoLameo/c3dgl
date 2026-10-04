@@ -3306,8 +3306,10 @@ void glClear(GLbitfield mask)
     ensureFrame();
     flushVertexCache();
 
-    // Clears run as memory fills outside the command list; split it so earlier draws stay before the clear
-    if (gl.drawnThisFrame) C3D_FrameSplit(0);
+    // Clears run as memory fills outside the command list; split it so earlier draws stay before the clear. The split
+    // part is flushed from the CPU cache: C3D_FrameEnd(GX_CMDLIST_FLUSH) (see suspendFrame()) flushes only the last part,
+    // and the GPU locks up on a stale command list (real hardware only)
+    if (gl.drawnThisFrame) C3D_FrameSplit(GX_CMDLIST_FLUSH);
 
     // D24S8: stencil in the top byte, depth reversed (see depthFunc())
     u32 depthStencil = ((u32)gl.clearStencil << 24) | (u32)((1.0f - gl.clearDepth)*0xFFFFFF);
@@ -7902,7 +7904,7 @@ static void copyColorRect(int x, int y, int w, int h)
     GSPGPU_FlushDataCache(tex->data, tex->size);    // No dirty cache lines may be written back over the copy
 
     flushVertexCache();
-    if (gl.drawnThisFrame) C3D_FrameSplit(0);
+    if (gl.drawnThisFrame) C3D_FrameSplit(GX_CMDLIST_FLUSH);     // Flushed, see glClear()
     u8 *in = (u8 *)gl.targets[gl.screen]->frameBuf.colorBuf + (size_t)line0*READ_LINE_BYTES;
     GX_TextureCopy((u32 *)in, GX_BUFFER_DIM(lineBytes >> 4, 0), (u32 *)tex->data,
                    GX_BUFFER_DIM(lineBytes >> 4, (texWidth*8*4 - lineBytes) >> 4), (u32)(lines/8*lineBytes),

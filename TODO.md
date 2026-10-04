@@ -213,7 +213,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   atlas (one batch per run of glyphs); `glCopyPixels(GL_COLOR)` is a GX texture copy queued between the draws (no wait).
   Depth/stencil images are read, tested (scissor, stencil, depth, masks) and written back on the CPU (waits for the GPU).
   Verified in Azahar (api checks in Vulkan at 1x and the software renderer, pixels example)
-  * [ ] Real hardware not tested yet
+  * [x] Verified on real hardware (api checks, pixels example, 2026-10-04)
   * [~] Texturing does not apply to `glDrawPixels`/`glBitmap` fragments; depth images do not write the raster color
   * [x] `GL_COLOR_INDEX` images (also `GL_BITMAP`) through the `I_TO_*` pixel maps
   * [~] Feedback/selection tokens come with feedback mode
@@ -227,7 +227,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   `GL_PIXEL_MODE_BIT` (the maps in no group), both recorded in display lists. On the CPU during image conversion
   (unsigned bytes through 256-entry tables); `glCopyPixels(GL_COLOR)` with a color transfer is read back on the CPU.
   Verified in Azahar (api checks in Vulkan at 1x/2x and the software renderer, pixels example)
-  * [ ] Real hardware not tested yet
+  * [x] Verified on real hardware (api checks, pixels example, 2026-10-04)
 
 ## Desktop GL 1.1 Only
 
@@ -280,8 +280,12 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] Resource use: only changed GPU state is sent per batch (command buffer about halved), one vertex cache flush per
   command list submission instead of one per batch, `glEvalMesh2` evaluates each grid point once
 * [~] Real hardware verification (all features up to color buffers verified on hardware; display lists, texgen, internal
-  formats, 1D textures and color buffers through the api checks, 2026-10-04). Drawing pixels not yet
+  formats, 1D textures, color buffers, drawing pixels, pixel transfer and default textures through the api checks,
+  2026-10-04)
   * [x] Fixed: GPU lockup on the first draw (since bf91bd4): the vertex shader left `outtc0.w` unwritten
+  * [x] Fixed: GPU lockup when a readback followed `glCopyPixels(GL_COLOR)` or a `glClear` after draws in a frame: the
+    command list split before the GX command was not flushed from the CPU cache (`C3D_FrameSplit(0)`), and
+    `C3D_FrameEnd(GX_CMDLIST_FLUSH)` only flushes its own last part
 
 ## Known Bugs / Limits
 
