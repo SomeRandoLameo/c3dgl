@@ -346,6 +346,7 @@ typedef void            GLvoid;
 #define GL_ALPHA_BITS                       0x0D55
 #define GL_DEPTH_BITS                       0x0D56
 #define GL_STENCIL_BITS                     0x0D57
+#define GL_TEXTURE_BINDING_1D               0x8068
 #define GL_TEXTURE_BINDING_2D               0x8069
 #define GL_VENDOR                           0x1F00
 #define GL_RENDERER                         0x1F01
@@ -540,6 +541,45 @@ typedef void            GLvoid;
 #define GL_GENERATE_MIPMAP_HINT             0x8192      // ES
 #define GL_CLAMP_TO_EDGE                    0x812F
 #define GL_MIRRORED_REPEAT                  0x8370
+#define GL_TEXTURE_BORDER_COLOR             0x1004      // GL; stored only (no border texels, GL_CLAMP clamps to the edge)
+#define GL_TEXTURE_PRIORITY                 0x8066      // GL; stored only
+#define GL_TEXTURE_RESIDENT                 0x8067      // GL; always GL_TRUE
+
+// Internal formats (GL). Stored as the closest PICA format: 4-bit alpha/luminance and everything above 8 bits per
+// component in 8 bits, intensity as luminance + alpha (I, I); R3_G3_B2/RGB4/RGB5 as RGB565, RGBA2/RGBA4 as RGBA4
+#define GL_ALPHA4                           0x803B
+#define GL_ALPHA8                           0x803C
+#define GL_ALPHA12                          0x803D
+#define GL_ALPHA16                          0x803E
+#define GL_LUMINANCE4                       0x803F
+#define GL_LUMINANCE8                       0x8040
+#define GL_LUMINANCE12                      0x8041
+#define GL_LUMINANCE16                      0x8042
+#define GL_LUMINANCE4_ALPHA4                0x8043
+#define GL_LUMINANCE6_ALPHA2                0x8044
+#define GL_LUMINANCE8_ALPHA8                0x8045
+#define GL_LUMINANCE12_ALPHA4               0x8046
+#define GL_LUMINANCE12_ALPHA12              0x8047
+#define GL_LUMINANCE16_ALPHA16              0x8048
+#define GL_INTENSITY                        0x8049
+#define GL_INTENSITY4                       0x804A
+#define GL_INTENSITY8                       0x804B
+#define GL_INTENSITY12                      0x804C
+#define GL_INTENSITY16                      0x804D
+#define GL_R3_G3_B2                         0x2A10
+#define GL_RGB4                             0x804F
+#define GL_RGB5                             0x8050
+#define GL_RGB8                             0x8051
+#define GL_RGB10                            0x8052
+#define GL_RGB12                            0x8053
+#define GL_RGB16                            0x8054
+#define GL_RGBA2                            0x8055
+#define GL_RGBA4                            0x8056
+#define GL_RGB5_A1                          0x8057
+#define GL_RGBA8                            0x8058
+#define GL_RGB10_A2                         0x8059
+#define GL_RGBA12                           0x805A
+#define GL_RGBA16                           0x805B
 
 // State
 void glEnable(GLenum cap);
@@ -810,6 +850,8 @@ void glTexParameteriv(GLenum target, GLenum pname, const GLint *params);
 void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params);
 void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params);
 void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params);
+void glPrioritizeTextures(GLsizei n, const GLuint *textures, const GLclampf *priorities);      // GL
+GLboolean glAreTexturesResident(GLsizei n, const GLuint *textures, GLboolean *residences);    // GL
 void glTexEnvi(GLenum target, GLenum pname, GLint param);
 void glTexEnvf(GLenum target, GLenum pname, GLfloat param);
 void glTexEnviv(GLenum target, GLenum pname, const GLint *params);
@@ -858,15 +900,24 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei widt
 void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
                      GLenum format, GLenum type, const GLvoid *pixels);
 void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid *pixels);
+
+// 1D textures (GL): stored as a 2D texture whose rows all hold the image, so t has no effect like in GL. Enabled per unit
+// with GL_TEXTURE_1D, GL_TEXTURE_2D takes precedence
+void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border,
+                  GLenum format, GLenum type, const GLvoid *pixels);
+void glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type,
+                     const GLvoid *pixels);
 void glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint *params);
 void glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat *params);
 
-// Copying the framebuffer into a texture: internal formats GL_ALPHA, GL_LUMINANCE, GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA;
-// glCopyTexSubImage2D keeps the texture's format. Waits for the GPU to finish the draws so far, like glReadPixels
+// Copying the framebuffer into a texture: all internal formats but 1..4 (luminance and intensity take R);
+// glCopyTexSubImage keeps the texture's format. Waits for the GPU to finish the draws so far, like glReadPixels
 void glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height,
                       GLint border);
 void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
                          GLsizei height);
+void glCopyTexImage1D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLint border);
+void glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width);
 
 // Compressed textures (GL 1.3, ES 1.1). Paletted (ES 1.1 GL_OES_compressed_paletted_texture): expanded to the palette's
 // format on load, level <= 0 loads levels 0..-level from one image. ETC1 (GL_OES_compressed_ETC1_RGB8_texture):
@@ -990,9 +1041,26 @@ GLuint glGenLists(GLsizei range);
 void glDeleteLists(GLuint list, GLsizei range);
 GLboolean glIsList(GLuint list);
 
-// Not implemented yet: these log a warning and set GL_INVALID_OPERATION
-void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border,
-                  GLenum format, GLenum type, const GLvoid *pixels);
+// Color buffers (GL): one double-buffered RGBA buffer. Drawing goes to the frame being rendered, which is presented by
+// c3dglSwapBuffers(); GL_FRONT is treated like GL_BACK, GL_NONE writes no color. No stereo or aux buffers
+#define GL_NONE                             0
+#define GL_FRONT_LEFT                       0x0400
+#define GL_FRONT_RIGHT                      0x0401
+#define GL_BACK_LEFT                        0x0402
+#define GL_BACK_RIGHT                       0x0403
+#define GL_LEFT                             0x0406
+#define GL_RIGHT                            0x0407
+#define GL_AUX0                             0x0409
+#define GL_AUX1                             0x040A
+#define GL_AUX2                             0x040B
+#define GL_AUX3                             0x040C
+#define GL_AUX_BUFFERS                      0x0C00
+#define GL_DRAW_BUFFER                      0x0C01
+#define GL_READ_BUFFER                      0x0C02
+#define GL_DOUBLEBUFFER                     0x0C32
+#define GL_STEREO                           0x0C33
+void glDrawBuffer(GLenum mode);
+void glReadBuffer(GLenum mode);
 
 // GL 1.2, only so that GLU links: always fails with GL_INVALID_ENUM (no 3D textures)
 void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth,

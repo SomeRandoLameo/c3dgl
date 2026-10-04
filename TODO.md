@@ -94,7 +94,13 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] Formats RGBA, RGB, LUMINANCE_ALPHA, LUMINANCE, ALPHA (ubyte), RGB565, RGBA5551, RGBA4; NPOT sizes up to 1024
 * [x] `glTexParameter*` (filters, wrap)
 * [x] Texture borders (GL; border texels are dropped), proxy textures, `glGetTexLevelParameter*` (GL)
-* [ ] Internal formats with different sampling (`GL_INTENSITY`, ...) (GL)
+* [x] All GL 1.1 internal formats (GL): base (`GL_ALPHA`, `GL_LUMINANCE(_ALPHA)`, `GL_INTENSITY`, `GL_RGB(A)`, 1..4) and
+  sized (`GL_RGB8`, `GL_RGBA4`, `GL_INTENSITY8`, ...), stored in the closest PICA format: intensity as LA8 (I, I) with
+  its own `GL_BLEND`/`GL_ADD` alpha, R3_G3_B2/RGB4/RGB5 as RGB565, RGBA2/RGBA4 as RGBA4, RGB5_A1 as RGBA5551, the rest
+  in 8 bits per component. Images in any GL 1.1 format/type (`GL_RED`..`GL_BLUE`, `GL_BYTE` .. `GL_FLOAT`, swapped
+  bytes) are converted on load (fast path when they are already in the stored layout); sub images convert to the
+  texture's format; `glGetTexImage` returns any format/type (table 6.1 components, luminance = R + G + B).
+  `GL_COLOR_INDEX` images come with pixel maps (below)
 * [x] `glGetTexParameter*` (`iv`, `fv`, `xv`)
 * [x] `glCopyTexImage2D`, `glCopyTexSubImage2D`: internal formats `GL_ALPHA`, `GL_LUMINANCE(_ALPHA)`, `GL_RGB`,
   `GL_RGBA` (sized ones come with the internal formats above), borders; sub-copies keep the texture's format (also the
@@ -107,16 +113,22 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] ETC1 `GL_ETC1_RGB8_OES` (`GL_OES_compressed_ETC1_RGB8_texture`): sampled natively, blocks stored upside down and
   flipped back by the texture matrix; any size (NPOT padded), mipmaps per level. `GL_GENERATE_MIPMAP` is not
   supported for ETC1 (would need an encoder)
-* [ ] 1D textures: `glTexImage1D` (stub), `glTexSubImage1D`, `glCopyTexImage1D`... (GL)
+* [x] 1D textures (GL): `glTexImage1D`, `glTexSubImage1D`, `glCopyTexImage1D`, `glCopyTexSubImage1D`, proxies,
+  `GL_TEXTURE_1D` enable and binding per unit (2D takes precedence), mipmaps (also `GL_GENERATE_MIPMAP`), queries,
+  display lists, attribute stacks, `gluBuild1DMipmaps`. Stored as 2D with every row holding the image (8 rows, square
+  once mipmapped) and sampled with t = s, so t has no effect and the mip level follows s. Verified in Azahar and on
+  real hardware (api checks, mip levels too)
 * [x] Texture coordinate generation (GL): `glTexGen{i,f,d}[v]`, `glGetTexGen{i,f,d}v`, `GL_OBJECT_LINEAR`,
   `GL_EYE_LINEAR` (plane in eye coordinates, via the inverse modelview of the call), `GL_SPHERE_MAP` (s, t), for s, t,
   r, q of each texture unit; `GL_TEXTURE_GEN_S..Q` per unit, in `GL_TEXTURE_BIT`/`GL_ENABLE_BIT`, recorded in display
   lists. Per vertex on the CPU, the texture matrix applied with the generated r (projective texturing); a coordinate
   that is not generated keeps the vertex's value (r is 0 then, vertices keep no r). Verified in Azahar (api checks
-  render and read back every mode, texgen example); real hardware pending
+  render and read back every mode, texgen example) and on real hardware (api checks)
   * [~] Performance: ~1.3 us per vertex on top of the normal path (measured 51 -> 69 ms CPU for ~14k vertices; the texgen example now draws ~9k: 45 ms, 20 FPS in Azahar);
     a cache of generated texcoords for shared mesh vertices (like the lit cache) would cut that for indexed meshes
-* [ ] `glPrioritizeTextures`, `glAreTexturesResident` (GL)
+* [x] `glPrioritizeTextures`, `glAreTexturesResident`, `GL_TEXTURE_PRIORITY`, `GL_TEXTURE_RESIDENT` (GL): priorities
+  stored, every texture is resident. `GL_TEXTURE_BORDER_COLOR` stored only (no border texels)
+* [ ] Default texture objects: texture 0 cannot be loaded or used (GL 1.0 style code without `glBindTexture`)
 * [ ] `GL_REPEAT` on NPOT textures samples the padding
 
 ## Texture Environment
@@ -199,7 +211,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   types), `glListBase`, `glGenLists`, `glDeleteLists`, `glIsList`; `GL_LIST_BASE/INDEX/MODE`, `GL_MAX_LIST_NESTING` (64),
   `GL_LIST_BIT`. Client data copied at compile time (pixels with the unpack state, control points, vertex array elements,
   `glCallLists` names); immediate commands (`glGet*`, client state, `glPixelStore`, proxies, ...) are not recorded.
-  Verified in Azahar (api checks, gears example pixel-identical to immediate mode); real hardware pending
+  Verified in Azahar (api checks, gears example pixel-identical to immediate mode) and on real hardware (api checks)
   * [~] Replayed through the gl* entry points: no faster than the immediate mode calls it recorded
   * [~] The point size array (ES) is not recorded by `glArrayElement`/`glDrawArrays` in a list
 * [x] Attribute stacks: `glPushAttrib`/`glPopAttrib`, `glPushClientAttrib`/`glPopClientAttrib` (16 deep, all groups of the
@@ -207,7 +219,10 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] Evaluators: `glMap1/2`, `glMapGrid*`, `glEvalCoord*`, `glEvalMesh*`, `glEvalPoint*`, `glGetMap*`, `GL_AUTO_NORMAL`
 * [ ] Feedback and selection: `glRenderMode`, `glFeedbackBuffer`, `glSelectBuffer`, `glInitNames`, `glPushName`, `glPopName`, `glLoadName`, `glPassThrough`
 * [ ] Accumulation buffer: `glAccum`, `glClearAccum`
-* [ ] `glDrawBuffer`, `glReadBuffer`
+* [x] `glDrawBuffer`, `glReadBuffer`: double-buffered, no stereo or aux buffers (`GL_INVALID_OPERATION` for them).
+  Front buffers are drawn/read like the back buffer (the frame is presented by `c3dglSwapBuffers()`), `GL_NONE` draws
+  and clears no color. `GL_DRAW_BUFFER`, `GL_READ_BUFFER`, `GL_DOUBLEBUFFER`, `GL_STEREO`, `GL_AUX_BUFFERS`; in
+  `GL_COLOR_BUFFER_BIT`/`GL_PIXEL_MODE_BIT` and display lists
 * [ ] Color index mode (`glIndex*`, `glIndexMask`, `glClearIndex`) — likely out of scope (RGBA framebuffer only)
 
 ## State Queries
@@ -231,7 +246,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 * [x] Matrices, `gluProject`/`gluUnProject`, `gluScaleImage`, quadrics, tessellator, NURBS in `GLU_NURBS_TESSELLATOR` mode
 * [x] NURBS rendering through GL (`GLU_NURBS_RENDERER`, evaluators)
-* [ ] `gluBuild1DMipmaps` (needs 1D textures); `gluBuild3DMipmaps` fails by design (GL 1.2)
+* [x] `gluBuild1DMipmaps`; `gluBuild3DMipmaps` fails by design (GL 1.2)
 
 ## c3dgl Platform
 
@@ -240,13 +255,16 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] Examples show CPU/GPU time, command buffer usage and FPS (bottom screen rows 2-5)
 * [x] Resource use: only changed GPU state is sent per batch (command buffer about halved), one vertex cache flush per
   command list submission instead of one per batch, `glEvalMesh2` evaluates each grid point once
-* [x] Real hardware verification (all features up to b253860 verified on hardware; display lists pending)
+* [x] Real hardware verification (all features verified on hardware; display lists, texgen, internal formats, 1D
+  textures and color buffers through the api checks, 2026-10-04)
   * [x] Fixed: GPU lockup on the first draw (since bf91bd4): the vertex shader left `outtc0.w` unwritten
 
 ## Known Bugs / Limits
 
 * [ ] `glTexSubImage2D` during a frame also changes draws issued earlier in that frame
 * [ ] 64K vertices per frame and 511 texture ids, the rest is dropped
+* [~] Testing mipmaps in Azahar: the software renderer samples only level 0; the Vulkan renderer picks the level from
+  the t derivative alone (a quad with constant t samples level 0) and its resolution scale lowers the LOD
 
 ---
 
@@ -257,7 +275,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [ ] Smooth points/lines (GL)
                                       [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
                                       [ ] Accumulation buffer (GL)
-                                      [ ] 1D textures (GL)       
+                                      [ ] Default texture objects (GL)
 [ ] Complete state queries            [ ] Stipple (GL)
 ```
 
@@ -278,5 +296,6 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Point parameters + sprites (ES) [x] Point size array (ES)
 [x] Compressed textures: paletted + ETC1 (ES) [x] Texture copies (glCopyTexImage2D)
 [x] Logic ops, sample coverage state  [x] Display lists (GL)
-[x] Texture coordinate generation (GL)
+[x] Texture coordinate generation (GL) [x] 1D textures, all internal formats (GL)
+[x] glDrawBuffer / glReadBuffer (GL)
 ```

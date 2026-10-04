@@ -97,6 +97,20 @@ void selfChecks() {
           "scale format/type mismatch");
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
+
+    // gluBuild1DMipmaps: 12 texels scaled to a power of two, levels down to 1 texel
+    GLuint tex1D = 0;
+    glGenTextures(1, &tex1D);
+    glBindTexture(GL_TEXTURE_1D, tex1D);
+    GLubyte row[12 * 4];
+    for (int i = 0; i < 12 * 4; i++) row[i] = static_cast<GLubyte>(i * 5);
+    check(gluBuild1DMipmaps(GL_TEXTURE_1D, GL_RGBA, 12, GL_RGBA, GL_UNSIGNED_BYTE, row) == 0, "gluBuild1DMipmaps");
+    GLint width0 = 0, widthLast = 0, levels = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_1D, 0, GL_TEXTURE_WIDTH, &width0);
+    while ((width0 >> levels) > 1) levels++;
+    glGetTexLevelParameteriv(GL_TEXTURE_1D, levels, GL_TEXTURE_WIDTH, &widthLast);
+    check((width0 == 8 || width0 == 16) && widthLast == 1, "gluBuild1DMipmaps levels");
+    glDeleteTextures(1, &tex1D);
     check(glGetError() == GL_NO_ERROR, "no GL error");
 }
 

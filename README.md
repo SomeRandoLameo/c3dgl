@@ -71,8 +71,8 @@ target_link_libraries(my_app PRIVATE c3dgl::c3dgl)  # c3dgl::glu as well for <GL
 
 `c3dgl::glu` is [Mesa GLU](https://gitlab.freedesktop.org/mesa/glu) 9.0.3, vendored unmodified in `external/glu`
 (SGI Free Software License B 2.0, MIT style; see `external/glu/README.md`). Everything works except what needs GL
-features c3dgl does not have yet: NURBS rendering through evaluators (`GLU_NURBS_TESSELLATOR` mode works),
-`gluBuild1DMipmaps` (1D textures) and `gluBuild3DMipmaps` (GL 1.2).
+features c3dgl does not have yet: NURBS rendering through evaluators (`GLU_NURBS_TESSELLATOR` mode works) and
+`gluBuild3DMipmaps` (GL 1.2).
 Turn it off with `-DC3DGL_BUILD_GLU=OFF`.
 
 ## Building the examples
@@ -86,7 +86,7 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `primitives`: every primitive mode with culling on to catch wrong winding; page 2: flat shading, polygon modes,
   edge flags, polygon offset, depth range
 - `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks, display lists,
-  texgen (rendered and read back) and the ES API; green screen = all passed
+  texgen, texture formats, 1D textures, color buffers (rendered and read back) and the ES API; green screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
   page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps, page 5: compressed textures (paletted, ETC1)

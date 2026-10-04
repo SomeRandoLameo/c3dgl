@@ -10,6 +10,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int checks, failures;
@@ -53,7 +54,7 @@ static void testErrors(void)
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
     unsigned char pixel[4] = {0};
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_FLOAT, pixel);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_DOUBLE, pixel);
     CHECK(glGetError() == GL_INVALID_ENUM);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
     CHECK(glGetError() == GL_NO_ERROR);
@@ -1121,6 +1122,382 @@ static void testTexGen(void)
     CHECK(glGetError() == GL_NO_ERROR);
 }
 
+// Window coordinates for the next draws (pushed with the rest of the state by the caller)
+static void windowProjection(void)
+{
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, 400.0, 0.0, 240.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+}
+
+// A w x 8 quad at (x, y) with s from 0 to 1 and t from t0 to t1
+static void texturedQuad(int x, int y, int w, float t0, float t1)
+{
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.0f, t0); glVertex2i(x, y);
+    glTexCoord2f(1.0f, t0); glVertex2i(x + w, y);
+    glTexCoord2f(1.0f, t1); glVertex2i(x + w, y + 8);
+    glTexCoord2f(0.0f, t1); glVertex2i(x, y + 8);
+    glEnd();
+}
+
+// Color of window pixel (x, y) within 1, alpha too unless a < 0; prints it otherwise
+static bool pixelNear(int x, int y, int r, int g, int b, int a)
+{
+    GLubyte p[4];
+    glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    bool ok = (abs(p[0] - r) <= 1) && (abs(p[1] - g) <= 1) && (abs(p[2] - b) <= 1) && ((a < 0) || (abs(p[3] - a) <= 1));
+    if (!ok) printf("  pixel (%i, %i): %i %i %i %i\n", x, y, p[0], p[1], p[2], p[3]);
+    return ok;
+}
+
+// Internal formats (sized, intensity) loaded from any format/type, glGetTexImage conversions, texture priorities,
+// residency and the border color
+static void testTexFormats(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    windowProjection();
+    GLuint tex[2];
+    glGenTextures(2, tex);
+    glBindTexture(GL_TEXTURE_2D, tex[0]);
+    GLint v = 0;
+    GLubyte p[64];
+
+    // RGBA data into an RGB texture: alpha is dropped and reads back as 1
+    static const GLubyte rgba[4*4] = { 255, 0, 0, 10,  0, 255, 0, 20,  0, 0, 255, 30,  10, 20, 30, 40 };
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 255 && p[3] == 255 && p[12] == 10 && p[13] == 20 && p[14] == 30 && p[15] == 255);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &v);
+    CHECK(v == GL_RGB8);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_ALPHA_SIZE, &v);
+    CHECK(v == 0);
+
+    // Sized 16-bit formats from bytes
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA4, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_RED_SIZE, &v);
+    CHECK(v == 4);
+    GLushort us[4];
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4, us);
+    CHECK(us[0] == 0xF001 && us[1] == 0x0F01);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R3_G3_B2, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_GREEN_SIZE, &v);
+    CHECK(v == 6);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, us);
+    CHECK(us[0] == 0xF800 && us[1] == 0x07E0);
+
+    // Other types (GL 1.1 table 2.9, clamped), swapped bytes, single components
+    static const GLfloat fl[2*4] = { 1.0f, 0.5f, 0.0f, 2.0f,  -1.0f, 0.25f, 1.0f, 0.0f };
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 1, 0, GL_RGBA, GL_FLOAT, fl);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 255 && p[1] == 128 && p[2] == 0 && p[3] == 255 && p[4] == 0 && p[5] == 64 && p[6] == 255 && p[7] == 0);
+    GLfloat f[8];
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, f);
+    CHECK(f[0] == 1.0f && near(f[1], 128/255.0) && f[7] == 0.0f);
+    static const GLbyte sb[2] = { 127, -128 };
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 2, 1, 0, GL_LUMINANCE, GL_BYTE, sb);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 255 && p[1] == 0);
+    static const GLushort gs[2] = { 0x00FF, 0xFF00 };
+    glPixelStorei(GL_UNPACK_SWAP_BYTES, GL_TRUE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, 2, 1, 0, GL_ALPHA, GL_UNSIGNED_SHORT, gs);
+    glPixelStorei(GL_UNPACK_SWAP_BYTES, GL_FALSE);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_ALPHA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 254 && p[1] == 1);
+    static const GLubyte red[2] = { 200, 100 };
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 1, 0, GL_RED, GL_UNSIGNED_BYTE, red);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 200 && p[1] == 0 && p[2] == 0 && p[3] == 100);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 200 && p[1] == 100);
+
+    // Sub images are converted to the texture's format: luminance data into RGB
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 1, 0, 1, 1, GL_LUMINANCE, GL_UNSIGNED_BYTE, &red[0]);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, p);
+    CHECK(p[3] == 200 && p[4] == 200 && p[5] == 200 && glGetError() == GL_NO_ERROR);
+
+    // Intensity: I is R of the image, read back as R (table 6.1), sampled as (I, I, I, I)
+    static const GLubyte la[2*2] = { 200, 50,  100, 255 };
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_INTENSITY8, 2, 1, 0, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, la);
+    GLint lum = -1;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTENSITY_SIZE, &v);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_LUMINANCE_SIZE, &lum);
+    CHECK(v == 8 && lum == 0);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 200 && p[1] == 0 && p[3] == 255 && p[4] == 100);
+
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glEnable(GL_TEXTURE_2D);
+    glColor4ub(255, 255, 255, 255);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    texturedQuad(20, 20, 8, 0.0f, 1.0f);
+    CHECK(pixelNear(21, 21, 200, 200, 200, 200));
+    // GL_BLEND with a zero env color: C = Cf*(1 - I), and for intensity also A = Af*(1 - I)
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_BLEND);
+    texturedQuad(40, 20, 8, 0.0f, 1.0f);
+    CHECK(pixelNear(41, 21, 55, 55, 55, 55));
+    // GL_ADD: C = Cf + I, A = Af + I (luminance alpha: Af*At); texel 1 on black with alpha 128
+    glColor4ub(0, 0, 0, 128);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
+    texturedQuad(60, 20, 8, 0.0f, 1.0f);
+    CHECK(pixelNear(66, 21, 100, 100, 100, 228));
+    // The same luminance alpha texture blends alpha as Af*At
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, 2, 1, 0, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, la);
+    glColor4ub(255, 255, 255, 255);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_BLEND);
+    texturedQuad(80, 20, 8, 0.0f, 1.0f);
+    CHECK(pixelNear(81, 21, 55, 55, 55, 50));
+    glDisable(GL_TEXTURE_2D);
+
+    // Errors
+    glTexImage2D(GL_TEXTURE_2D, 0, 5, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGB, GL_UNSIGNED_SHORT_4_4_4_4, rgba);
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_BITMAP, rgba);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, GL_FLOAT, f);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+
+    // Priorities are stored (clamped), also through display lists as floats; all textures are resident
+    const GLclampf prio[2] = { 0.25f, 2.0f };
+    glPrioritizeTextures(2, tex, prio);
+    GLfloat fv[4] = { 0 };
+    glGetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_PRIORITY, fv);
+    CHECK(fv[0] == 0.25f);
+    glBindTexture(GL_TEXTURE_2D, tex[1]);
+    glGetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_PRIORITY, fv);
+    CHECK(fv[0] == 1.0f);
+    GLuint list = glGenLists(1);
+    glNewList(list, GL_COMPILE);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_PRIORITY, 0.5f);
+    glEndList();
+    glCallList(list);
+    glDeleteLists(list, 1);
+    glGetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_PRIORITY, fv);
+    CHECK(fv[0] == 0.5f);
+    GLboolean res[2] = { GL_FALSE, GL_FALSE };
+    CHECK(glAreTexturesResident(2, tex, res) == GL_TRUE && res[0] == GL_FALSE);    // Untouched when all are resident
+    const GLuint bad[2] = { tex[0], 0 };
+    CHECK(glAreTexturesResident(2, bad, res) == GL_FALSE && glGetError() == GL_INVALID_VALUE);
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_RESIDENT, &v);
+    CHECK(v == GL_TRUE);
+    const GLfloat border[4] = { 0.5f, 0.25f, 2.0f, 0.0f };
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+    glGetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, fv);
+    CHECK(fv[0] == 0.5f && fv[1] == 0.25f && fv[2] == 1.0f && fv[3] == 0.0f);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, 1.0f);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+
+    glDeleteTextures(2, tex);
+    glPopAttrib();
+    CHECK(glGetError() == GL_NO_ERROR);
+}
+
+// 1D textures: binding, images with a border, sub images, proxies, rendering (t has no effect), GL_TEXTURE_2D taking
+// precedence, mipmaps (also generated), copies from the framebuffer, display lists, attribute stacks
+static void test1D(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    windowProjection();
+    GLuint tex[3];
+    glGenTextures(3, tex);
+    GLint v = 0;
+    GLubyte p[64*3];
+
+    glBindTexture(GL_TEXTURE_1D, tex[0]);
+    glGetIntegerv(GL_TEXTURE_BINDING_1D, &v);
+    CHECK(v == (GLint)tex[0]);
+    glBindTexture(GL_TEXTURE_2D, tex[0]);                   // Already a 1D texture
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+
+    // The border texels are dropped; height 1
+    static const GLubyte row[6*3] = { 9, 9, 9,  255, 0, 0,  0, 255, 0,  0, 0, 255,  255, 255, 0,  9, 9, 9 };
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 6, 1, GL_RGB, GL_UNSIGNED_BYTE, row);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glGetTexLevelParameteriv(GL_TEXTURE_1D, 0, GL_TEXTURE_WIDTH, &v);
+    CHECK(v == 6);
+    glGetTexLevelParameteriv(GL_TEXTURE_1D, 0, GL_TEXTURE_HEIGHT, &v);
+    CHECK(v == 1);
+    glGetTexImage(GL_TEXTURE_1D, 0, GL_RGB, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 255 && p[4] == 255 && p[8] == 255 && p[9] == 255 && p[10] == 255 && p[11] == 0);
+    static const GLubyte white[3] = { 255, 255, 255 };
+    glTexSubImage1D(GL_TEXTURE_1D, 0, 2, 1, GL_RGB, GL_UNSIGNED_BYTE, white);
+    glGetTexImage(GL_TEXTURE_1D, 0, GL_RGB, GL_UNSIGNED_BYTE, p);
+    CHECK(p[6] == 255 && p[7] == 255 && p[8] == 255);
+    glTexSubImage1D(GL_TEXTURE_1D, 0, 2, 1, GL_RGB, GL_UNSIGNED_BYTE, &row[9]);
+
+    // Proxies
+    glTexImage1D(GL_PROXY_TEXTURE_1D, 0, GL_RGBA, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGetTexLevelParameteriv(GL_PROXY_TEXTURE_1D, 0, GL_TEXTURE_WIDTH, &v);
+    CHECK(v == 64);
+    glTexImage1D(GL_PROXY_TEXTURE_1D, 0, GL_RGBA, 2048, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGetTexLevelParameteriv(GL_PROXY_TEXTURE_1D, 0, GL_TEXTURE_WIDTH, &v);
+    CHECK(v == 0 && glGetError() == GL_NO_ERROR);
+
+    // Texel i across s, whatever t is
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    glEnable(GL_TEXTURE_1D);
+    texturedQuad(100, 100, 32, 5.0f, -3.0f);
+    CHECK(pixelNear(101, 101, 255, 0, 0, -1) && pixelNear(109, 104, 0, 255, 0, -1) && pixelNear(117, 106, 0, 0, 255, -1) &&
+          pixelNear(130, 107, 255, 255, 0, -1));
+
+    // GL_TEXTURE_2D takes precedence
+    glBindTexture(GL_TEXTURE_2D, tex[1]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, white);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glEnable(GL_TEXTURE_2D);
+    texturedQuad(140, 100, 32, 0.0f, 1.0f);
+    glDisable(GL_TEXTURE_2D);
+    CHECK(pixelNear(141, 101, 255, 255, 255, -1));
+
+    // Mipmaps: 64 texels red at level 0, green below (stored down to 8 texels, level 3), the rest only for completeness.
+    // A 128 pixel wide quad samples level 0, a 2 pixel wide one level 5, clamped to level 3 (sizes with room for
+    // Azahar's resolution scaling, which lowers the LOD)
+    glBindTexture(GL_TEXTURE_1D, tex[2]);
+    for (int level = 0; level <= 6; level++)
+    {
+        for (int i = 0; i < 64; i++) { p[i*3] = (level == 0)? 255 : 0; p[i*3 + 1] = (level == 0)? 0 : 255; p[i*3 + 2] = 0; }
+        glTexImage1D(GL_TEXTURE_1D, level, GL_RGB, 64 >> level, 0, GL_RGB, GL_UNSIGNED_BYTE, p);
+    }
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    texturedQuad(150, 100, 128, 0.0f, 1.0f);
+    texturedQuad(280, 100, 2, 0.0f, 1.0f);
+    CHECK(pixelNear(207, 104, 255, 0, 0, -1) && pixelNear(280, 104, 0, 255, 0, -1));
+
+    // Generated: red and blue texels alternating average to purple from level 1 on
+    glTexParameteri(GL_TEXTURE_1D, GL_GENERATE_MIPMAP, GL_TRUE);
+    for (int i = 0; i < 64; i++) { p[i*3] = (i & 1)? 0 : 255; p[i*3 + 1] = 0; p[i*3 + 2] = (i & 1)? 255 : 0; }
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 64, 0, GL_RGB, GL_UNSIGNED_BYTE, p);
+    texturedQuad(290, 100, 2, 0.0f, 1.0f);
+    CHECK(pixelNear(290, 104, 128, 0, 128, -1));
+    glDisable(GL_TEXTURE_1D);
+
+    // Copies: red at x = 0..3, green at 4..7 of the bottom row
+    glBindTexture(GL_TEXTURE_1D, tex[0]);
+    glColor3ub(255, 0, 0);
+    glRecti(0, 0, 4, 1);
+    glColor3ub(0, 255, 0);
+    glRecti(4, 0, 8, 1);
+    glCopyTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 0, 0, 8, 0);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glGetTexImage(GL_TEXTURE_1D, 0, GL_RGB, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 255 && p[1] == 0 && p[5*3] == 0 && p[5*3 + 1] == 255);
+    glCopyTexSubImage1D(GL_TEXTURE_1D, 0, 0, 4, 0, 2);
+    glGetTexImage(GL_TEXTURE_1D, 0, GL_RGB, GL_UNSIGNED_BYTE, p);
+    CHECK(p[0] == 0 && p[1] == 255 && p[3] == 0 && p[4] == 255 && p[6] == 255);
+
+    // Display lists record 1D images and copies
+    GLuint list = glGenLists(1);
+    glNewList(list, GL_COMPILE);
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 4, 1, GL_RGB, GL_UNSIGNED_BYTE, row);
+    glTexSubImage1D(GL_TEXTURE_1D, 0, 0, 1, GL_RGB, GL_UNSIGNED_BYTE, white);
+    glEndList();
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, white);
+    glCallList(list);
+    glDeleteLists(list, 1);
+    glGetTexLevelParameteriv(GL_TEXTURE_1D, 0, GL_TEXTURE_WIDTH, &v);
+    glGetTexImage(GL_TEXTURE_1D, 0, GL_RGB, GL_UNSIGNED_BYTE, p);
+    CHECK(v == 4 && p[0] == 255 && p[1] == 255 && p[3] == 0 && p[4] == 255);
+
+    // Attribute stacks: GL_TEXTURE_BIT has the 1D enable and binding
+    glEnable(GL_TEXTURE_1D);
+    glPushAttrib(GL_TEXTURE_BIT);
+    glDisable(GL_TEXTURE_1D);
+    glBindTexture(GL_TEXTURE_1D, tex[2]);
+    glPopAttrib();
+    glGetIntegerv(GL_TEXTURE_BINDING_1D, &v);
+    CHECK(glIsEnabled(GL_TEXTURE_1D) && v == (GLint)tex[0]);
+    glDisable(GL_TEXTURE_1D);
+
+    // Errors
+    glTexImage1D(GL_TEXTURE_2D, 0, GL_RGB, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, white);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glTexImage2D(GL_TEXTURE_1D, 0, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, white);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glTexSubImage1D(GL_TEXTURE_1D, 0, 4, 1, GL_RGB, GL_UNSIGNED_BYTE, white);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glCopyTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 0, 0, 8, 2);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+
+    glDeleteTextures(3, tex);
+    glPopAttrib();
+    CHECK(glGetError() == GL_NO_ERROR);
+}
+
+// glDrawBuffer / glReadBuffer: double-buffered, no stereo or aux buffers; GL_NONE draws and clears no color
+static void testColorBuffers(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    windowProjection();
+    GLint v[2] = { 0, 0 };
+    GLboolean b[2] = { GL_FALSE, GL_TRUE };
+    glGetIntegerv(GL_DRAW_BUFFER, &v[0]);
+    glGetIntegerv(GL_READ_BUFFER, &v[1]);
+    CHECK(v[0] == GL_BACK && v[1] == GL_BACK);
+    glGetBooleanv(GL_DOUBLEBUFFER, &b[0]);
+    glGetBooleanv(GL_STEREO, &b[1]);
+    glGetIntegerv(GL_AUX_BUFFERS, &v[0]);
+    CHECK(b[0] == GL_TRUE && b[1] == GL_FALSE && v[0] == 0);
+
+    glDrawBuffer(GL_RIGHT);
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    glDrawBuffer(GL_AUX0);
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    glDrawBuffer(0x1234);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glReadBuffer(GL_NONE);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glReadBuffer(GL_FRONT_AND_BACK);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+
+    glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawBuffer(GL_NONE);
+    glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glColor3ub(0, 0, 255);
+    glRecti(10, 10, 20, 20);
+    CHECK(pixelNear(15, 15, 255, 0, 0, -1) && pixelNear(100, 100, 255, 0, 0, -1));
+    glDrawBuffer(GL_FRONT);                     // Drawn like the back buffer
+    glRecti(10, 10, 20, 20);
+    glReadBuffer(GL_FRONT_LEFT);
+    CHECK(pixelNear(15, 15, 0, 0, 255, -1));
+
+    // Groups: draw buffer in GL_COLOR_BUFFER_BIT, read buffer in GL_PIXEL_MODE_BIT; both in display lists
+    glPushAttrib(GL_COLOR_BUFFER_BIT | GL_PIXEL_MODE_BIT);
+    GLuint list = glGenLists(1);
+    glNewList(list, GL_COMPILE);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_BACK);
+    glEndList();
+    glCallList(list);
+    glDeleteLists(list, 1);
+    glGetIntegerv(GL_DRAW_BUFFER, &v[0]);
+    glGetIntegerv(GL_READ_BUFFER, &v[1]);
+    CHECK(v[0] == GL_NONE && v[1] == GL_BACK);
+    glPopAttrib();
+    glGetIntegerv(GL_DRAW_BUFFER, &v[0]);
+    glGetIntegerv(GL_READ_BUFFER, &v[1]);
+    CHECK(v[0] == GL_FRONT && v[1] == GL_FRONT_LEFT);
+
+    glPopAttrib();
+    glGetIntegerv(GL_DRAW_BUFFER, &v[0]);
+    CHECK(v[0] == GL_BACK && glGetError() == GL_NO_ERROR);
+}
+
 static void testDisplayLists(void)
 {
     glPushAttrib(GL_ALL_ATTRIB_BITS);
@@ -1632,6 +2009,9 @@ int main(void)
     testLogicOpAndMultisample();
     testDisplayLists();
     testTexGen();
+    testTexFormats();
+    test1D();
+    testColorBuffers();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

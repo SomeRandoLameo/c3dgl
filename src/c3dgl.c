@@ -18,6 +18,8 @@
 //   - Textures are padded to power-of-two sizes and Morton-swizzled. The shader applies the texture matrix
 //     combined with the scale back from the padded size; a projective texture matrix uses PICA's projection mode.
 //     Paletted textures are expanded on load; ETC1 blocks are stored as they are, upside down (see uploadEtc1()).
+//     Images of any format/type are converted to the PICA format closest to their internal format (see loadTexels());
+//     1D textures are 2D textures whose rows all hold the image.
 //   - One render target per screen, sharing the vertex buffer and GL state; c3dglSetScreen() flushes the
 //     batch and switches the target (C3D_FrameDrawOn), citro3d presents every target drawn on in the frame.
 //
@@ -139,9 +141,10 @@ typedef struct {
     bool swapBytes, lsbFirst;
 } PixelStore;
 
-// Result of a glTexImage2D on GL_PROXY_TEXTURE_2D (all zero if the image would not fit)
+// Result of a glTexImage1D/2D on GL_PROXY_TEXTURE_1D/2D (all zero if the image would not fit)
 typedef struct {
     GLint width, height, border, internalFormat;
+    GLenum base;
     GPU_TEXCOLOR format;
 } ProxyLevel;
 
@@ -151,20 +154,27 @@ typedef struct {
     int width, height;          // Without border
     int border;
     GLint internalFormat;
+    GLenum base;                // Base internal format: GL_ALPHA, GL_LUMINANCE(_ALPHA), GL_INTENSITY, GL_RGB, GL_RGBA
     GPU_TEXCOLOR format;
 } TexLevel;
 
+// A 1D texture is stored as a 2D texture with every row holding the image (see replicateRows()), sampled with t = s
+// (see applyTextureMatrix()). It is 8 rows high, as high as it is wide once mipmapped, so that its levels go down to 8
+// texels in s
 typedef struct {
-    bool used;                  // Id handed out by glGenTextures
+    bool used;                  // Id handed out by glGenTextures or bound
+    GLenum target;              // GL_TEXTURE_1D or GL_TEXTURE_2D once bound, 0 before
     bool loaded;                // tex is initialized (level 0 defined)
     C3D_Tex tex;                // Level 0 padded to power-of-two; mip chain down to 8x8 once a level > 0 arrives
     int levels;                 // Levels stored in tex (1 + tex.maxLevel when mipmapped)
     TexFormat format;
-    int width, height;          // Level 0 image size without border
+    GLenum base;                // Base internal format of level 0, decides how the texels are sampled (intensity)
+    int width, height;          // Level 0 image size without border (height 1 for 1D)
     TexLevel level[MAX_TEXTURE_LEVEL + 1];
     bool complete;              // All levels down to 1x1 defined and consistent (needed by mipmap filters)
     bool generateMipmap;        // GL_GENERATE_MIPMAP
     GLenum minFilter, magFilter, wrapS, wrapT;
+    float priority, borderColor[4];     // Stored only
 } Texture;
 
 // Texture environment of one unit (glTexEnv)
@@ -339,15 +349,18 @@ typedef struct {
     X(TEX_ENV,          setTexEnv(w[0].u, w[1].u, w[2].i, w[3].f)) \
     X(TEX_ENV_COLOR,    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, &w[0].f)) \
     X(ACTIVE_TEXTURE,   glActiveTexture(w[0].u)) \
-    X(TEX_PARAMETER,    glTexParameteri(w[0].u, w[1].u, w[2].i)) \
+    X(TEX_PARAMETER,    setTexParameter(w[0].u, w[1].u, &w[2].f)) \
+    X(PRIORITIZE_TEXTURES, glPrioritizeTextures(w[0].i, &w[1].u, &w[1 + ((w[0].i > 0)? w[0].i : 0)].f)) \
     X(TEX_IMAGE,        listTexImage(w, false)) \
     X(TEX_SUB_IMAGE,    listTexImage(w, true)) \
     X(COMPRESSED_TEX_IMAGE, glCompressedTexImage2D(w[0].u, w[1].i, w[2].u, w[3].i, w[4].i, w[5].i, w[6].i, \
                                                    w[7].i? &w[8] : NULL)) \
     X(COMPRESSED_TEX_SUB_IMAGE, glCompressedTexSubImage2D(w[0].u, w[1].i, w[2].i, w[3].i, w[4].i, w[5].i, w[6].u, \
                                                           w[7].i, NULL)) \
-    X(COPY_TEX_IMAGE,   glCopyTexImage2D(w[0].u, w[1].i, w[2].u, w[3].i, w[4].i, w[5].i, w[6].i, w[7].i)) \
-    X(COPY_TEX_SUB_IMAGE, glCopyTexSubImage2D(w[0].u, w[1].i, w[2].i, w[3].i, w[4].i, w[5].i, w[6].i, w[7].i)) \
+    X(COPY_TEX_IMAGE,   copyTexImage(w[0].u, w[1].i, w[2].u, w[3].i, w[4].i, w[5].i, w[6].i, w[7].i, w[8].i != 0)) \
+    X(COPY_TEX_SUB_IMAGE, copyTexSubImage(w[0].u, w[1].i, w[2].i, w[3].i, w[4].i, w[5].i, w[6].i, w[7].i, w[8].i != 0)) \
+    X(DRAW_BUFFER,      glDrawBuffer(w[0].u)) \
+    X(READ_BUFFER,      glReadBuffer(w[0].u)) \
     X(MAP,              defineMap(w[0].u, listDouble(&w[2]), listDouble(&w[4]), w[6].i, w[7].i, listDouble(&w[8]), \
                                   listDouble(&w[10]), w[12].i, w[13].i, &w[14].f, false, w[1].i != 0)) \
     X(MAP_GRID1,        glMapGrid1f(w[0].i, w[1].f, w[2].f)) \
@@ -397,15 +410,16 @@ static struct {
 
     // GL state as set by the gl* calls
     DrawState state;
-    bool texture2D[C3DGL_TEXTURE_UNITS];
-    GLuint boundTexture[C3DGL_TEXTURE_UNITS];
+    bool texture1D[C3DGL_TEXTURE_UNITS], texture2D[C3DGL_TEXTURE_UNITS];
+    GLuint boundTexture1D[C3DGL_TEXTURE_UNITS], boundTexture[C3DGL_TEXTURE_UNITS];
     TexGenState texGen[C3DGL_TEXTURE_UNITS];
     u32 texGenSerial;                   // Incremented on every texgen state change
     TexGenTransform texGenTransform[C3DGL_TEXTURE_UNITS];   // For texGenTransformSerials, see updateTexGenTransforms()
     u32 texGenTransformSerials[3];      // matrixSerial, texMatrixSerial, texGenSerial; all 0: stale
     int activeTexture, clientActiveTexture;     // glActiveTexture, glClientActiveTexture: 0..2
     PixelStore unpack, pack;
-    ProxyLevel proxy2D[11];             // Per level, 1024 >> 10 = 1
+    ProxyLevel proxy1D[11], proxy2D[11];    // Per level, 1024 >> 10 = 1
+    GLenum drawBuffer, readBuffer;      // glDrawBuffer, glReadBuffer: GL_NONE, GL_BACK, ...; all but GL_NONE are the frame
     float lineWidth, pointSize;
     float pointSizeMin, pointSizeMax, pointFadeThreshold, pointAttenuation[3];  // glPointParameter
     bool pointSprite;                   // GL_POINT_SPRITE_OES
@@ -523,7 +537,7 @@ static void listSave(ListCommand command, const char *format, ...);
 static ListWord *listBegin(ListCommand command, int words);
 static void listEnd(void);
 static void listSaveImage(ListCommand command, const GLint args[8], GLsizei width, GLsizei height, bool sizeValid,
-                          const void *pixels);
+                          bool oneD, const void *pixels);
 static void listArrayElement(int index);
 
 // While a display list is compiled: record the command instead of executing it, and return from the gl* function
@@ -966,7 +980,9 @@ static void setupCombine(C3D_TexEnv *env, int unit, const TexEnvState *e)
     C3D_TexEnvScale(env, C3D_Alpha, tevScale(e->alphaScale));
 }
 
-static void setupTexEnv(C3D_TexEnv *env, int unit, const TexEnvState *e, GPU_TEXCOLOR format)
+// intensity: an intensity texture (stored as LA8 with L = A = I), which differs from luminance alpha in GL_BLEND and
+// GL_ADD alpha
+static void setupTexEnv(C3D_TexEnv *env, int unit, const TexEnvState *e, GPU_TEXCOLOR format, bool intensity)
 {
     C3D_TexEnvColor(env, e->color);
     if (e->mode == GL_COMBINE) { setupCombine(env, unit, e); return; }
@@ -1008,8 +1024,19 @@ static void setupTexEnv(C3D_TexEnv *env, int unit, const TexEnvState *e, GPU_TEX
             break;
     }
 
-    // Alpha: REPLACE takes At, DECAL keeps Af, everything else is Af*At (At = 1 without alpha)
-    if ((mode == GL_DECAL) || ((mode == GL_REPLACE) && !hasAlpha))
+    // Alpha: REPLACE takes At, DECAL keeps Af, everything else is Af*At (At = 1 without alpha); intensity textures
+    // blend (Af*(1 - It) + Ac*It) and add (Af + It) the alpha like the color
+    if (intensity && (mode == GL_BLEND))
+    {
+        C3D_TexEnvSrc(env, C3D_Alpha, GPU_CONSTANT, prev, tex);
+        C3D_TexEnvFunc(env, C3D_Alpha, GPU_INTERPOLATE);
+    }
+    else if (intensity && (mode == GL_ADD))
+    {
+        C3D_TexEnvSrc(env, C3D_Alpha, tex, prev, prev);
+        C3D_TexEnvFunc(env, C3D_Alpha, GPU_ADD);
+    }
+    else if ((mode == GL_DECAL) || ((mode == GL_REPLACE) && !hasAlpha))
     {
         C3D_TexEnvSrc(env, C3D_Alpha, prev, prev, prev);
         C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
@@ -1038,6 +1065,11 @@ static void applyTextureMatrix(int unit, const Texture *t, bool identity, bool *
     {
         float r[4];
         for (int i = 0; i < 4; i++) r[i] = tm->m[4*i + row]*scale[row];
+
+        // 1D: t' = s' (all rows hold the image, so t has no effect). Not a fixed t: the mipmap level follows the t
+        // derivative (a fixed t always samples level 0 in Azahar), and with t' = s' it equals the s derivative, as the
+        // mip chain is square
+        if ((row == 1) && (t->target == GL_TEXTURE_1D)) for (int i = 0; i < 4; i++) r[i] = tm->m[4*i]*scale[0];
 
         // Compressed textures are stored upside down (t = 0 at the top): t' = q - t, which also holds for projective t
         if ((row == 1) && t->format.compressed) for (int i = 0; i < 4; i++) r[i] = tm->m[4*i + 3] - r[i];
@@ -1200,7 +1232,7 @@ static void applyState(const DrawState *s, const DrawState *prev)
         else t->tex.param = (t->tex.param & ~GPU_TEXTURE_MODE(7)) | GPU_TEXTURE_MODE(GPU_TEX_2D);
 
         C3D_TexBind(unit, &t->tex);
-        setupTexEnv(env, unit, &u->env, t->format.format);
+        setupTexEnv(env, unit, &u->env, t->format.format, t->base == GL_INTENSITY);
     }
 
     if (CHANGED(clipSpace) || CHANGED(matrixSerial))
@@ -1246,7 +1278,9 @@ static void prepareDraw(bool clipSpace, bool points)
     for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
     {
         TexUnitState *u = &key.units[unit];
-        u->texture = (gl.texture2D[unit] && textureValid(gl.boundTexture[unit]))? gl.boundTexture[unit] : 0;
+        // GL_TEXTURE_2D takes precedence over GL_TEXTURE_1D
+        GLuint id = gl.texture2D[unit]? gl.boundTexture[unit] : gl.texture1D[unit]? gl.boundTexture1D[unit] : 0;
+        u->texture = textureValid(id)? id : 0;
         if (u->texture && mipmapFilter(gl.textures[u->texture].minFilter) && !gl.textures[u->texture].complete)
         {
             // GL: a mipmap filter without all levels disables the unit
@@ -1275,6 +1309,7 @@ static void prepareDraw(bool clipSpace, bool points)
     }
     if (key.logicOp) { key.blend = false; key.blendSrc = key.blendDst = 0; }
     else key.logicOpMode = 0;
+    if (gl.drawBuffer == GL_NONE) key.colorMask = 0;
     if (!key.stencilTest)
     {
         key.stencilFunc = key.stencilFail = key.stencilDepthFail = key.stencilPass = 0;
@@ -2337,6 +2372,7 @@ bool c3dglInit(void)
     gl.fogDensity = gl.fogEnd = 1.0f;
     gl.ignoredCaps = (1u << ignoredCapBit(GL_DITHER)) | (1u << ignoredCapBit(GL_MULTISAMPLE));    // Enabled by default
     gl.sampleCoverage = 1.0f;
+    gl.drawBuffer = gl.readBuffer = GL_BACK;
     memset(gl.current.color, 255, 4);
     gl.current.tex[2] = 1.0f;
     gl.current.pointSize = -1.0f;   // No point size array: glPointSize
@@ -2446,6 +2482,7 @@ static void setCapability(GLenum cap, bool enable)
 
     switch (cap)
     {
+        case GL_TEXTURE_1D: gl.texture1D[gl.activeTexture] = enable; break;
         case GL_TEXTURE_2D: gl.texture2D[gl.activeTexture] = enable; break;
         case GL_TEXTURE_GEN_S: case GL_TEXTURE_GEN_T: case GL_TEXTURE_GEN_R: case GL_TEXTURE_GEN_Q:
             if (enable) gl.texGen[gl.activeTexture].enabled |= 1u << (cap - GL_TEXTURE_GEN_S);
@@ -2530,6 +2567,7 @@ GLboolean glIsEnabled(GLenum cap)
 
     switch (cap)
     {
+        case GL_TEXTURE_1D: return gl.texture1D[gl.activeTexture];
         case GL_TEXTURE_2D: return gl.texture2D[gl.activeTexture];
         case GL_TEXTURE_GEN_S: case GL_TEXTURE_GEN_T: case GL_TEXTURE_GEN_R: case GL_TEXTURE_GEN_Q:
             return (gl.texGen[gl.activeTexture].enabled >> (cap - GL_TEXTURE_GEN_S)) & 1;
@@ -2778,7 +2816,13 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_PACK_LSB_FIRST: v[0] = gl.pack.lsbFirst; return 1;
         case GL_PACK_IMAGE_HEIGHT: v[0] = gl.pack.imageHeight; return 1;
         case GL_PACK_SKIP_IMAGES: v[0] = gl.pack.skipImages; return 1;
+        case GL_TEXTURE_BINDING_1D: v[0] = gl.boundTexture1D[gl.activeTexture]; return 1;
         case GL_TEXTURE_BINDING_2D: v[0] = gl.boundTexture[gl.activeTexture]; return 1;
+        case GL_DRAW_BUFFER: v[0] = gl.drawBuffer; return 1;
+        case GL_READ_BUFFER: v[0] = gl.readBuffer; return 1;
+        case GL_AUX_BUFFERS: v[0] = 0; return 1;
+        case GL_DOUBLEBUFFER: v[0] = GL_TRUE; return 1;
+        case GL_STEREO: v[0] = GL_FALSE; return 1;
         case GL_MAX_TEXTURE_SIZE: v[0] = C3DGL_MAX_TEXTURE_SIZE; return 1;
         case GL_NUM_COMPRESSED_TEXTURE_FORMATS: v[0] = COMPRESSED_FORMAT_COUNT; return 1;
         case GL_IMPLEMENTATION_COLOR_READ_TYPE_OES: v[0] = GL_UNSIGNED_BYTE; return 1;
@@ -2946,8 +2990,8 @@ static void clearWithQuad(bool color, bool depth, bool stencil)
 void glClear(GLbitfield mask)
 {
     LIST_SAVE(CLEAR, "u", mask);
-    // Write masks apply to clears
-    bool color = (mask & GL_COLOR_BUFFER_BIT) && (gl.state.colorMask != 0);
+    // Write masks apply to clears, glDrawBuffer(GL_NONE) clears no color
+    bool color = (mask & GL_COLOR_BUFFER_BIT) && (gl.state.colorMask != 0) && (gl.drawBuffer != GL_NONE);
     bool depth = (mask & GL_DEPTH_BUFFER_BIT) && gl.state.depthMask;
     bool stencil = (mask & GL_STENCIL_BUFFER_BIT) && (gl.state.stencilWriteMask != 0);
     if (!color && !depth && !stencil) return;
@@ -4424,6 +4468,199 @@ void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params)
 }
 
 //----------------------------------------------------------------------------------
+// Client pixel images (texture images, glGetTexImage, glReadPixels): layout and conversion from and to RGBA
+//----------------------------------------------------------------------------------
+// Components of a color format: indices into r, g, b, a, 4 = luminance (r + g + b); count, 0 if not a color format
+static int colorComponents(GLenum format, int comp[4])
+{
+    switch (format)
+    {
+        case GL_RGBA: comp[0] = 0; comp[1] = 1; comp[2] = 2; comp[3] = 3; return 4;
+        case GL_RGB: comp[0] = 0; comp[1] = 1; comp[2] = 2; return 3;
+        case GL_RED: comp[0] = 0; return 1;
+        case GL_GREEN: comp[0] = 1; return 1;
+        case GL_BLUE: comp[0] = 2; return 1;
+        case GL_ALPHA: comp[0] = 3; return 1;
+        case GL_LUMINANCE: comp[0] = 4; return 1;
+        case GL_LUMINANCE_ALPHA: comp[0] = 4; comp[1] = 3; return 2;
+        default: return 0;
+    }
+}
+
+// Packed 16-bit types: valid format, 0 if the type is not packed
+static GLenum packedFormat(GLenum type)
+{
+    switch (type)
+    {
+        case GL_UNSIGNED_SHORT_5_6_5: return GL_RGB;
+        case GL_UNSIGNED_SHORT_4_4_4_4: case GL_UNSIGNED_SHORT_5_5_5_1: return GL_RGBA;
+        default: return 0;
+    }
+}
+
+// PICA format with the bit layout of a packed 16-bit type
+static GPU_TEXCOLOR packedTexColor(GLenum type)
+{
+    return (type == GL_UNSIGNED_SHORT_5_6_5)? GPU_RGB565 : (type == GL_UNSIGNED_SHORT_5_5_5_1)? GPU_RGBA5551 : GPU_RGBA4;
+}
+
+// Unpack/pack a texel of a 16-bit packed format into 4 channels of 0..255
+static void unpack16(GPU_TEXCOLOR format, u16 v, int c[4])
+{
+    switch (format)
+    {
+        case GPU_RGB565: c[0] = (v >> 11)*255/31; c[1] = ((v >> 5) & 63)*255/63; c[2] = (v & 31)*255/31; c[3] = 255; break;
+        case GPU_RGBA5551: c[0] = (v >> 11)*255/31; c[1] = ((v >> 6) & 31)*255/31; c[2] = ((v >> 1) & 31)*255/31; c[3] = (v & 1)*255; break;
+        default: c[0] = (v >> 12)*17; c[1] = ((v >> 8) & 15)*17; c[2] = ((v >> 4) & 15)*17; c[3] = (v & 15)*17; break;   // RGBA4
+    }
+}
+
+static u16 pack16(GPU_TEXCOLOR format, const int c[4])
+{
+    switch (format)
+    {
+        case GPU_RGB565: return (u16)(((c[0]*31 + 127)/255 << 11) | ((c[1]*63 + 127)/255 << 5) | ((c[2]*31 + 127)/255));
+        case GPU_RGBA5551: return (u16)(((c[0]*31 + 127)/255 << 11) | ((c[1]*31 + 127)/255 << 6) | ((c[2]*31 + 127)/255 << 1) | (c[3] >= 128));
+        default: return (u16)(((c[0]*15 + 127)/255 << 12) | ((c[1]*15 + 127)/255 << 8) | ((c[2]*15 + 127)/255 << 4) | ((c[3]*15 + 127)/255));
+    }
+}
+
+// Color image format/type (GL 1.1 tables 3.5 and 3.8, plus the packed 16-bit types): components, bytes per element and
+// per group; the error of an invalid pair otherwise
+static GLenum colorImageLayout(GLenum format, GLenum type, int *n, int *elemSize, int *groupSize)
+{
+    int comp[4];
+    *n = colorComponents(format, comp);
+    if (format == GL_COLOR_INDEX) { WARN_ONCE("Color index images are not supported yet\n"); return GL_INVALID_ENUM; }
+    if (*n == 0) return GL_INVALID_ENUM;
+
+    GLenum packed = packedFormat(type);
+    if (packed)
+    {
+        if (format != packed) return GL_INVALID_OPERATION;
+        *elemSize = *groupSize = 2;
+        return GL_NO_ERROR;
+    }
+    if ((typeSize(type) == 0) || (type == GL_DOUBLE) || (type == GL_FIXED)) return GL_INVALID_ENUM;
+    *elemSize = typeSize(type);
+    *groupSize = *n * *elemSize;
+    return GL_NO_ERROR;
+}
+
+// Bytes per row of an image `width` groups wide (GL 1.1 section 3.6.3): GL_*_ROW_LENGTH groups if set, padded to the
+// alignment unless the elements are larger than it
+static size_t imageRowBytes(const PixelStore *ps, int width, int elemSize, int groupSize)
+{
+    size_t bytes = (size_t)((ps->rowLength > 0)? ps->rowLength : width)*groupSize;
+    if (elemSize < ps->alignment) bytes = (bytes + ps->alignment - 1)/ps->alignment*ps->alignment;
+    return bytes;
+}
+
+// One element of a color image as a value in [0, 1] (GL 1.1 table 2.9, clamped)
+static float loadElement(const u8 *src, GLenum type, bool swap)
+{
+    union { u8 b[4]; u8 ub; s8 sb; u16 us; s16 ss; u32 ui; s32 si; float f; } e;
+    int size = typeSize(type);
+    for (int i = 0; i < size; i++) e.b[i] = src[swap? size - 1 - i : i];
+    float v;
+    switch (type)
+    {
+        case GL_UNSIGNED_BYTE: v = e.ub/255.0f; break;
+        case GL_BYTE: v = (2*e.sb + 1)/255.0f; break;
+        case GL_UNSIGNED_SHORT: v = e.us/65535.0f; break;
+        case GL_SHORT: v = (2*e.ss + 1)/65535.0f; break;
+        case GL_UNSIGNED_INT: v = (float)(e.ui/4294967295.0); break;
+        case GL_INT: v = (float)((2.0*e.si + 1.0)/4294967295.0); break;
+        default: v = e.f; break;    // GL_FLOAT
+    }
+    return !(v > 0.0f)? 0.0f : (v > 1.0f)? 1.0f : v;     // NaN: 0
+}
+
+// Store one element of type `type`: v is a normalized value in [0, 1] (GL 1.1 table 2.9 inverted), or an index
+static void storeElement(u8 *dst, GLenum type, double v, bool index, bool swap)
+{
+    union { u8 b[4]; u8 ub; s8 sb; u16 us; s16 ss; u32 ui; s32 si; float f; } e;
+    int size = typeSize(type);
+    switch (type)
+    {
+        case GL_UNSIGNED_BYTE: e.ub = (u8)(index? v : lround(v*255.0)); break;
+        case GL_BYTE: e.sb = (s8)(index? v : lround((v*255.0 - 1.0)/2.0)); break;
+        case GL_UNSIGNED_SHORT: e.us = (u16)(index? v : lround(v*65535.0)); break;
+        case GL_SHORT: e.ss = (s16)(index? v : lround((v*65535.0 - 1.0)/2.0)); break;
+        case GL_UNSIGNED_INT: e.ui = (u32)(index? v : llround(v*4294967295.0)); break;
+        case GL_INT: e.si = (s32)(index? v : llround((v*4294967295.0 - 1.0)/2.0)); break;
+        default: e.f = (float)v; break;     // GL_FLOAT
+    }
+    for (int i = 0; i < size; i++) dst[i] = e.b[swap? size - 1 - i : i];
+}
+
+// Color image (a valid format/type, see colorImageLayout()) as w x h RGBA8 texels, rows from the bottom. GL 1.1 section
+// 3.6.3: missing color components are 0, a missing alpha 1, luminance goes to R, G and B
+static void unpackColorImage(const u8 *pixels, int w, int h, GLenum format, GLenum type, const PixelStore *ps, u8 *rgba)
+{
+    int comp[4], n, elemSize, groupSize;
+    colorComponents(format, comp);
+    colorImageLayout(format, type, &n, &elemSize, &groupSize);
+    size_t rowBytes = imageRowBytes(ps, w, elemSize, groupSize);
+    bool packed = packedFormat(type) != 0, swap = ps->swapBytes && (elemSize > 1);
+    pixels += (size_t)ps->skipRows*rowBytes + (size_t)ps->skipPixels*groupSize;
+
+    for (int y = 0; y < h; y++)
+    {
+        const u8 *src = pixels + (size_t)y*rowBytes;
+        for (int x = 0; x < w; x++, src += groupSize)
+        {
+            u8 *dst = rgba + ((size_t)y*w + x)*4;
+            if (packed)
+            {
+                int c[4];
+                unpack16(packedTexColor(type), swap? (u16)((src[0] << 8) | src[1]) : (u16)(src[0] | (src[1] << 8)), c);
+                for (int k = 0; k < 4; k++) dst[k] = (u8)c[k];
+                continue;
+            }
+            dst[0] = dst[1] = dst[2] = 0;
+            dst[3] = 255;
+            for (int i = 0; i < n; i++)
+            {
+                u8 c = (type == GL_UNSIGNED_BYTE)? src[i] : colorByte(loadElement(src + i*elemSize, type, swap));
+                if (comp[i] == 4) dst[0] = dst[1] = dst[2] = c;
+                else dst[comp[i]] = c;
+            }
+        }
+    }
+}
+
+// Store an RGBA8 color as one group of a color image (a valid format/type); luminance is R + G + B, clamped (GL 1.1
+// section 4.3.2)
+static void storeColor(u8 *dst, const u8 rgba[4], GLenum format, GLenum type, bool swap)
+{
+    int comp[4], n = colorComponents(format, comp);
+    int c[5] = { rgba[0], rgba[1], rgba[2], rgba[3], 0 };
+    c[4] = (c[0] + c[1] + c[2] > 255)? 255 : c[0] + c[1] + c[2];
+    if (packedFormat(type))
+    {
+        u16 v = pack16(packedTexColor(type), c);
+        dst[swap? 1 : 0] = (u8)v;
+        dst[swap? 0 : 1] = (u8)(v >> 8);
+    }
+    else if (type == GL_UNSIGNED_BYTE) for (int i = 0; i < n; i++) dst[i] = (u8)c[comp[i]];
+    else for (int i = 0; i < n; i++) storeElement(dst + i*typeSize(type), type, c[comp[i]]/255.0, false, swap);
+}
+
+// w x h RGBA8 texels into a color image (a valid format/type) laid out as ps describes
+static void packColorImage(const u8 *rgba, int w, int h, GLenum format, GLenum type, const PixelStore *ps, u8 *pixels)
+{
+    int n, elemSize, groupSize;
+    colorImageLayout(format, type, &n, &elemSize, &groupSize);
+    size_t rowBytes = imageRowBytes(ps, w, elemSize, groupSize);
+    bool swap = ps->swapBytes && (elemSize > 1);
+    pixels += (size_t)ps->skipRows*rowBytes + (size_t)ps->skipPixels*groupSize;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+            storeColor(pixels + (size_t)y*rowBytes + (size_t)x*groupSize, rgba + ((size_t)y*w + x)*4, format, type, swap);
+}
+
+//----------------------------------------------------------------------------------
 // OpenGL: textures
 //----------------------------------------------------------------------------------
 static int nextPow2(int v)
@@ -4486,11 +4723,44 @@ static void transferPixels(Texture *t, int level, int x0, int y0, int w, int h, 
     }
 }
 
+// Binding of target on the active unit, NULL if target is not GL_TEXTURE_1D or GL_TEXTURE_2D
+static GLuint *textureBinding(GLenum target)
+{
+    if (target == GL_TEXTURE_2D) return &gl.boundTexture[gl.activeTexture];
+    if (target == GL_TEXTURE_1D) return &gl.boundTexture1D[gl.activeTexture];
+    return NULL;
+}
+
 static Texture *boundTexture(GLenum target)
 {
-    GLuint id = gl.boundTexture[gl.activeTexture];
-    if ((target != GL_TEXTURE_2D) || (id == 0) || (id >= C3DGL_MAX_TEXTURES)) return NULL;
-    return &gl.textures[id];
+    GLuint *binding = textureBinding(target);
+    if ((binding == NULL) || (*binding == 0) || (*binding >= C3DGL_MAX_TEXTURES)) return NULL;
+    return &gl.textures[*binding];
+}
+
+// Error of a texture call on target that has no texture: unknown target, or no texture bound to it
+static GLenum targetError(GLenum target) { return textureBinding(target)? GL_INVALID_OPERATION : GL_INVALID_ENUM; }
+
+static GLuint textureId(const Texture *t) { return (GLuint)(t - gl.textures); }
+
+// Size of a mipmap level (GL: halved, at least 1)
+static int levelSize(int size, int level) { return (size >> level)? (size >> level) : 1; }
+
+// Last level the storage of t can have (1D textures become as high as wide for their mip chain, see ensureMipmapStorage())
+static int maxStoredLevel(const Texture *t)
+{
+    return C3D_TexCalcMaxLevel(t->tex.width, (t->target == GL_TEXTURE_1D)? t->tex.width : t->tex.height);
+}
+
+// 1D textures: copy texels x0..x0 + w - 1 of row 0 of stored `level` into all its other rows
+static void replicateRows(Texture *t, int level, int x0, int w)
+{
+    if (t->target != GL_TEXTURE_1D) return;
+    int texWidth, texHeight, bpp = t->format.bpp;
+    u8 *data = levelData(t, level, &texWidth, &texHeight);
+    for (int y = 1; y < texHeight; y++)
+        for (int x = x0; x < x0 + w; x++)
+            memcpy(data + tiledOffset(texWidth, texHeight, x, y, bpp), data + tiledOffset(texWidth, texHeight, x, 0, bpp), bpp);
 }
 
 // Texture about to change: submit pending vertices that use it and rebind it for the next draw
@@ -4526,59 +4796,47 @@ static void updateCompleteness(Texture *t)
     for (int l = 1; t->complete && ((base->width >> l) > 0 || (base->height >> l) > 0); l++)
     {
         const TexLevel *lv = &t->level[l];
-        int w = (base->width >> l)? (base->width >> l) : 1, h = (base->height >> l)? (base->height >> l) : 1;
-        t->complete = lv->defined && (lv->width == w) && (lv->height == h) && (lv->format == base->format) &&
-                      (lv->border == base->border);
+        t->complete = lv->defined && (lv->width == levelSize(base->width, l)) && (lv->height == levelSize(base->height, l)) &&
+                      (lv->format == base->format) && (lv->base == base->base) && (lv->border == base->border);
     }
 }
 
-// Switch tex to a mip chain (down to 8x8), keeping level 0; false if the size has no levels below 8x8
+// Switch tex to a mip chain (down to 8x8), keeping level 0; false if the size has no levels below 8x8. A 1D texture
+// becomes as high as it is wide, so that its levels go down to 8 texels in s
 static bool ensureMipmapStorage(Texture *t)
 {
     if (t->levels > 1) return true;
-    if (C3D_TexCalcMaxLevel(t->tex.width, t->tex.height) < 1) return false;
+    if (maxStoredLevel(t) < 1) return false;
 
+    bool oneD = (t->target == GL_TEXTURE_1D);
     C3D_Tex mip;
-    if (!C3D_TexInitMipmap(&mip, t->tex.width, t->tex.height, t->format.format))
+    if (!C3D_TexInitMipmap(&mip, t->tex.width, oneD? t->tex.width : t->tex.height, t->format.format))
     {
         LOG("Out of memory for mipmaps\n");
         setError(GL_OUT_OF_MEMORY);
         return false;
     }
     memset(mip.data, 0, C3D_TexCalcTotalSize(mip.size, mip.maxLevel));
-    memcpy(mip.data, t->tex.data, t->tex.size);     // Level 0 comes first in both
+    int bpp = t->format.bpp;
+    if (oneD)   // Row 0 of level 0, replicated below
+    {
+        for (int x = 0; x < t->tex.width; x++)
+            memcpy((u8 *)mip.data + tiledOffset(mip.width, mip.height, x, 0, bpp),
+                   (u8 *)t->tex.data + tiledOffset(t->tex.width, t->tex.height, x, 0, bpp), bpp);
+    }
+    else memcpy(mip.data, t->tex.data, t->tex.size);    // Level 0 comes first in both
 
     if (gl.frameActive) deferTextureDelete(&t->tex);
     else C3D_TexDelete(&t->tex);
     t->tex = mip;
     t->levels = mip.maxLevel + 1;
+    replicateRows(t, 0, 0, t->tex.width);
     return true;
 }
 
 static void flushTexture(Texture *t)
 {
     GSPGPU_FlushDataCache(t->tex.data, C3D_TexCalcTotalSize(t->tex.size, t->levels - 1));
-}
-
-// Unpack/pack a texel of a 16-bit packed format into 4 channels of 0..255
-static void unpack16(GPU_TEXCOLOR format, u16 v, int c[4])
-{
-    switch (format)
-    {
-        case GPU_RGB565: c[0] = (v >> 11)*255/31; c[1] = ((v >> 5) & 63)*255/63; c[2] = (v & 31)*255/31; c[3] = 255; break;
-        case GPU_RGBA5551: c[0] = (v >> 11)*255/31; c[1] = ((v >> 6) & 31)*255/31; c[2] = ((v >> 1) & 31)*255/31; c[3] = (v & 1)*255; break;
-        default: c[0] = (v >> 12)*17; c[1] = ((v >> 8) & 15)*17; c[2] = ((v >> 4) & 15)*17; c[3] = (v & 15)*17; break;   // RGBA4
-    }
-}
-
-static u16 pack16(GPU_TEXCOLOR format, const int c[4])
-{
-    switch (format)
-    {
-        case GPU_RGB565: return (u16)(((c[0]*31 + 127)/255 << 11) | ((c[1]*63 + 127)/255 << 5) | ((c[2]*31 + 127)/255));
-        case GPU_RGBA5551: return (u16)(((c[0]*31 + 127)/255 << 11) | ((c[1]*31 + 127)/255 << 6) | ((c[2]*31 + 127)/255 << 1) | (c[3] >= 128));
-        default: return (u16)(((c[0]*15 + 127)/255 << 12) | ((c[1]*15 + 127)/255 << 8) | ((c[2]*15 + 127)/255 << 4) | ((c[3]*15 + 127)/255));
-    }
 }
 
 // GL_GENERATE_MIPMAP: all levels from level 0 with a 2x2 box filter (on the CPU). Levels below 8x8 are only
@@ -4590,8 +4848,8 @@ static void generateMipmaps(Texture *t)
     {
         TexLevel *lv = &t->level[l];
         *lv = base;
-        lv->width = (base.width >> l)? (base.width >> l) : 1;
-        lv->height = (base.height >> l)? (base.height >> l) : 1;
+        lv->width = levelSize(base.width, l);
+        lv->height = levelSize(base.height, l);
         lv->border = 0;
     }
     t->level[0].border = 0;     // Generated levels have no border, level 0's border texels were dropped anyway
@@ -4638,7 +4896,18 @@ static void generateMipmaps(Texture *t)
                 else for (int k = 0; k < bpp; k++) q[k] = (u8)((sum[k] + 2)/4);
             }
         }
+        replicateRows(t, l, 0, w);
     }
+}
+
+static void initTexture(Texture *t)
+{
+    memset(t, 0, sizeof(*t));
+    t->used = true;
+    t->minFilter = GL_NEAREST_MIPMAP_LINEAR;    // OpenGL defaults
+    t->magFilter = GL_LINEAR;
+    t->wrapS = t->wrapT = GL_REPEAT;
+    t->priority = 1.0f;
 }
 
 void glGenTextures(GLsizei n, GLuint *textures)
@@ -4649,12 +4918,7 @@ void glGenTextures(GLsizei n, GLuint *textures)
         while ((id < C3DGL_MAX_TEXTURES) && gl.textures[id].used) id++;
         if (id >= C3DGL_MAX_TEXTURES) { LOG("Out of texture ids\n"); setError(GL_OUT_OF_MEMORY); textures[i] = 0; continue; }
 
-        Texture *t = &gl.textures[id];
-        memset(t, 0, sizeof(*t));
-        t->used = true;
-        t->minFilter = GL_NEAREST_MIPMAP_LINEAR;    // OpenGL defaults
-        t->magFilter = GL_LINEAR;
-        t->wrapS = t->wrapT = GL_REPEAT;
+        initTexture(&gl.textures[id]);
         textures[i] = id;
     }
 }
@@ -4676,7 +4940,11 @@ void glDeleteTextures(GLsizei n, const GLuint *textures)
             else C3D_TexDelete(&t->tex);
         }
         memset(t, 0, sizeof(*t));
-        for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) if (gl.boundTexture[unit] == id) gl.boundTexture[unit] = 0;
+        for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+        {
+            if (gl.boundTexture[unit] == id) gl.boundTexture[unit] = 0;
+            if (gl.boundTexture1D[unit] == id) gl.boundTexture1D[unit] = 0;
+        }
     }
 }
 
@@ -4688,7 +4956,47 @@ GLboolean glIsTexture(GLuint texture)
 void glBindTexture(GLenum target, GLuint texture)
 {
     LIST_SAVE(BIND_TEXTURE, "uu", target, texture);
-    if (target == GL_TEXTURE_2D) gl.boundTexture[gl.activeTexture] = texture;
+    GLuint *binding = textureBinding(target);
+    if (binding == NULL) { setError(GL_INVALID_ENUM); return; }
+
+    // The first bind decides the texture's dimensionality; binding an unused name creates the texture
+    if ((texture != 0) && (texture < C3DGL_MAX_TEXTURES))
+    {
+        Texture *t = &gl.textures[texture];
+        if (!t->used) initTexture(t);
+        if ((t->target != 0) && (t->target != target)) { setError(GL_INVALID_OPERATION); return; }
+        t->target = target;
+    }
+    *binding = texture;
+}
+
+// Priorities are stored only, all textures are resident (PICA samples them from linear memory)
+void glPrioritizeTextures(GLsizei n, const GLuint *textures, const GLclampf *priorities)
+{
+    if (gl.listCompiling)
+    {
+        // An invalid count is recorded without the arrays and fails again when the list is executed
+        ListWord *w = listBegin(LIST_PRIORITIZE_TEXTURES, (n > 0)? 1 + 2*n : 1);
+        if (w == NULL) return;
+        w[0].i = n;
+        for (int i = 0; i < n; i++) { w[1 + i].u = textures[i]; w[1 + n + i].f = priorities[i]; }
+        listEnd();
+        return;
+    }
+    if (n < 0) { setError(GL_INVALID_VALUE); return; }
+    for (int i = 0; i < n; i++)
+    {
+        // Unused names and 0 are ignored
+        if (glIsTexture(textures[i])) gl.textures[textures[i]].priority = (priorities[i] < 0.0f)? 0.0f : (priorities[i] > 1.0f)? 1.0f : priorities[i];
+    }
+}
+
+GLboolean glAreTexturesResident(GLsizei n, const GLuint *textures, GLboolean *residences)
+{
+    (void)residences;   // Left untouched when all are resident
+    if (n < 0) { setError(GL_INVALID_VALUE); return GL_FALSE; }
+    for (int i = 0; i < n; i++) if (!glIsTexture(textures[i])) { setError(GL_INVALID_VALUE); return GL_FALSE; }
+    return GL_TRUE;
 }
 
 static bool combineFuncValid(GLenum f, bool alpha)
@@ -4885,12 +5193,16 @@ void glMultiTexCoord4iv(GLenum target, const GLint *v) { glMultiTexCoord4f(targe
 void glMultiTexCoord4s(GLenum target, GLshort s, GLshort t, GLshort r, GLshort q) { glMultiTexCoord4f(target, s, t, r, q); }
 void glMultiTexCoord4sv(GLenum target, const GLshort *v) { glMultiTexCoord4f(target, v[0], v[1], v[2], v[3]); }
 
-void glTexParameteri(GLenum target, GLenum pname, GLint param)
-{
-    LIST_SAVE(TEX_PARAMETER, "uui", target, pname, param);
-    Texture *t = boundTexture(target);
-    if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
+static float clamp01(float v) { return !(v > 0.0f)? 0.0f : (v > 1.0f)? 1.0f : v; }
 
+// glTexParameter of the texture bound to target: v has 4 values for GL_TEXTURE_BORDER_COLOR, otherwise 1
+static void setTexParameter(GLenum target, GLenum pname, const GLfloat *v)
+{
+    LIST_SAVE(TEX_PARAMETER, "uuF", target, pname, (pname == GL_TEXTURE_BORDER_COLOR)? 4 : 1, v);
+    Texture *t = boundTexture(target);
+    if (t == NULL) { setError(targetError(target)); return; }
+
+    GLint param = (GLint)v[0];
     switch (pname)
     {
         case GL_TEXTURE_MIN_FILTER:
@@ -4914,26 +5226,45 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param)
             t->generateMipmap = (param != 0);
             if (t->generateMipmap && t->loaded)
             {
-                textureModified(gl.boundTexture[gl.activeTexture]);
+                textureModified(textureId(t));
                 generateMipmaps(t);
                 flushTexture(t);
             }
             break;
+        case GL_TEXTURE_PRIORITY: t->priority = clamp01(v[0]); return;
+        case GL_TEXTURE_BORDER_COLOR: for (int i = 0; i < 4; i++) t->borderColor[i] = clamp01(v[i]); return;
         default: setError(GL_INVALID_ENUM); return;
     }
 
     if (t->loaded)
     {
-        textureModified(gl.boundTexture[gl.activeTexture]);
+        textureModified(textureId(t));
         applyTextureParams(t);
     }
+}
+
+void glTexParameterf(GLenum target, GLenum pname, GLfloat param)
+{
+    if (pname == GL_TEXTURE_BORDER_COLOR) { setError(GL_INVALID_ENUM); return; }   // Vector only
+    setTexParameter(target, pname, &param);
+}
+
+void glTexParameteri(GLenum target, GLenum pname, GLint param) { glTexParameterf(target, pname, (GLfloat)param); }
+void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params) { setTexParameter(target, pname, params); }
+
+void glTexParameteriv(GLenum target, GLenum pname, const GLint *params)
+{
+    // Integer colors map [0, INT_MAX] to [0, 1]
+    GLfloat v[4] = { (GLfloat)params[0] };
+    if (pname == GL_TEXTURE_BORDER_COLOR) for (int i = 0; i < 4; i++) v[i] = (GLfloat)params[i]/2147483647.0f;
+    setTexParameter(target, pname, v);
 }
 
 // glGetTexParameter: values of the texture bound to the active unit; returns the count, 0 on error
 static int getTexParameter(GLenum target, GLenum pname, float v[4])
 {
     Texture *t = boundTexture(target);
-    if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return 0; }
+    if (t == NULL) { setError(targetError(target)); return 0; }
     switch (pname)
     {
         case GL_TEXTURE_MIN_FILTER: v[0] = t->minFilter; return 1;
@@ -4941,6 +5272,9 @@ static int getTexParameter(GLenum target, GLenum pname, float v[4])
         case GL_TEXTURE_WRAP_S: v[0] = t->wrapS; return 1;
         case GL_TEXTURE_WRAP_T: v[0] = t->wrapT; return 1;
         case GL_GENERATE_MIPMAP: v[0] = t->generateMipmap; return 1;
+        case GL_TEXTURE_PRIORITY: v[0] = t->priority; return 1;
+        case GL_TEXTURE_RESIDENT: v[0] = GL_TRUE; return 1;
+        case GL_TEXTURE_BORDER_COLOR: memcpy(v, t->borderColor, 4*sizeof(float)); return 4;
         default: setError(GL_INVALID_ENUM); return 0;
     }
 }
@@ -4949,7 +5283,11 @@ void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params)
 {
     float v[4];
     int n = getTexParameter(target, pname, v);
-    for (int i = 0; i < n; i++) params[i] = (GLint)v[i];
+    for (int i = 0; i < n; i++)
+    {
+        if (pname == GL_TEXTURE_BORDER_COLOR) params[i] = (GLint)(v[i]*2147483647.0);
+        else params[i] = (GLint)lroundf(v[i]);
+    }
 }
 
 void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params)
@@ -4959,71 +5297,123 @@ void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params)
     for (int i = 0; i < n; i++) params[i] = v[i];
 }
 
-void glTexParameterf(GLenum target, GLenum pname, GLfloat param) { glTexParameteri(target, pname, (GLint)param); }
-void glTexParameteriv(GLenum target, GLenum pname, const GLint *params) { glTexParameteri(target, pname, params[0]); }
-void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params) { glTexParameteri(target, pname, (GLint)params[0]); }
 
-// Size check shared by real and proxy textures. Non-power-of-two sizes are accepted (padded internally)
-static bool textureSizeValid(GLint level, GLsizei width, GLsizei height, GLint border)
+// Size check shared by real and proxy textures: level, border and the image size without the border. Non-power-of-two
+// sizes are accepted (padded internally)
+static bool textureSizeValid(GLint level, GLsizei imageWidth, GLsizei imageHeight, GLint border)
 {
     if ((level < 0) || (level > MAX_TEXTURE_LEVEL) || ((border != 0) && (border != 1))) return false;
-    return (width - 2*border >= 0) && (height - 2*border >= 0);
+    return (imageWidth >= 0) && (imageHeight >= 0);
 }
 
-static bool textureSizeFits(GLint level, GLsizei width, GLsizei height, GLint border)
+static bool textureSizeFits(GLint level, GLsizei imageWidth, GLsizei imageHeight)
 {
     int max = C3DGL_MAX_TEXTURE_SIZE >> level, w = 1, h = 1;
-    while (w < width - 2*border) w <<= 1;
-    while (h < height - 2*border) h <<= 1;
+    while (w < imageWidth) w <<= 1;
+    while (h < imageHeight) h <<= 1;
     return (w <= max) && (h <= max);
 }
 
-// First half of glTexImage2D and glCompressedTexImage2D: records proxies, validates and (re)defines `level` of the bound
-// texture. Returns the texture (NULL on errors and for proxies); *stored tells whether `level` has storage for its
-// texels, which the caller then uploads before finishTexImage()
-static Texture *defineTexImage(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
-                               GLint border, const TexFormat *f, bool *stored)
+// Base internal format of a texture internal format (GL 1.1 tables 3.15 and 3.16), 0 if it is not one
+static GLenum baseInternalFormat(GLint internalformat)
+{
+    switch (internalformat)
+    {
+        case GL_ALPHA: return GL_ALPHA;
+        case 1: case GL_LUMINANCE: return GL_LUMINANCE;
+        case 2: case GL_LUMINANCE_ALPHA: return GL_LUMINANCE_ALPHA;
+        case GL_INTENSITY: return GL_INTENSITY;
+        case 3: case GL_RGB: case GL_R3_G3_B2: return GL_RGB;
+        case 4: case GL_RGBA: return GL_RGBA;
+        default: break;
+    }
+    if ((internalformat >= GL_ALPHA4) && (internalformat <= GL_ALPHA16)) return GL_ALPHA;
+    if ((internalformat >= GL_LUMINANCE4) && (internalformat <= GL_LUMINANCE16)) return GL_LUMINANCE;
+    if ((internalformat >= GL_LUMINANCE4_ALPHA4) && (internalformat <= GL_LUMINANCE16_ALPHA16)) return GL_LUMINANCE_ALPHA;
+    if ((internalformat >= GL_INTENSITY4) && (internalformat <= GL_INTENSITY16)) return GL_INTENSITY;
+    if ((internalformat >= GL_RGB4) && (internalformat <= GL_RGB16)) return GL_RGB;
+    if ((internalformat >= GL_RGBA2) && (internalformat <= GL_RGBA16)) return GL_RGBA;
+    return 0;
+}
+
+static bool unsizedFormat(GLint internalformat)
+{
+    return ((internalformat >= 1) && (internalformat <= 4)) || (internalformat == GL_ALPHA) || (internalformat == GL_LUMINANCE) ||
+           (internalformat == GL_LUMINANCE_ALPHA) || (internalformat == GL_INTENSITY) || (internalformat == GL_RGB) ||
+           (internalformat == GL_RGBA);
+}
+
+// PICA format storing internal format `internalformat` (base internal format `base`) loaded from data of `type`: the
+// closest one for sized formats, intensity as LA8 (I, I); unsized RGB/RGBA keep packed 16-bit data in its format
+static TexFormat texStorage(GLint internalformat, GLenum base, GLenum type)
+{
+    GLenum format = base, storeType = GL_UNSIGNED_BYTE;
+    bool unsized = unsizedFormat(internalformat);
+    if (base == GL_INTENSITY) format = GL_LUMINANCE_ALPHA;
+    else if (base == GL_RGB)
+    {
+        if ((internalformat == GL_R3_G3_B2) || (internalformat == GL_RGB4) || (internalformat == GL_RGB5) ||
+            (unsized && (type == GL_UNSIGNED_SHORT_5_6_5))) storeType = GL_UNSIGNED_SHORT_5_6_5;
+    }
+    else if (base == GL_RGBA)
+    {
+        if ((internalformat == GL_RGBA2) || (internalformat == GL_RGBA4)) storeType = GL_UNSIGNED_SHORT_4_4_4_4;
+        else if (internalformat == GL_RGB5_A1) storeType = GL_UNSIGNED_SHORT_5_5_5_1;
+        else if (unsized && (packedFormat(type) == GL_RGBA)) storeType = type;
+    }
+    TexFormat f;
+    texFormat(format, storeType, &f);
+    return f;
+}
+
+// First half of glTexImage1D/2D and glCompressedTexImage2D: records proxies, validates and (re)defines `level` of the
+// bound texture, the image size given without the border. Returns the texture (NULL on errors and for proxies);
+// *stored tells whether `level` has storage for its texels, which the caller then loads before finishTexImage()
+static Texture *defineTexImage(GLenum target, GLint level, GLint internalformat, GLenum base, int imageWidth,
+                               int imageHeight, GLint border, const TexFormat *f, bool *stored)
 {
     *stored = false;
 
     // Proxy: only record whether the image would be accepted
-    if (target == GL_PROXY_TEXTURE_2D)
+    if ((target == GL_PROXY_TEXTURE_1D) || (target == GL_PROXY_TEXTURE_2D))
     {
-        ProxyLevel *p = &gl.proxy2D[level];
+        bool oneD = (target == GL_PROXY_TEXTURE_1D);
+        ProxyLevel *p = oneD? &gl.proxy1D[level] : &gl.proxy2D[level];
         memset(p, 0, sizeof(*p));
-        if (textureSizeFits(level, width, height, border))
+        if (textureSizeFits(level, imageWidth, imageHeight))
         {
-            p->width = width;
-            p->height = height;
+            p->width = imageWidth + 2*border;
+            p->height = oneD? 1 : imageHeight + 2*border;
             p->border = border;
             p->internalFormat = internalformat;
+            p->base = base;
             p->format = f->format;
         }
         return NULL;
     }
 
     Texture *t = boundTexture(target);
-    if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return NULL; }
+    if (t == NULL) { setError(targetError(target)); return NULL; }
 
-    if (!textureSizeFits(level, width, height, border))
+    if (!textureSizeFits(level, imageWidth, imageHeight))
     {
-        LOG("glTexImage2D: %ix%i exceeds the maximum of %i\n", width, height, C3DGL_MAX_TEXTURE_SIZE >> level);
+        LOG("glTexImage: %ix%i exceeds the maximum of %i\n", imageWidth, imageHeight, C3DGL_MAX_TEXTURE_SIZE >> level);
         setError(GL_INVALID_VALUE);
         return NULL;
     }
 
-    int imageWidth = width - 2*border, imageHeight = height - 2*border;
-    TexLevel lv = { true, imageWidth, imageHeight, border, internalformat, f->format };
-    textureModified(gl.boundTexture[gl.activeTexture]);
+    TexLevel lv = { true, imageWidth, imageHeight, border, internalformat, base, f->format };
+    textureModified(textureId(t));
 
     if (level > 0)
     {
-        if (!t->loaded) { WARN_ONCE("glTexImage2D: mipmap level before level 0, ignored\n"); return NULL; }
+        if (!t->loaded) { WARN_ONCE("glTexImage: mipmap level before level 0, ignored\n"); return NULL; }
         t->level[level] = lv;
 
         // Stored if it fits the chain (sizes and format of level 0), levels below 8x8 only count for completeness
-        bool matches = (lv.width == (t->width >> level)) && (lv.height == (t->height >> level)) && (f->format == t->format.format);
-        *stored = matches && (level <= C3D_TexCalcMaxLevel(t->tex.width, t->tex.height)) && ensureMipmapStorage(t);
+        bool matches = (lv.width == levelSize(t->width, level)) && (lv.height == levelSize(t->height, level)) &&
+                       (f->format == t->format.format);
+        *stored = matches && (level <= maxStoredLevel(t)) && ensureMipmapStorage(t);
         return t;
     }
 
@@ -5040,7 +5430,7 @@ static Texture *defineTexImage(GLenum target, GLint level, GLint internalformat,
         }
         if (!C3D_TexInit(&t->tex, texWidth, texHeight, f->format))
         {
-            LOG("glTexImage2D: out of memory for %ix%i texture\n", texWidth, texHeight);
+            LOG("glTexImage: out of memory for %ix%i texture\n", texWidth, texHeight);
             setError(GL_OUT_OF_MEMORY);
             return NULL;
         }
@@ -5052,6 +5442,7 @@ static Texture *defineTexImage(GLenum target, GLint level, GLint internalformat,
         t->width = imageWidth;
         t->height = imageHeight;
     }
+    t->base = base;
     t->level[0] = lv;
     *stored = true;
     return t;
@@ -5070,23 +5461,108 @@ static void finishTexImage(Texture *t, GLint level)
     applyTextureParams(t);
 }
 
-void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
-                  GLint border, GLenum format, GLenum type, const GLvoid *pixels)
+// Load a w x h color image (a valid format/type) into stored `level` at (x0, y0), converted to the texture's format and
+// the base internal format `base` (GL 1.1 table 3.15: luminance and intensity take R); 1D textures get it in all rows
+static void loadTexels(Texture *t, int level, int x0, int y0, int w, int h, GLenum format, GLenum type,
+                       const GLvoid *pixels, const PixelStore *ps, GLenum base)
 {
-    if (gl.listCompiling && (target != GL_PROXY_TEXTURE_2D))     // Proxies are executed immediately
+    // Already in the stored format: copied as it is
+    TexFormat f;
+    if (texFormat(format, type, &f) && (f.format == t->format.format) && (base != GL_INTENSITY))
     {
-        const GLint args[8] = { (GLint)target, level, internalformat, width, height, border, (GLint)format, (GLint)type };
-        bool sizeValid = textureSizeValid(level, width, height, border) && textureSizeFits(level, width, height, border);
-        listSaveImage(LIST_TEX_IMAGE, args, width, height, sizeValid, pixels);
+        transferPixels(t, level, x0, y0, w, h, (u8 *)pixels, ps, true);
+        replicateRows(t, level, x0, w);
         return;
     }
-    if (!textureSizeValid(level, width, height, border)) { setError(GL_INVALID_VALUE); return; }
 
-    TexFormat f;
-    if (!texFormat(format, type, &f)) { LOG("glTexImage2D: format 0x%x/0x%x not supported\n", format, type); setError(GL_INVALID_ENUM); return; }
+    size_t count = (size_t)w*h;
+    u8 *texels = malloc(count? count*4 : 1);
+    if (texels == NULL) { setError(GL_OUT_OF_MEMORY); return; }
+    unpackColorImage(pixels, w, h, format, type, ps, texels);
+
+    // RGBA to the stored layout, in place: a stored texel has at most 4 bytes, so texel i never overwrites a later one
+    const TexFormat *s = &t->format;
+    for (size_t i = 0; i < count; i++)
+    {
+        int c[4] = { texels[i*4], texels[i*4 + 1], texels[i*4 + 2], texels[i*4 + 3] };
+        u8 *q = texels + i*s->bpp;
+        if (s->packed16)
+        {
+            u16 v = pack16(s->format, c);
+            memcpy(q, &v, 2);
+        }
+        else switch (s->format)
+        {
+            case GPU_RGBA8: q[0] = c[0]; q[1] = c[1]; q[2] = c[2]; q[3] = c[3]; break;
+            case GPU_RGB8: q[0] = c[0]; q[1] = c[1]; q[2] = c[2]; break;
+            case GPU_LA8: q[0] = c[0]; q[1] = (base == GL_INTENSITY)? c[0] : c[3]; break;
+            case GPU_L8: q[0] = c[0]; break;
+            default: q[0] = c[3]; break;    // GPU_A8
+        }
+    }
+    const PixelStore tight = { .alignment = 1 };
+    transferPixels(t, level, x0, y0, w, h, texels, &tight, true);
+    replicateRows(t, level, x0, w);
+    free(texels);
+}
+
+// The texels of a w x h rectangle at (0, 0) of stored `level` as RGBA8 (malloc'ed), components assigned by the base
+// internal format (GL 1.1 table 6.1: luminance and intensity to R)
+static u8 *readTexels(Texture *t, int level, int w, int h, GLenum base)
+{
+    size_t count = (size_t)w*h;
+    u8 *texels = malloc(count? count*4 : 1);
+    if (texels == NULL) { setError(GL_OUT_OF_MEMORY); return NULL; }
+    const PixelStore tight = { .alignment = 1 };
+    transferPixels(t, level, 0, 0, w, h, texels, &tight, false);
+
+    // Expanded in place from the back (a stored texel has at most 4 bytes)
+    const TexFormat *s = &t->format;
+    for (size_t i = count; i-- > 0;)
+    {
+        const u8 *q = texels + i*s->bpp;
+        int c[4] = { 0, 0, 0, 255 };
+        if (s->packed16)
+        {
+            u16 v;
+            memcpy(&v, q, 2);
+            unpack16(s->format, v, c);
+        }
+        else switch (s->format)
+        {
+            case GPU_RGBA8: c[0] = q[0]; c[1] = q[1]; c[2] = q[2]; c[3] = q[3]; break;
+            case GPU_RGB8: c[0] = q[0]; c[1] = q[1]; c[2] = q[2]; break;
+            case GPU_LA8: c[0] = q[0]; if (base != GL_INTENSITY) c[3] = q[1]; break;
+            case GPU_L8: c[0] = q[0]; break;
+            default: c[3] = q[0]; break;    // GPU_A8
+        }
+        for (int k = 0; k < 4; k++) texels[i*4 + k] = (u8)c[k];
+    }
+    return texels;
+}
+
+// glTexImage1D/2D: oneD for the 1D targets, whose image is one row with a border only left and right
+static void texImage(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border,
+                     GLenum format, GLenum type, const GLvoid *pixels, bool oneD)
+{
+    if (oneD? (target != GL_TEXTURE_1D) && (target != GL_PROXY_TEXTURE_1D) :
+              (target != GL_TEXTURE_2D) && (target != GL_PROXY_TEXTURE_2D)) { setError(GL_INVALID_ENUM); return; }
+    int imageWidth = width - 2*border, imageHeight = oneD? 1 : height - 2*border;
+    if (!textureSizeValid(level, imageWidth, imageHeight, border)) { setError(GL_INVALID_VALUE); return; }
+    GLenum base = baseInternalFormat(internalformat);
+    if (base == 0) { LOG("glTexImage: internal format 0x%x not supported\n", internalformat); setError(GL_INVALID_VALUE); return; }
+    int n, elemSize, groupSize;
+    GLenum error = colorImageLayout(format, type, &n, &elemSize, &groupSize);
+    if (error != GL_NO_ERROR) { LOG("glTexImage: format 0x%x/0x%x not supported\n", format, type); setError(error); return; }
+
+    // Levels > 0 of an unsized internal format keep level 0's storage, so the chain stays in one format
+    TexFormat f = texStorage(internalformat, base, type);
+    const Texture *bound = boundTexture(target);
+    if ((level > 0) && (bound != NULL) && bound->loaded && !bound->format.compressed && unsizedFormat(internalformat) &&
+        (bound->base == base)) f = bound->format;
 
     bool stored;
-    Texture *t = defineTexImage(target, level, internalformat, width, height, border, &f, &stored);
+    Texture *t = defineTexImage(target, level, internalformat, base, imageWidth, imageHeight, border, &f, &stored);
     if (t == NULL) return;
 
     // The border texels are not stored (PICA has no texture borders): skip them
@@ -5094,11 +5570,38 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei widt
     if (border)
     {
         if (ps.rowLength == 0) ps.rowLength = width;
-        ps.skipRows += border;
+        if (!oneD) ps.skipRows += border;
         ps.skipPixels += border;
     }
-    if (stored && (pixels != NULL)) transferPixels(t, level, 0, 0, width - 2*border, height - 2*border, (u8 *)pixels, &ps, true);
+    if (stored && (pixels != NULL)) loadTexels(t, level, 0, 0, imageWidth, imageHeight, format, type, pixels, &ps, base);
     finishTexImage(t, level);
+}
+
+void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
+                  GLint border, GLenum format, GLenum type, const GLvoid *pixels)
+{
+    if (gl.listCompiling && (target != GL_PROXY_TEXTURE_2D))     // Proxies are executed immediately
+    {
+        const GLint args[8] = { (GLint)target, level, internalformat, width, height, border, (GLint)format, (GLint)type };
+        bool sizeValid = textureSizeValid(level, width - 2*border, height - 2*border, border) &&
+                         textureSizeFits(level, width - 2*border, height - 2*border);
+        listSaveImage(LIST_TEX_IMAGE, args, width, height, sizeValid, false, pixels);
+        return;
+    }
+    texImage(target, level, internalformat, width, height, border, format, type, pixels, false);
+}
+
+void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border,
+                  GLenum format, GLenum type, const GLvoid *pixels)
+{
+    if (gl.listCompiling && (target != GL_PROXY_TEXTURE_1D))
+    {
+        const GLint args[8] = { (GLint)target, level, internalformat, width, 1, border, (GLint)format, (GLint)type };
+        bool sizeValid = textureSizeValid(level, width - 2*border, 1, border) && textureSizeFits(level, width - 2*border, 1);
+        listSaveImage(LIST_TEX_IMAGE, args, width, 1, sizeValid, true, pixels);
+        return;
+    }
+    texImage(target, level, internalformat, width, 1, border, format, type, pixels, true);
 }
 
 // Paletted format (GL_OES_compressed_paletted_texture): palette entries as GL format/type, index bits; false otherwise
@@ -5175,7 +5678,7 @@ static void compressedPaletted(GLenum target, GLint level, GLenum internalformat
     {
         int w = (width >> l)? (width >> l) : 1, h = (height >> l)? (height >> l) : 1;
         bool stored;
-        Texture *t = defineTexImage(target, l, internalformat, w, h, 0, &f, &stored);
+        Texture *t = defineTexImage(target, l, internalformat, format, w, h, 0, &f, &stored);
         if (indices != NULL)
         {
             for (int i = 0; i < w*h; i++)
@@ -5223,7 +5726,7 @@ void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat, G
     if (imageSize != ((width + 3)/4)*((height + 3)/4)*8) { setError(GL_INVALID_VALUE); return; }
     TexFormat f = { GPU_ETC1, 0, false, false, true };
     bool stored;
-    Texture *t = defineTexImage(target, level, internalformat, width, height, 0, &f, &stored);
+    Texture *t = defineTexImage(target, level, internalformat, GL_RGB, width, height, 0, &f, &stored);
     if (t == NULL) return;
     if (stored && (data != NULL)) uploadEtc1(t, level, width, height, data);
     finishTexImage(t, level);
@@ -5242,6 +5745,31 @@ void glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint 
     else setError(GL_INVALID_ENUM);
 }
 
+static void texSubImage(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
+                        GLenum format, GLenum type, const GLvoid *pixels)
+{
+    Texture *t = boundTexture(target);
+    if (t == NULL) { setError(targetError(target)); return; }
+    if ((level < 0) || (level > MAX_TEXTURE_LEVEL)) { setError(GL_INVALID_VALUE); return; }
+    const TexLevel *lv = &t->level[level];
+    if (!t->loaded || !lv->defined || t->format.compressed) { setError(GL_INVALID_OPERATION); return; }
+    int n, elemSize, groupSize;
+    GLenum error = colorImageLayout(format, type, &n, &elemSize, &groupSize);
+    if (error != GL_NO_ERROR) { LOG("glTexSubImage: format 0x%x/0x%x not supported\n", format, type); setError(error); return; }
+    if ((width < 0) || (height < 0) || (xoffset < 0) || (yoffset < 0) || (xoffset + width > lv->width) ||
+        (yoffset + height > lv->height))
+    {
+        setError(GL_INVALID_VALUE);
+        return;
+    }
+    if (pixels == NULL) return;
+
+    textureModified(textureId(t));
+    if (level < t->levels) loadTexels(t, level, xoffset, yoffset, width, height, format, type, pixels, &gl.unpack, lv->base);
+    if ((level == 0) && t->generateMipmap) generateMipmaps(t);
+    flushTexture(t);
+}
+
 void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
                      GLenum format, GLenum type, const GLvoid *pixels)
 {
@@ -5249,44 +5777,59 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
     {
         const GLint args[8] = { (GLint)target, level, xoffset, yoffset, width, height, (GLint)format, (GLint)type };
         bool sizeValid = (width >= 0) && (height >= 0) && (width <= C3DGL_MAX_TEXTURE_SIZE) && (height <= C3DGL_MAX_TEXTURE_SIZE);
-        listSaveImage(LIST_TEX_SUB_IMAGE, args, width, height, sizeValid, pixels);
+        listSaveImage(LIST_TEX_SUB_IMAGE, args, width, height, sizeValid, false, pixels);
         return;
     }
-    Texture *t = boundTexture(target);
-    if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
-    if ((level < 0) || (level > MAX_TEXTURE_LEVEL)) { setError(GL_INVALID_VALUE); return; }
-    const TexLevel *lv = &t->level[level];
-    if (!t->loaded || !lv->defined) { setError(GL_INVALID_OPERATION); return; }
-    if (pixels == NULL) return;
-
-    TexFormat f;
-    if (!texFormat(format, type, &f) || (f.format != t->format.format)) { LOG("glTexSubImage2D: format mismatch\n"); setError(GL_INVALID_OPERATION); return; }
-    if ((xoffset < 0) || (yoffset < 0) || (xoffset + width > lv->width) || (yoffset + height > lv->height)) { setError(GL_INVALID_VALUE); return; }
-
-    textureModified(gl.boundTexture[gl.activeTexture]);
-    if (level < t->levels) transferPixels(t, level, xoffset, yoffset, width, height, (u8 *)pixels, &gl.unpack, true);
-    if ((level == 0) && t->generateMipmap) generateMipmaps(t);
-    flushTexture(t);
+    if (target != GL_TEXTURE_2D) { setError(GL_INVALID_ENUM); return; }
+    texSubImage(target, level, xoffset, yoffset, width, height, format, type, pixels);
 }
 
+void glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type,
+                     const GLvoid *pixels)
+{
+    if (gl.listCompiling)
+    {
+        const GLint args[8] = { (GLint)target, level, xoffset, 0, width, 1, (GLint)format, (GLint)type };
+        bool sizeValid = (width >= 0) && (width <= C3DGL_MAX_TEXTURE_SIZE);
+        listSaveImage(LIST_TEX_SUB_IMAGE, args, width, 1, sizeValid, true, pixels);
+        return;
+    }
+    if (target != GL_TEXTURE_1D) { setError(GL_INVALID_ENUM); return; }
+    texSubImage(target, level, xoffset, 0, width, 1, format, type, pixels);
+}
+
+// Any color format/type: texels in the stored layout are copied as they are, the others converted like glReadPixels
+// (luminance = R + G + B) from the components of table 6.1
 void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid *pixels)
 {
     Texture *t = boundTexture(target);
-    if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
+    if (t == NULL) { setError(targetError(target)); return; }
     if ((level < 0) || (level > MAX_TEXTURE_LEVEL)) { setError(GL_INVALID_VALUE); return; }
+    int n, elemSize, groupSize;
+    GLenum error = colorImageLayout(format, type, &n, &elemSize, &groupSize);
+    if (error != GL_NO_ERROR) { setError(error); return; }
     if (!t->loaded || !t->level[level].defined) return;
+    if (t->format.compressed) { LOG("glGetTexImage: ETC1 textures cannot be read back\n"); setError(GL_INVALID_OPERATION); return; }
+    if (level >= t->levels) { WARN_ONCE("glGetTexImage: levels below 8x8 are not stored\n"); return; }
 
+    const TexLevel *lv = &t->level[level];
     TexFormat f;
-    if (!texFormat(format, type, &f) || (f.format != t->format.format)) { LOG("glGetTexImage: format mismatch\n"); setError(GL_INVALID_OPERATION); return; }
-
-    if (level < t->levels) transferPixels(t, level, 0, 0, t->level[level].width, t->level[level].height, (u8 *)pixels, &gl.pack, false);
-    else WARN_ONCE("glGetTexImage: levels below 8x8 are not stored\n");
+    if (texFormat(format, type, &f) && (f.format == t->format.format) && (lv->base != GL_INTENSITY))
+    {
+        transferPixels(t, level, 0, 0, lv->width, lv->height, (u8 *)pixels, &gl.pack, false);
+        return;
+    }
+    u8 *texels = readTexels(t, level, lv->width, lv->height, lv->base);
+    if (texels == NULL) return;
+    packColorImage(texels, lv->width, lv->height, format, type, &gl.pack, (u8 *)pixels);
+    free(texels);
 }
 
-// Bits per component of a PICA format: R, G, B, A, L
-static void formatBits(GPU_TEXCOLOR format, int bits[5])
+// Bits per component of a PICA format holding base internal format `base`: R, G, B, A, L, I
+static void formatBits(GPU_TEXCOLOR format, GLenum base, int bits[6])
 {
-    memset(bits, 0, 5*sizeof(int));
+    memset(bits, 0, 6*sizeof(int));
+    if (base == GL_INTENSITY) { bits[5] = 8; return; }
     switch (format)
     {
         case GPU_RGBA8: bits[0] = bits[1] = bits[2] = bits[3] = 8; break;
@@ -5308,42 +5851,44 @@ void glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint *p
 
     // Width, height, border, internal format, format of the level; zero if it has no image
     GLint width = 0, height = 0, border = 0, internalFormat = 0;
+    GLenum base = 0;
     GPU_TEXCOLOR format = 0;
     bool hasImage = false;
     switch (target)
     {
-        case GL_TEXTURE_2D:
+        case GL_TEXTURE_1D: case GL_TEXTURE_2D:
         {
             Texture *t = boundTexture(target);
             if ((t != NULL) && t->loaded && t->level[level].defined)
             {
                 const TexLevel *lv = &t->level[level];
                 width = lv->width + 2*lv->border;
-                height = lv->height + 2*lv->border;
+                height = (target == GL_TEXTURE_1D)? 1 : lv->height + 2*lv->border;
                 border = lv->border;
                 internalFormat = lv->internalFormat;
+                base = lv->base;
                 format = lv->format;
                 hasImage = true;
             }
             break;
         }
-        case GL_PROXY_TEXTURE_2D:
+        case GL_PROXY_TEXTURE_1D: case GL_PROXY_TEXTURE_2D:
         {
-            const ProxyLevel *p = &gl.proxy2D[level];
+            const ProxyLevel *p = (target == GL_PROXY_TEXTURE_1D)? &gl.proxy1D[level] : &gl.proxy2D[level];
             width = p->width;
             height = p->height;
             border = p->border;
             internalFormat = p->internalFormat;
+            base = p->base;
             format = p->format;
             hasImage = (p->width > 0);
             break;
         }
-        case GL_TEXTURE_1D: case GL_PROXY_TEXTURE_1D: break;    // No 1D textures yet
         default: setError(GL_INVALID_ENUM); return;
     }
 
-    int bits[5] = { 0 };
-    if (hasImage) formatBits(format, bits);
+    int bits[6] = { 0 };
+    if (hasImage) formatBits(format, base, bits);
     switch (pname)
     {
         case GL_TEXTURE_WIDTH: *params = width; break;
@@ -5355,7 +5900,7 @@ void glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint *p
         case GL_TEXTURE_BLUE_SIZE: *params = bits[2]; break;
         case GL_TEXTURE_ALPHA_SIZE: *params = bits[3]; break;
         case GL_TEXTURE_LUMINANCE_SIZE: *params = bits[4]; break;
-        case GL_TEXTURE_INTENSITY_SIZE: *params = 0; break;
+        case GL_TEXTURE_INTENSITY_SIZE: *params = bits[5]; break;
         default: setError(GL_INVALID_ENUM); break;
     }
 }
@@ -5832,9 +6377,10 @@ void glGetMapiv(GLenum target, GLenum query, GLint *v)
 // save nothing so far. When a feature moves out of ignoredCaps, its state has to be added here.
 //----------------------------------------------------------------------------------
 typedef struct {
-    GLuint id;                  // Texture bound to the unit at push time
+    GLuint id;                  // Texture bound to the unit (and target) at push time
     GLenum minFilter, magFilter, wrapS, wrapT;
     bool generateMipmap;
+    float priority, borderColor[4];
 } SavedTexParams;
 
 typedef struct {
@@ -5855,9 +6401,8 @@ typedef struct {
     bool sampleCoverageInvert;
     float clearDepth;
     u8 clearStencil;
-    bool texture2D[C3DGL_TEXTURE_UNITS];
-    GLuint boundTexture[C3DGL_TEXTURE_UNITS];
-    SavedTexParams texParams[C3DGL_TEXTURE_UNITS];
+    bool texture1D[C3DGL_TEXTURE_UNITS], texture2D[C3DGL_TEXTURE_UNITS];
+    SavedTexParams texParams[2][C3DGL_TEXTURE_UNITS];      // GL_TEXTURE_1D, GL_TEXTURE_2D
     TexGenState texGen[C3DGL_TEXTURE_UNITS];
     int activeTexture, matrixMode;
     bool map1Enabled[9], map2Enabled[9], autoNormal;
@@ -5872,6 +6417,7 @@ typedef struct {
     float clipPlanes[C3DGL_MAX_CLIP_PLANES][4];
     u8 clipEnabled;
     GLuint listBase;
+    GLenum drawBuffer, readBuffer;
 } AttribState;
 
 typedef struct {
@@ -5926,13 +6472,13 @@ void glPushAttrib(GLbitfield mask)
     a->clearColor = gl.clearColor;
     a->clearDepth = gl.clearDepth;
     a->clearStencil = gl.clearStencil;
+    memcpy(a->texture1D, gl.texture1D, sizeof(a->texture1D));
     memcpy(a->texture2D, gl.texture2D, sizeof(a->texture2D));
-    memcpy(a->boundTexture, gl.boundTexture, sizeof(a->boundTexture));
     memcpy(a->texGen, gl.texGen, sizeof(a->texGen));
-    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+    for (int unit = 0; unit < 2*C3DGL_TEXTURE_UNITS; unit++)
     {
-        GLuint id = gl.boundTexture[unit];
-        SavedTexParams *p = &a->texParams[unit];
+        GLuint id = (unit < C3DGL_TEXTURE_UNITS)? gl.boundTexture1D[unit] : gl.boundTexture[unit - C3DGL_TEXTURE_UNITS];
+        SavedTexParams *p = &a->texParams[unit/C3DGL_TEXTURE_UNITS][unit % C3DGL_TEXTURE_UNITS];
         p->id = id;
         if ((id > 0) && (id < C3DGL_MAX_TEXTURES))
         {
@@ -5942,6 +6488,8 @@ void glPushAttrib(GLbitfield mask)
             p->wrapS = t->wrapS;
             p->wrapT = t->wrapT;
             p->generateMipmap = t->generateMipmap;
+            p->priority = t->priority;
+            memcpy(p->borderColor, t->borderColor, sizeof(p->borderColor));
         }
     }
     a->activeTexture = gl.activeTexture;
@@ -5969,6 +6517,8 @@ void glPushAttrib(GLbitfield mask)
     memcpy(a->clipPlanes, gl.clipPlanes, sizeof(a->clipPlanes));
     a->clipEnabled = gl.clipEnabled;
     a->listBase = gl.listBase;
+    a->drawBuffer = gl.drawBuffer;
+    a->readBuffer = gl.readBuffer;
 }
 
 void glPopAttrib(void)
@@ -6083,6 +6633,7 @@ void glPopAttrib(void)
         gl.offsetFill = a->offsetFill;
         gl.offsetLine = a->offsetLine;
         gl.offsetPoint = a->offsetPoint;
+        memcpy(gl.texture1D, a->texture1D, sizeof(gl.texture1D));
         memcpy(gl.texture2D, a->texture2D, sizeof(gl.texture2D));
         for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) gl.texGen[unit].enabled = a->texGen[unit].enabled;
         gl.texGenSerial++;
@@ -6109,6 +6660,7 @@ void glPopAttrib(void)
         st->logicOpMode = sv->logicOpMode;
         st->colorMask = sv->colorMask;
         gl.clearColor = a->clearColor;
+        gl.drawBuffer = a->drawBuffer;
         caps |= capBits((const GLenum[]){ GL_DITHER, GL_INDEX_LOGIC_OP }, 2);
     }
     if (mask & GL_MULTISAMPLE_BIT)
@@ -6123,14 +6675,17 @@ void glPopAttrib(void)
         // Enables, environments, texgen, bindings and the active unit, then the parameters of the textures bound at
         // push time
         for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) st->units[unit].env = sv->units[unit].env;
+        memcpy(gl.texture1D, a->texture1D, sizeof(gl.texture1D));
         memcpy(gl.texture2D, a->texture2D, sizeof(gl.texture2D));
         memcpy(gl.texGen, a->texGen, sizeof(gl.texGen));
         gl.texGenSerial++;
-        for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+        for (int unit = 0; unit < 2*C3DGL_TEXTURE_UNITS; unit++)
         {
-            const SavedTexParams *p = &a->texParams[unit];
-            gl.boundTexture[unit] = (p->id < C3DGL_MAX_TEXTURES) && gl.textures[p->id].used? p->id : 0;
-            if ((p->id == 0) || (gl.boundTexture[unit] != p->id)) continue;
+            // Textures deleted since the push are not bound again (nor recreated)
+            const SavedTexParams *p = &a->texParams[unit/C3DGL_TEXTURE_UNITS][unit % C3DGL_TEXTURE_UNITS];
+            GLuint *binding = (unit < C3DGL_TEXTURE_UNITS)? &gl.boundTexture1D[unit] : &gl.boundTexture[unit - C3DGL_TEXTURE_UNITS];
+            *binding = (p->id < C3DGL_MAX_TEXTURES) && gl.textures[p->id].used? p->id : 0;
+            if ((p->id == 0) || (*binding != p->id)) continue;
 
             Texture *t = &gl.textures[p->id];
             t->minFilter = p->minFilter;
@@ -6138,6 +6693,8 @@ void glPopAttrib(void)
             t->wrapS = p->wrapS;
             t->wrapT = p->wrapT;
             t->generateMipmap = p->generateMipmap;
+            t->priority = p->priority;
+            memcpy(t->borderColor, p->borderColor, sizeof(t->borderColor));
             if (t->loaded)
             {
                 textureModified(p->id);
@@ -6166,6 +6723,7 @@ void glPopAttrib(void)
         memcpy(st->scissorBox, sv->scissorBox, sizeof(st->scissorBox));
     }
     if (mask & GL_LIST_BIT) gl.listBase = a->listBase;
+    if (mask & GL_PIXEL_MODE_BIT) gl.readBuffer = a->readBuffer;
 
     gl.ignoredCaps = (gl.ignoredCaps & ~caps) | (a->ignoredCaps & caps);
 }
@@ -6252,52 +6810,6 @@ static u8 *readFramebuffer(bool depthStencil, int line0, int lines)
     return out;
 }
 
-// Components of a color format: indices into r, g, b, a, 4 = luminance (r + g + b); count, 0 if not a color format
-static int colorComponents(GLenum format, int comp[4])
-{
-    switch (format)
-    {
-        case GL_RGBA: comp[0] = 0; comp[1] = 1; comp[2] = 2; comp[3] = 3; return 4;
-        case GL_RGB: comp[0] = 0; comp[1] = 1; comp[2] = 2; return 3;
-        case GL_RED: comp[0] = 0; return 1;
-        case GL_GREEN: comp[0] = 1; return 1;
-        case GL_BLUE: comp[0] = 2; return 1;
-        case GL_ALPHA: comp[0] = 3; return 1;
-        case GL_LUMINANCE: comp[0] = 4; return 1;
-        case GL_LUMINANCE_ALPHA: comp[0] = 4; comp[1] = 3; return 2;
-        default: return 0;
-    }
-}
-
-// Store one element of type `type`: v is a normalized value in [0, 1] (GL 1.1 table 2.9 inverted), or an index
-static void storeElement(u8 *dst, GLenum type, double v, bool index, bool swap)
-{
-    union { u8 b[4]; u8 ub; s8 sb; u16 us; s16 ss; u32 ui; s32 si; float f; } e;
-    int size = typeSize(type);
-    switch (type)
-    {
-        case GL_UNSIGNED_BYTE: e.ub = (u8)(index? v : lround(v*255.0)); break;
-        case GL_BYTE: e.sb = (s8)(index? v : lround((v*255.0 - 1.0)/2.0)); break;
-        case GL_UNSIGNED_SHORT: e.us = (u16)(index? v : lround(v*65535.0)); break;
-        case GL_SHORT: e.ss = (s16)(index? v : lround((v*65535.0 - 1.0)/2.0)); break;
-        case GL_UNSIGNED_INT: e.ui = (u32)(index? v : llround(v*4294967295.0)); break;
-        case GL_INT: e.si = (s32)(index? v : llround((v*4294967295.0 - 1.0)/2.0)); break;
-        default: e.f = (float)v; break;     // GL_FLOAT
-    }
-    for (int i = 0; i < size; i++) dst[i] = e.b[swap? size - 1 - i : i];
-}
-
-// Packed 16-bit types: valid format, 0 if the type is not packed
-static GLenum packedFormat(GLenum type)
-{
-    switch (type)
-    {
-        case GL_UNSIGNED_SHORT_5_6_5: return GL_RGB;
-        case GL_UNSIGNED_SHORT_4_4_4_4: case GL_UNSIGNED_SHORT_5_5_5_1: return GL_RGBA;
-        default: return 0;
-    }
-}
-
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels)
 {
     if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
@@ -6360,18 +6872,8 @@ void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format
                 continue;
             }
 
-            int c[5] = { p[3], p[2], p[1], p[0], 0 };
-            c[4] = (c[0] + c[1] + c[2] > 255)? 255 : c[0] + c[1] + c[2];
-            if (packed)
-            {
-                int rgba[4] = { c[0], c[1], c[2], c[3] };
-                GPU_TEXCOLOR f = (type == GL_UNSIGNED_SHORT_5_6_5)? GPU_RGB565 : (type == GL_UNSIGNED_SHORT_5_5_5_1)? GPU_RGBA5551 : GPU_RGBA4;
-                u16 v = pack16(f, rgba);
-                dst[swap? 1 : 0] = (u8)v;
-                dst[swap? 0 : 1] = (u8)(v >> 8);
-            }
-            else if (type == GL_UNSIGNED_BYTE) for (int i = 0; i < n; i++) dst[i] = (u8)c[comp[i]];
-            else for (int i = 0; i < n; i++) storeElement(dst + i*elemSize, type, c[comp[i]]/255.0, false, swap);
+            const u8 rgba[4] = { p[3], p[2], p[1], p[0] };
+            storeColor(dst, rgba, format, type, swap);
         }
     }
     linearFree(fb);
@@ -6380,27 +6882,9 @@ void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format
 //----------------------------------------------------------------------------------
 // OpenGL: copying the framebuffer into textures
 //----------------------------------------------------------------------------------
-// GL format and type that load texels of PICA format f unchanged (the inverse of texFormat(), not for ETC1)
-static void texFormatGl(GPU_TEXCOLOR f, GLenum *format, GLenum *type)
-{
-    *type = GL_UNSIGNED_BYTE;
-    switch (f)
-    {
-        case GPU_RGBA8: *format = GL_RGBA; break;
-        case GPU_RGB8: *format = GL_RGB; break;
-        case GPU_LA8: *format = GL_LUMINANCE_ALPHA; break;
-        case GPU_L8: *format = GL_LUMINANCE; break;
-        case GPU_A8: *format = GL_ALPHA; break;
-        case GPU_RGB565: *format = GL_RGB; *type = GL_UNSIGNED_SHORT_5_6_5; break;
-        case GPU_RGBA5551: *format = GL_RGBA; *type = GL_UNSIGNED_SHORT_5_5_5_1; break;
-        default: *format = GL_RGBA; *type = GL_UNSIGNED_SHORT_4_4_4_4; break;     // GPU_RGBA4
-    }
-}
-
-// Window rectangle as tightly packed texels of format/type (a texFormat() pair), malloc'ed. Read like glReadPixels
-// (ending a frame in progress, so draws issued before the copy still see the old texels); the components are picked
-// from R, G, B, A as for texture images, so luminance is R (glReadPixels sums R + G + B). Pixels outside the window are 0
-static u8 *copyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type)
+// Window rectangle as RGBA8 texels (malloc'ed), read like glReadPixels: a frame in progress is ended, so draws issued
+// before the copy still see the old texels. Pixels outside the window are 0
+static u8 *copyPixels(GLint x, GLint y, GLsizei width, GLsizei height)
 {
     size_t count = (size_t)width*height;
     u8 *pixels = calloc(count? count : 1, 4);
@@ -6410,57 +6894,45 @@ static u8 *copyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum fo
     gl.pack = (PixelStore){ .alignment = 1 };
     glReadPixels(x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     gl.pack = saved;
-
-    // In place: a texel is at most 4 bytes, so texel i never overwrites a later pixel
-    TexFormat f;
-    texFormat(format, type, &f);
-    int comp[4], n = colorComponents(format, comp);
-    for (size_t i = 0; i < count; i++)
-    {
-        int c[4] = { pixels[i*4], pixels[i*4 + 1], pixels[i*4 + 2], pixels[i*4 + 3] };
-        if (f.packed16)
-        {
-            u16 v = pack16(f.format, c);
-            memcpy(pixels + i*2, &v, 2);
-        }
-        else for (int k = 0; k < n; k++) pixels[i*n + k] = (u8)c[(comp[k] == 4)? 0 : comp[k]];
-    }
     return pixels;
 }
 
-void glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height,
-                      GLint border)
+// glCopyTexImage1D/2D: the texels are converted to the internal format like an RGBA image, so luminance and intensity
+// are R (glReadPixels sums R + G + B)
+static void copyTexImage(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height,
+                         GLint border, bool oneD)
 {
-    LIST_SAVE(COPY_TEX_IMAGE, "uiuiiiii", target, level, internalformat, x, y, width, height, border);
     if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
-    if (target != GL_TEXTURE_2D) { setError(GL_INVALID_ENUM); return; }
+    if (target != (oneD? GL_TEXTURE_1D : GL_TEXTURE_2D)) { setError(GL_INVALID_ENUM); return; }
 
-    // Base internal formats only, all are in the RGBA framebuffer; the sized ones come with GL_INTENSITY & co
-    switch (internalformat)
+    // All internal formats but 1..4, all are in the RGBA framebuffer
+    if ((baseInternalFormat(internalformat) == 0) || (internalformat <= 4))
     {
-        case GL_ALPHA: case GL_LUMINANCE: case GL_LUMINANCE_ALPHA: case GL_RGB: case GL_RGBA: break;
-        default: LOG("glCopyTexImage2D: internal format 0x%x not supported\n", internalformat); setError(GL_INVALID_ENUM); return;
+        LOG("glCopyTexImage: internal format 0x%x not supported\n", internalformat);
+        setError(GL_INVALID_ENUM);
+        return;
     }
-    if (!textureSizeValid(level, width, height, border)) { setError(GL_INVALID_VALUE); return; }
+    int imageWidth = width - 2*border, imageHeight = oneD? 1 : height - 2*border;
+    if (!textureSizeValid(level, imageWidth, imageHeight, border)) { setError(GL_INVALID_VALUE); return; }
     if (boundTexture(target) == NULL) { setError(GL_INVALID_OPERATION); return; }
-    if (!textureSizeFits(level, width, height, border)) { setError(GL_INVALID_VALUE); return; }
+    if (!textureSizeFits(level, imageWidth, imageHeight)) { setError(GL_INVALID_VALUE); return; }
 
-    u8 *pixels = copyPixels(x, y, width, height, internalformat, GL_UNSIGNED_BYTE);
+    u8 *pixels = copyPixels(x, y, width, oneD? 1 : height);
     if (pixels == NULL) return;
     PixelStore saved = gl.unpack;
     gl.unpack = (PixelStore){ .alignment = 1 };
-    glTexImage2D(target, level, (GLint)internalformat, width, height, border, internalformat, GL_UNSIGNED_BYTE, pixels);
+    texImage(target, level, (GLint)internalformat, width, oneD? 1 : height, border, GL_RGBA, GL_UNSIGNED_BYTE, pixels, oneD);
     gl.unpack = saved;
     free(pixels);
 }
 
-void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
-                         GLsizei height)
+static void copyTexSubImage(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
+                            GLsizei height, bool oneD)
 {
-    LIST_SAVE(COPY_TEX_SUB_IMAGE, "uiiiiiii", target, level, xoffset, yoffset, x, y, width, height);
     if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    if (target != (oneD? GL_TEXTURE_1D : GL_TEXTURE_2D)) { setError(GL_INVALID_ENUM); return; }
     Texture *t = boundTexture(target);
-    if (t == NULL) { setError((target == GL_TEXTURE_2D)? GL_INVALID_OPERATION : GL_INVALID_ENUM); return; }
+    if (t == NULL) { setError(GL_INVALID_OPERATION); return; }
     if ((level < 0) || (level > MAX_TEXTURE_LEVEL)) { setError(GL_INVALID_VALUE); return; }
     const TexLevel *lv = &t->level[level];
     if (!t->loaded || !lv->defined || t->format.compressed) { setError(GL_INVALID_OPERATION); return; }
@@ -6472,15 +6944,74 @@ void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffse
     }
 
     // The texels keep the texture's format
-    GLenum format, type;
-    texFormatGl(t->format.format, &format, &type);
-    u8 *pixels = copyPixels(x, y, width, height, format, type);
+    u8 *pixels = copyPixels(x, y, width, height);
     if (pixels == NULL) return;
     PixelStore saved = gl.unpack;
     gl.unpack = (PixelStore){ .alignment = 1 };
-    glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
+    texSubImage(target, level, xoffset, yoffset, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     gl.unpack = saved;
     free(pixels);
+}
+
+void glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height,
+                      GLint border)
+{
+    LIST_SAVE(COPY_TEX_IMAGE, "uiuiiiiii", target, level, internalformat, x, y, width, height, border, 0);
+    copyTexImage(target, level, internalformat, x, y, width, height, border, false);
+}
+
+void glCopyTexImage1D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLint border)
+{
+    LIST_SAVE(COPY_TEX_IMAGE, "uiuiiiiii", target, level, internalformat, x, y, width, 1, border, 1);
+    copyTexImage(target, level, internalformat, x, y, width, 1, border, true);
+}
+
+void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
+                         GLsizei height)
+{
+    LIST_SAVE(COPY_TEX_SUB_IMAGE, "uiiiiiiii", target, level, xoffset, yoffset, x, y, width, height, 0);
+    copyTexSubImage(target, level, xoffset, yoffset, x, y, width, height, false);
+}
+
+void glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width)
+{
+    LIST_SAVE(COPY_TEX_SUB_IMAGE, "uiiiiiiii", target, level, xoffset, 0, x, y, width, 1, 1);
+    copyTexSubImage(target, level, xoffset, 0, x, y, width, 1, true);
+}
+
+//----------------------------------------------------------------------------------
+// OpenGL: color buffers (GL). The framebuffer is double-buffered RGBA without stereo or aux buffers; drawing always goes
+// to the frame being rendered, which c3dglSwapBuffers() presents, so the front buffer is treated like the back buffer
+//----------------------------------------------------------------------------------
+// Error of glDrawBuffer/glReadBuffer(mode): buffers that do not exist are GL_INVALID_OPERATION
+static GLenum colorBufferError(GLenum mode, bool draw)
+{
+    switch (mode)
+    {
+        case GL_NONE: case GL_FRONT_AND_BACK: return draw? GL_NO_ERROR : GL_INVALID_ENUM;
+        case GL_FRONT_LEFT: case GL_BACK_LEFT: case GL_FRONT: case GL_BACK: case GL_LEFT: return GL_NO_ERROR;
+        case GL_FRONT_RIGHT: case GL_BACK_RIGHT: case GL_RIGHT:
+        case GL_AUX0: case GL_AUX1: case GL_AUX2: case GL_AUX3: return GL_INVALID_OPERATION;
+        default: return GL_INVALID_ENUM;
+    }
+}
+
+void glDrawBuffer(GLenum mode)
+{
+    LIST_SAVE(DRAW_BUFFER, "u", mode);
+    GLenum error = colorBufferError(mode, true);
+    if (error != GL_NO_ERROR) { setError(error); return; }
+    if ((mode != GL_NONE) && (mode != GL_BACK) && (mode != GL_BACK_LEFT))
+        WARN_ONCE("glDrawBuffer: the front buffer is drawn like the back buffer (shown after c3dglSwapBuffers)\n");
+    gl.drawBuffer = mode;
+}
+
+void glReadBuffer(GLenum mode)
+{
+    LIST_SAVE(READ_BUFFER, "u", mode);
+    GLenum error = colorBufferError(mode, false);
+    if (error != GL_NO_ERROR) { setError(error); return; }
+    gl.readBuffer = mode;
 }
 
 //----------------------------------------------------------------------------------
@@ -6500,13 +7031,16 @@ static double listDouble(const ListWord *w)
     return d;
 }
 
-// glTexImage2D/glTexSubImage2D from a list: the pixels were stored tightly packed, see listSaveImage()
+// glTexImage1D/2D, glTexSubImage1D/2D from a list: the pixels were stored tightly packed, see listSaveImage()
 static void listTexImage(const ListWord *w, bool sub)
 {
     PixelStore saved = gl.unpack;
     gl.unpack = (PixelStore){ .alignment = 1, .swapBytes = (w[8].i & 2) != 0 };
     const GLvoid *pixels = (w[8].i & 1)? (const GLvoid *)&w[9] : NULL;
-    if (sub) glTexSubImage2D(w[0].u, w[1].i, w[2].i, w[3].i, w[4].i, w[5].i, w[6].u, w[7].u, pixels);
+    bool oneD = (w[8].i & 4) != 0;
+    if (sub && oneD) glTexSubImage1D(w[0].u, w[1].i, w[2].i, w[4].i, w[6].u, w[7].u, pixels);
+    else if (sub) glTexSubImage2D(w[0].u, w[1].i, w[2].i, w[3].i, w[4].i, w[5].i, w[6].u, w[7].u, pixels);
+    else if (oneD) glTexImage1D(w[0].u, w[1].i, w[2].i, w[3].i, w[5].i, w[6].u, w[7].u, pixels);
     else glTexImage2D(w[0].u, w[1].i, w[2].i, w[3].i, w[4].i, w[5].i, w[6].u, w[7].u, pixels);
     gl.unpack = saved;
 }
@@ -6635,26 +7169,26 @@ static void listSave(ListCommand command, const char *format, ...)
     if (saved) listEnd();
 }
 
-// glTexImage2D/glTexSubImage2D: args are the 8 integer arguments before the pixels. The pixels are read as the unpack
-// state lays them out (see transferPixels()) and stored tightly packed; not if the call fails anyway before reading
-// them (sizeValid false or an unknown format/type), it is recorded without them then
+// glTexImage1D/2D, glTexSubImage1D/2D: args are the 8 integer arguments of the 2D call before the pixels (1D: height 1
+// and yoffset 0 filled in). The pixels are read as the unpack state lays them out and stored tightly packed; not if the
+// call fails anyway before reading them (sizeValid false or an invalid format/type), it is recorded without them then
 static void listSaveImage(ListCommand command, const GLint args[8], GLsizei width, GLsizei height, bool sizeValid,
-                          const void *pixels)
+                          bool oneD, const void *pixels)
 {
-    TexFormat f;
-    bool captured = (pixels != NULL) && sizeValid && texFormat((GLenum)args[6], (GLenum)args[7], &f);
-    size_t rowBytes = captured? (size_t)width*f.bpp : 0;
+    int n, elemSize, groupSize;
+    bool captured = (pixels != NULL) && sizeValid &&
+                    (colorImageLayout((GLenum)args[6], (GLenum)args[7], &n, &elemSize, &groupSize) == GL_NO_ERROR);
+    size_t rowBytes = captured? (size_t)width*groupSize : 0;
     ListWord *w = listBegin(command, 9 + (captured? (int)((rowBytes*height + 3)/4) : 0));
     if (w == NULL) return;
 
     for (int i = 0; i < 8; i++) w[i].i = args[i];
-    w[8].i = (captured? 1 : 0) | (gl.unpack.swapBytes? 2 : 0);
+    w[8].i = (captured? 1 : 0) | (gl.unpack.swapBytes? 2 : 0) | (oneD? 4 : 0);
     if (captured)
     {
         const PixelStore *ps = &gl.unpack;
-        size_t srcRow = (size_t)((ps->rowLength > 0)? ps->rowLength : width)*f.bpp;
-        if (ps->alignment > 1) srcRow = (srcRow + ps->alignment - 1)/ps->alignment*ps->alignment;
-        const u8 *src = (const u8 *)pixels + (size_t)ps->skipRows*srcRow + (size_t)ps->skipPixels*f.bpp;
+        size_t srcRow = imageRowBytes(ps, width, elemSize, groupSize);
+        const u8 *src = (const u8 *)pixels + (size_t)ps->skipRows*srcRow + (size_t)ps->skipPixels*groupSize;
         for (int y = 0; y < height; y++) memcpy((u8 *)&w[9] + (size_t)y*rowBytes, src + (size_t)y*srcRow, rowBytes);
     }
     listEnd();
@@ -6845,19 +7379,8 @@ void glDeleteLists(GLuint list, GLsizei range)
 GLboolean glIsList(GLuint list) { return findList(list, NULL) != NULL; }
 
 //----------------------------------------------------------------------------------
-// Not implemented yet (declared so that code like GLU links; see gl.h)
+// Declared only so that code like GLU links (see gl.h)
 //----------------------------------------------------------------------------------
-#define NOT_IMPLEMENTED(name) do { WARN_ONCE(name " not implemented yet\n"); setError(GL_INVALID_OPERATION); } while (0)
-
-void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border,
-                  GLenum format, GLenum type, const GLvoid *pixels)
-{
-    (void)target; (void)level; (void)internalformat; (void)width; (void)border; (void)format; (void)type; (void)pixels;
-    NOT_IMPLEMENTED("glTexImage1D");
-}
-
-
-
 // GL 1.2: no 3D textures
 void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth,
                   GLint border, GLenum format, GLenum type, const GLvoid *pixels)
