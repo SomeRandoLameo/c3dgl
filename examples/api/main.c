@@ -2924,6 +2924,252 @@ static void testFeedback(void)
     glPopAttrib();
 }
 
+// Pixel (x, y) is white (true) or black (false); prints it otherwise
+static bool whiteAt(int x, int y, bool white)
+{
+    int c = white? 255 : 0;
+    return pixelNear(x, y, c, c, c, -1);
+}
+
+// Line stipple and polygon stipple: defaults, clamping, queries, attribute groups, display lists, unpack/pack of the
+// pattern, then rendered and read back: dashes along both axes and directions, the counter carried along strips and
+// reset by separate lines and outlines, wide lines, and the window-aligned polygon pattern (orthographic, with
+// perspective, textured, with the alpha test)
+static void testStipple(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    GLint v = -1;
+    GLubyte mask[8*33];
+    CHECK(!glIsEnabled(GL_LINE_STIPPLE) && !glIsEnabled(GL_POLYGON_STIPPLE));
+    glGetIntegerv(GL_LINE_STIPPLE_PATTERN, &v);
+    CHECK(v == 0xFFFF);
+    glGetIntegerv(GL_LINE_STIPPLE_REPEAT, &v);
+    CHECK(v == 1);
+    memset(mask, 0, sizeof(mask));
+    glGetPolygonStipple(mask);
+    bool ones = true;
+    for (int i = 0; i < 128; i++) ones = ones && (mask[i] == 0xFF);
+    CHECK(ones && (mask[128] == 0));
+
+    glLineStipple(0, 0x1234);       // The factor is clamped to 1..256
+    glGetIntegerv(GL_LINE_STIPPLE_REPEAT, &v);
+    CHECK(v == 1);
+    glLineStipple(300, 0xF0F0);
+    glGetIntegerv(GL_LINE_STIPPLE_REPEAT, &v);
+    CHECK(v == 256);
+    glGetIntegerv(GL_LINE_STIPPLE_PATTERN, &v);
+    CHECK(v == 0xF0F0);
+    glEnable(GL_LINE_STIPPLE);
+    GLboolean b = GL_FALSE;
+    glGetBooleanv(GL_LINE_STIPPLE, &b);
+    CHECK(b == GL_TRUE);
+    glDisable(GL_LINE_STIPPLE);
+    CHECK(glGetError() == GL_NO_ERROR);
+
+    // Attribute groups: GL_LINE_BIT (pattern, factor, enable), GL_POLYGON_BIT (enable), GL_POLYGON_STIPPLE_BIT (pattern),
+    // GL_ENABLE_BIT (both enables)
+    glLineStipple(3, 0x00FF);
+    glPushAttrib(GL_LINE_BIT);
+    glLineStipple(5, 0xAAAA);
+    glEnable(GL_LINE_STIPPLE);
+    glPopAttrib();
+    glGetIntegerv(GL_LINE_STIPPLE_REPEAT, &v);
+    CHECK(v == 3);
+    glGetIntegerv(GL_LINE_STIPPLE_PATTERN, &v);
+    CHECK(v == 0x00FF);
+    CHECK(!glIsEnabled(GL_LINE_STIPPLE));
+    glPushAttrib(GL_ENABLE_BIT);
+    glEnable(GL_LINE_STIPPLE);
+    glEnable(GL_POLYGON_STIPPLE);
+    glPopAttrib();
+    CHECK(!glIsEnabled(GL_LINE_STIPPLE) && !glIsEnabled(GL_POLYGON_STIPPLE));
+    glPushAttrib(GL_POLYGON_BIT);
+    glEnable(GL_POLYGON_STIPPLE);
+    glPopAttrib();
+    CHECK(!glIsEnabled(GL_POLYGON_STIPPLE));
+
+    GLubyte pattern[128];
+    for (int i = 0; i < 128; i++) pattern[i] = (GLubyte)i;
+    glPushAttrib(GL_POLYGON_STIPPLE_BIT);
+    glPolygonStipple(pattern);
+    glGetPolygonStipple(mask);
+    CHECK(memcmp(mask, pattern, 128) == 0);
+    glPopAttrib();
+    glGetPolygonStipple(mask);
+    CHECK((mask[0] == 0xFF) && (mask[127] == 0xFF));
+
+    // Unpacked like a bitmap (LSB first, row length, skip pixels), packed with the pack state
+    GLubyte wide[8*32];
+    memset(wide, 0, sizeof(wide));
+    for (int y = 0; y < 32; y++) wide[8*y + 1] = 0x01;      // LSB first, skip 4: bit 8 - 4 = x 4 of each row
+    glPixelStorei(GL_UNPACK_LSB_FIRST, GL_TRUE);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 64);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 4);
+    glPolygonStipple(wide);
+    glPixelStorei(GL_UNPACK_LSB_FIRST, GL_FALSE);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glGetPolygonStipple(mask);
+    CHECK((mask[0] == 0x08) && (mask[1] == 0) && (mask[124] == 0x08));
+    memset(mask, 0xEE, sizeof(mask));
+    glPixelStorei(GL_PACK_ROW_LENGTH, 40);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 4);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 1);
+    glGetPolygonStipple(mask);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+    // Rows of 40 bits padded to 8 bytes (alignment 4), the first row skipped; x 4 lands on bit 8 (byte 1, MSB), the
+    // bits before column 4 and after column 35 keep their 0xEE
+    CHECK((mask[0] == 0xEE) && (mask[8] == 0xE0) && (mask[9] == 0x80) && (mask[12] == 0x0E) && (mask[8*32 + 1] == 0x80));
+
+    // Display lists: recorded with the unpack state at compile time
+    GLuint list = glGenLists(1);
+    for (int i = 0; i < 128; i++) pattern[i] = (GLubyte)(0x80 >> (i & 7));
+    glNewList(list, GL_COMPILE);
+    glLineStipple(7, 0x1111);
+    glPixelStorei(GL_UNPACK_LSB_FIRST, GL_TRUE);            // Not recorded, executed now
+    glPolygonStipple(pattern);
+    glEndList();
+    glPixelStorei(GL_UNPACK_LSB_FIRST, GL_FALSE);
+    glGetIntegerv(GL_LINE_STIPPLE_REPEAT, &v);
+    CHECK(v == 3);
+    glGetPolygonStipple(mask);
+    CHECK(mask[0] == 0x08);
+    glCallList(list);
+    glGetIntegerv(GL_LINE_STIPPLE_REPEAT, &v);
+    CHECK(v == 7);
+    glGetPolygonStipple(mask);
+    CHECK((mask[0] == 0x01) && (mask[1] == 0x02) && (mask[7] == 0x80));
+    glDeleteLists(list, 1);
+
+    // Rendered lines: white on black in window coordinates
+    windowProjection();
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glColor3f(1.0f, 1.0f, 1.0f);
+    glEnable(GL_LINE_STIPPLE);
+    glLineStipple(1, 0x00FF);
+    glBegin(GL_LINES);
+    glVertex2f(10.0f, 100.5f); glVertex2f(60.0f, 100.5f);       // Fragments x 10.. (s = x - 10)
+    glVertex2f(200.5f, 20.0f); glVertex2f(200.5f, 60.0f);       // y 20..
+    glVertex2f(60.0f, 140.5f); glVertex2f(10.0f, 140.5f);       // Right to left: x 59, 58, ...
+    glVertex2f(10.0f, 130.5f); glVertex2f(14.0f, 130.5f);       // Separate lines: the second one starts again
+    glVertex2f(14.0f, 130.5f); glVertex2f(30.0f, 130.5f);
+    glEnd();
+    glBegin(GL_LINE_STRIP);                                     // A strip carries the counter over
+    glVertex2f(10.0f, 120.5f); glVertex2f(14.0f, 120.5f); glVertex2f(30.0f, 120.5f);
+    glEnd();
+    glLineStipple(3, 0x0001);
+    glBegin(GL_LINES);
+    glVertex2f(10.0f, 110.5f); glVertex2f(70.0f, 110.5f);       // On for s 0..2 and 48..50
+    glEnd();
+    glLineStipple(1, 0x00FF);
+    glLineWidth(3.0f);
+    glBegin(GL_LINES);
+    glVertex2f(10.0f, 200.5f); glVertex2f(60.0f, 200.5f);       // Rows 199..201
+    glEnd();
+    glLineWidth(1.0f);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    glRectf(80.5f, 160.5f, 120.5f, 180.5f);                     // Each outline starts again
+    glRectf(80.5f, 190.5f, 120.5f, 210.5f);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glDisable(GL_LINE_STIPPLE);
+
+    CHECK(whiteAt(10, 100, true) && whiteAt(17, 100, true) && whiteAt(18, 100, false) && whiteAt(25, 100, false) &&
+          whiteAt(26, 100, true) && whiteAt(17, 101, false) && whiteAt(9, 100, false));
+    CHECK(whiteAt(200, 20, true) && whiteAt(200, 27, true) && whiteAt(200, 28, false) && whiteAt(200, 35, false) &&
+          whiteAt(200, 36, true));
+    CHECK(whiteAt(59, 140, true) && whiteAt(52, 140, true) && whiteAt(51, 140, false) && whiteAt(44, 140, false) &&
+          whiteAt(43, 140, true));
+    CHECK(whiteAt(17, 120, true) && whiteAt(18, 120, false) && whiteAt(21, 120, false) && whiteAt(26, 120, true));
+    CHECK(whiteAt(17, 130, true) && whiteAt(18, 130, true) && whiteAt(21, 130, true) && whiteAt(22, 130, false));
+    CHECK(whiteAt(12, 110, true) && whiteAt(13, 110, false) && whiteAt(57, 110, false) && whiteAt(58, 110, true) &&
+          whiteAt(60, 110, true) && whiteAt(61, 110, false));
+    CHECK(whiteAt(17, 199, true) && whiteAt(17, 201, true) && whiteAt(18, 199, false) && whiteAt(18, 201, false) &&
+          whiteAt(26, 200, true));
+    CHECK(whiteAt(87, 160, true) && whiteAt(88, 160, false) && whiteAt(87, 190, true) && whiteAt(88, 190, false));
+
+    // Polygon stipple: the diagonal x % 32 == y % 32 of the window, whatever the viewport
+    for (int y = 0; y < 32; y++) { memset(&pattern[4*y], 0, 4); pattern[4*y + y/8] = (GLubyte)(0x80 >> (y & 7)); }
+    glPolygonStipple(pattern);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_POLYGON_STIPPLE);
+    glViewport(3, 5, 400, 240);
+    glRectf(97.0f, 15.0f, 161.0f, 79.0f);                       // Window 100..164, 20..84
+    glViewport(0, 0, 400, 240);
+    CHECK(whiteAt(100, 36, true) && whiteAt(101, 36, false) && whiteAt(132, 36, true) && whiteAt(100, 68, true) &&
+          whiteAt(121, 57, true) && whiteAt(121, 58, false) && whiteAt(99, 35, false));
+
+    // Checker (x + y even) with perspective, a red texture on unit 0 and unit 1 (moved to PICA units 1 and 2)
+    for (int y = 0; y < 32; y++) memset(&pattern[4*y], (y & 1)? 0x55 : 0xAA, 4);
+    glPolygonStipple(pattern);
+    GLuint tex[2];
+    glGenTextures(2, tex);
+    static const GLubyte red[4] = { 255, 0, 0, 255 }, yellow[4] = { 255, 255, 0, 255 };
+    glBindTexture(GL_TEXTURE_2D, tex[0]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);     // 1x1 in 8x8: no padding sampled
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, yellow);
+    glEnable(GL_TEXTURE_2D);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, tex[1]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, red);
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);    // yellow * red = red
+    glActiveTexture(GL_TEXTURE0);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glFrustum(-1.0, 1.0, -0.6, 0.6, 1.0, 10.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glTranslatef(0.0f, 0.0f, -3.0f);
+    glRotatef(-60.0f, 1.0f, 0.0f, 0.0f);
+    glRotatef(20.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.5f, 0.5f);
+    glVertex2f(-2.0f, -2.0f); glVertex2f(2.0f, -2.0f); glVertex2f(2.0f, 2.0f); glVertex2f(-2.0f, 2.0f);
+    glEnd();
+    glActiveTexture(GL_TEXTURE1);
+    glDisable(GL_TEXTURE_2D);
+    glActiveTexture(GL_TEXTURE0);
+    glDisable(GL_TEXTURE_2D);
+    bool checker = true;
+    for (int y = 110; y < 130; y += 3)
+        for (int x = 190; x < 212; x += 5)
+            checker = checker && pixelNear(x, y, ((x + y) & 1)? 0 : 255, 0, 0, -1);
+    CHECK(checker);
+    glDeleteTextures(2, tex);
+
+    // Alpha test: fragments that fail it stay away; without it alpha 0 is drawn (stipple off: the whole quad)
+    windowProjection();
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.5f);
+    glColor4f(0.0f, 1.0f, 0.0f, 0.25f);
+    glRectf(10.0f, 10.0f, 20.0f, 20.0f);
+    glColor4f(0.0f, 1.0f, 0.0f, 0.75f);
+    glRectf(30.0f, 10.0f, 40.0f, 20.0f);
+    glAlphaFunc(GL_LESS, 0.5f);
+    glRectf(50.0f, 10.0f, 60.0f, 20.0f);
+    glColor4f(0.0f, 1.0f, 0.0f, 0.25f);
+    glRectf(70.0f, 10.0f, 80.0f, 20.0f);
+    glDisable(GL_ALPHA_TEST);
+    glColor4f(0.0f, 0.0f, 1.0f, 0.0f);
+    glRectf(90.0f, 10.0f, 100.0f, 20.0f);
+    glDisable(GL_POLYGON_STIPPLE);
+    glRectf(110.0f, 10.0f, 120.0f, 20.0f);
+    CHECK(pixelNear(10, 10, 0, 0, 0, 255) && pixelNear(11, 11, 0, 0, 0, 255));
+    CHECK(pixelNear(30, 10, 0, 255, 0, -1) && pixelNear(31, 10, 0, 0, 0, 255) && pixelNear(50, 10, 0, 0, 0, 255));
+    CHECK(pixelNear(70, 10, 0, 255, 0, -1) && pixelNear(71, 10, 0, 0, 0, 255));
+    CHECK(pixelNear(90, 10, 0, 0, 255, 0) && pixelNear(91, 10, 0, 0, 0, 255) && pixelNear(111, 10, 0, 0, 255, 0));
+    CHECK(glGetError() == GL_NO_ERROR);
+    glPopAttrib();
+}
+
 int main(void)
 {
     gfxInitDefault();
@@ -2963,6 +3209,7 @@ int main(void)
     testPixelTransfer();
     testDefaultTextures();
     testFeedback();
+    testStipple();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

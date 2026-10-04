@@ -38,6 +38,7 @@
 //   - glRasterPos, glBitmap, glDrawPixels, glCopyPixels, glPixelZoom (color on the GPU, depth/stencil on the CPU)
 //   - glPixelTransfer, glPixelMap, glGetPixelMap; GL_COLOR_INDEX images through the pixel maps
 //   - Feedback and selection (glRenderMode, glFeedbackBuffer, glSelectBuffer, name stack, glPassThrough)
+//   - Line stipple (glLineStipple) and polygon stipple (glPolygonStipple, window-aligned, needs texture unit 2 free)
 //   - GLU: Mesa GLU as c3dgl::glu (<GL/glu.h>), see README
 //   - Buffer objects (VBOs) for vertex arrays and indices
 //   - OpenGL ES 1.1: <GLES/gl.h>, fixed-point x functions, glOrthof/glFrustumf/... for the implemented features

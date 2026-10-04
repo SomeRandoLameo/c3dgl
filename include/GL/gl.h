@@ -622,6 +622,17 @@ void glDepthRange(GLclampd zNear, GLclampd zFar);
 void glLineWidth(GLfloat width);
 void glPointSize(GLfloat size);
 
+// Line and polygon stipple (GL). Line stipple: bit (counter/factor) % 16 of the pattern decides each fragment along the
+// major axis (counter reset at the start of strips, loops, separate lines and outlines). Polygon stipple: a 32x32
+// window-aligned bitmap (unpacked like glBitmap) masks filled polygons
+#define GL_LINE_STIPPLE                     0x0B24
+#define GL_LINE_STIPPLE_PATTERN             0x0B25
+#define GL_LINE_STIPPLE_REPEAT              0x0B26
+#define GL_POLYGON_STIPPLE                  0x0B42
+void glLineStipple(GLint factor, GLushort pattern);
+void glPolygonStipple(const GLubyte *mask);
+void glGetPolygonStipple(GLubyte *mask);
+
 // Logic operations (glEnable(GL_COLOR_LOGIC_OP)), done by PICA; while enabled, blending is off.
 // GL_INDEX_LOGIC_OP (GL_LOGIC_OP) belongs to color index mode: stored only
 #define GL_LOGIC_OP_MODE                    0x0BF0

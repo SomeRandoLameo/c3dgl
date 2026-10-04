@@ -187,7 +187,18 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] Point sprites `GL_POINT_SPRITE_OES` (ES, required extension): sprite texcoords (0, 0) top left to (1, 1) bottom
   right on the units with `GL_COORD_REPLACE_OES`, without the texture matrix; also for `glPolygonMode(GL_POINT)`
 * [ ] Smooth points/lines/polygons (`GL_POINT_SMOOTH`, `GL_LINE_SMOOTH`, `GL_POLYGON_SMOOTH` (GL)) — accepted, no effect
-* [ ] Line stipple, polygon stipple (GL)
+* [x] Line stipple (GL): `glLineStipple` (factor clamped to 1..256), `GL_LINE_STIPPLE`, `GL_LINE_STIPPLE_PATTERN/REPEAT`;
+  fragments counted per pixel along the major axis on the CPU line expansion, one quad per run of drawn fragments
+  (wide lines too). The counter runs on along strips and loops and restarts at the same points as
+  `GL_LINE_RESET_TOKEN` (strips, loops, separate lines, polygon outlines). Feedback is not affected (as in GL)
+* [x] Polygon stipple (GL): `glPolygonStipple` (unpacked like a bitmap), `glGetPolygonStipple` (pack modes),
+  `GL_POLYGON_STIPPLE`, for filled polygons only, window-aligned also under perspective (32x32 A8 texture on PICA
+  unit 0 in projection mode, texcoords from the position in the shader). Pattern changes within a frame keep the old
+  pattern for earlier draws. Both stipples in `GL_LINE_BIT`/`GL_POLYGON_BIT`/`GL_POLYGON_STIPPLE_BIT`/`GL_ENABLE_BIT`
+  and display lists. Verified in Azahar (api checks in Vulkan at 2x and the software renderer, stipple example)
+  * [~] Needs texture unit 2 unused (drawn without stipple otherwise, with a warning); a projective unit 0 texcoord
+    is divided per vertex while stippled; with the alpha test off, stippled fragments of alpha exactly 1/255 are dropped
+  * [ ] Not yet verified on real hardware (shader branch, unit remapping)
 
 ## Clear
 
@@ -292,7 +303,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   command list submission instead of one per batch, `glEvalMesh2` evaluates each grid point once
 * [~] Real hardware verification (all features up to color buffers verified on hardware; display lists, texgen, internal
   formats, 1D textures, color buffers, drawing pixels, pixel transfer and default textures through the api checks,
-  2026-10-04; feedback and selection not yet)
+  2026-10-04; feedback and selection, stipple not yet)
   * [x] Fixed: GPU lockup on the first draw (since bf91bd4): the vertex shader left `outtc0.w` unwritten
   * [x] Fixed: GPU lockup when a readback followed `glCopyPixels(GL_COLOR)` or a `glClear` after draws in a frame: the
     command list split before the GX command was not flushed from the CPU cache (`C3D_FrameSplit(0)`), and
@@ -312,7 +323,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 ```text
 [ ] Lighting in the vertex shader
 [ ] Smooth points/lines (GL)           [ ] Accumulation buffer (GL)
-[ ] Complete state queries            [ ] Stipple (GL)
+[ ] Complete state queries
 ```
 
 # Already Solid
@@ -335,5 +346,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Texture coordinate generation (GL) [x] 1D textures, all internal formats (GL)
 [x] glDrawBuffer / glReadBuffer (GL)   [x] Default texture objects (GL)
 [x] Pixel ops: draw/copy, transfer, maps (GL)
-[x] Feedback / selection (GL)
+[x] Feedback / selection (GL)           [x] Line and polygon stipple (GL)
 ```

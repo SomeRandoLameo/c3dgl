@@ -5,12 +5,15 @@
 ;             padding scale, see c3dgl.c). Unit 0 passes q' on, PICA divides by it per pixel in projection mode;
 ;             units 1 and 2 divide per vertex here (exact unless q varies across a primitive)
 ;   color:    ubyte RGBA -> 0..1
+;   stipple:  polygon stipple: texcoord 0 = texmat0 * position (window position / 32 times w, PICA divides by w per
+;             pixel), the texcoords of units 0 and 1 go to texcoords 1 and 2 (see applyState() in c3dgl.c)
 
 ; Uniforms
 .fvec mvp[4]
 .fvec texmat0[3]                ; Rows s, t, q
 .fvec texmat1[3]
 .fvec texmat2[3]
+.bool stipple
 
 ; Constants
 .constf consts(1.0, 0.00392156862745, 0.0, 0.0)
@@ -49,6 +52,31 @@
 	add r1.z, r1.z, r2.x
 	mov outpos, r1
 
+	ifu stipple
+	; Unit 0: the stipple pattern at the window position
+	dp4 outtc0.x, texmat0[0], r0
+	dp4 outtc0.y, texmat0[1], r0
+	dp4 outtc0.z, texmat0[2], r0
+	mov outtc0.w, one
+
+	; Units 1 and 2: texcoords of units 0 and 1
+	mov r2.xy, intc0.xy
+	mov r2.z,  zero
+	mov r2.w,  intc0.z
+	dp4 r3.x, texmat1[0], r2
+	dp4 r3.y, texmat1[1], r2
+	dp4 r3.z, texmat1[2], r2
+	rcp r3.w, r3.z
+	mul outtc1, r3, r3.wwww
+
+	mov r2.xy, intc1.xy
+	mov r2.w,  intc1.z
+	dp4 r3.x, texmat2[0], r2
+	dp4 r3.y, texmat2[1], r2
+	dp4 r3.z, texmat2[2], r2
+	rcp r3.w, r3.z
+	mul outtc2, r3, r3.wwww
+	.else
 	; Unit 0: r2 = (s, t, 0, q)
 	mov r2.xy, intc0.xy
 	mov r2.z,  zero
@@ -75,6 +103,7 @@
 	dp4 r3.z, texmat2[2], r2
 	rcp r3.w, r3.z
 	mul outtc2, r3, r3.wwww
+	.end
 
 	mul outclr, inv255, inclr
 

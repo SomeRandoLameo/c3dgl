@@ -254,6 +254,8 @@ typedef struct {
     GLint viewport[4];
     u8 pixelMode;               // Pixel rectangle (glDrawPixels, glBitmap) with pixelTex on unit 0, see PixelMode
     const C3D_Tex *pixelTex;
+    bool stipple;               // Polygon stipple: stippleTex on PICA unit 0, GL units 0, 1 on PICA units 1, 2
+    const C3D_Tex *stippleTex;
 } DrawState;
 
 // How a pixel rectangle's texture becomes the fragment color, see drawPixelRect()
@@ -361,6 +363,8 @@ typedef struct {
     X(POLYGON_OFFSET,   glPolygonOffset(w[0].f, w[1].f)) \
     X(DEPTH_RANGE,      glDepthRange(listDouble(&w[0]), listDouble(&w[2]))) \
     X(LINE_WIDTH,       glLineWidth(w[0].f)) \
+    X(LINE_STIPPLE,     glLineStipple(w[0].i, (GLushort)w[1].u)) \
+    X(POLYGON_STIPPLE,  setPolygonStipple(&w[0])) \
     X(POINT_SIZE,       glPointSize(w[0].f)) \
     X(POINT_PARAMETER,  glPointParameterfv(w[0].u, &w[1].f)) \
     X(MATRIX_MODE,      glMatrixMode(w[0].u)) \
@@ -451,7 +455,8 @@ static struct {
     C3DGLscreen screen;                 // Screen drawn on, see c3dglSetScreen()
     DVLB_s *dvlb;
     shaderProgram_s program;
-    int uLocMvp, uLocTexMat[C3DGL_TEXTURE_UNITS];
+    int uLocMvp, uLocTexMat[C3DGL_TEXTURE_UNITS], uLocStipple;
+    int texUnitShift;                   // PICA unit of GL unit 0 in the batch being set up (1 with polygon stipple)
     Mat4 post;                          // OpenGL clip space -> PICA clip space (rotation, depth range)
 
     // Frame and vertex batching
@@ -491,6 +496,13 @@ static struct {
     C3D_Tex *atlas;                     // Bitmap atlas being filled, NULL: none (see atlasSlot())
     int atlasX, atlasY, atlasRowHeight;
     float lineWidth, pointSize;
+    bool lineStipple;                   // GL_LINE_STIPPLE
+    GLint lineStippleFactor;            // glLineStipple, 1..256
+    GLushort lineStipplePattern;
+    u32 stippleCounter;                 // Fragments of the strip so far, see emitStippledLine()
+    bool polygonStipple;                // GL_POLYGON_STIPPLE
+    u8 polygonStipplePattern[128];      // glPolygonStipple: 32 rows of 4 bytes from the bottom, most significant bit first
+    const C3D_Tex *stippleTex;          // The pattern as a texture in this frame's pixel memory, NULL: not made yet
     float pointSizeMin, pointSizeMax, pointFadeThreshold, pointAttenuation[3];  // glPointParameter
     bool pointSprite;                   // GL_POINT_SPRITE_OES
     u8 coordReplace;                    // GL_COORD_REPLACE_OES per texture unit (bit n: unit n)
@@ -631,6 +643,9 @@ static void listPixels(const ListWord *w, bool bitmap);
 static void setRasterPos(float x, float y, float z, float w);
 static void setPixelMap(GLenum map, GLsizei mapsize, const GLfloat *values);
 static void initTexture(Texture *t);
+static const C3D_Tex *stippleTexture(void);
+static void setPolygonStipple(const ListWord *w);
+static void packBitmap(const u8 *data, const PixelStore *ps, int width, int height, u8 *dst);
 
 // While a display list is compiled: record the command instead of executing it, and return from the gl* function
 #define LIST_SAVE(command, ...) do { if (gl.listCompiling) { listSave(LIST_##command, __VA_ARGS__); return; } } while (0)
@@ -977,6 +992,7 @@ static void ensureFrame(void)
     if (gl.pixelChunkCount > 1) gl.pixelChunkCount = 1;
     if (gl.pixelChunkCount) gl.pixelChunks[0].used = gl.pixelChunks[0].flushed = 0;
     gl.atlas = NULL;
+    gl.stippleTex = NULL;
 }
 
 // Linear memory for a texture of a pixel rectangle, valid until the GPU finished the frame (128-byte aligned)
@@ -1056,7 +1072,11 @@ static void physicalRect(const GLint r[4], int *x, int *y, int *w, int *h)
 // Classic modes: GL 1.1 table 3.22. The result depends on the texture's base format: PICA samples L as (L, L, L, 1),
 // A as (0, 0, 0, A) and formats without alpha with A = 1, which matches GL's (Lt, Ct, At) except where GL takes
 // the fragment color/alpha instead (no color in A textures, REPLACE without alpha)
-static GPU_TEVSRC texSource(int unit) { return (GPU_TEVSRC)(GPU_TEXTURE0 + unit); }
+static GPU_TEVSRC texSource(int unit)
+{
+    int pica = unit + gl.texUnitShift;
+    return (GPU_TEVSRC)(GPU_TEXTURE0 + ((pica < C3DGL_TEXTURE_UNITS)? pica : C3DGL_TEXTURE_UNITS - 1));
+}
 static GPU_TEVSRC previousSource(int unit) { return unit? GPU_PREVIOUS : GPU_PRIMARY_COLOR; }
 
 static GPU_TEVSRC combineSource(GLenum src, int unit)
@@ -1186,8 +1206,8 @@ static void setupTexEnv(C3D_TexEnv *env, int unit, const TexEnvState *e, GPU_TEX
 
 // Texture matrix of `unit` as shader uniform rows s, t, q; s and t scaled from the image to the padded texture size.
 // identity: the texcoords need no texture matrix (point sprite coordinates, which GL does not transform, or generated
-// texcoords, transformed on the CPU already)
-static void applyTextureMatrix(int unit, const Texture *t, bool identity, bool *projective)
+// texcoords, transformed on the CPU already). pica: the PICA unit sampling it, whose uniforms are set
+static void applyTextureMatrix(int unit, int pica, const Texture *t, bool identity, bool *projective)
 {
     static const Mat4 identityMatrix = {{ 1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1 }};
     const Mat4 *tm = identity? &identityMatrix : &gl.stack[2 + unit][gl.stackDepth[2 + unit]];
@@ -1204,9 +1224,9 @@ static void applyTextureMatrix(int unit, const Texture *t, bool identity, bool *
 
         // Compressed textures are stored upside down (t = 0 at the top): t' = q - t, which also holds for projective t
         if ((row == 1) && t->format.compressed) for (int i = 0; i < 4; i++) r[i] = tm->m[4*i + 3] - r[i];
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat[unit] + row, r[0], r[1], r[2], r[3]);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat[pica] + row, r[0], r[1], r[2], r[3]);
     }
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat[unit] + 2, tm->m[3], tm->m[7], tm->m[11], tm->m[15]);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat[pica] + 2, tm->m[3], tm->m[7], tm->m[11], tm->m[15]);
 
     // q != 1 (r is always 0, so m[11] does not matter)
     *projective = (tm->m[3] != 0.0f) || (tm->m[7] != 0.0f) || (tm->m[15] != 1.0f);
@@ -1249,6 +1269,30 @@ static void updateFogLut(const DrawState *s)
     C3D_FogLutBind(&gl.fogLut);     // Marks the table dirty: citro3d copies it into the command list at the next draw
 }
 
+// Polygon stipple: TexEnv stage 3 gives the fragments outside the pattern (stipple texel alpha 0) an alpha that fails
+// the alpha test, which is set up here; returns that alpha. A test that passes every alpha becomes alpha != 1/255, so
+// fragments of exactly that alpha are dropped as well
+static u8 stippleAlphaTest(const DrawState *s, GPU_TESTFUNC *func, int *ref)
+{
+    GLenum f = s->alphaTest? s->alphaFunc : GL_ALWAYS;
+    int r = s->alphaRef;
+    *func = testFunc(f);
+    *ref = r;
+    switch (f)
+    {
+        case GL_NEVER: case GL_GREATER: return 0;
+        case GL_LESS: return 255;
+        case GL_LEQUAL: if (r < 255) return 255; break;
+        case GL_GEQUAL: if (r > 0) return 0; break;
+        case GL_EQUAL: return r? 0 : 255;
+        case GL_NOTEQUAL: return (u8)r;
+        default: break;
+    }
+    *func = GPU_NOTEQUAL;
+    *ref = 1;
+    return 1;
+}
+
 // Set the GPU state of a batch. prev: the state applied for the previous batch (NULL: unknown), only what differs
 // from it is set: citro3d re-sends every group that is set, changed or not
 #define CHANGED(field) ((prev == NULL) || (memcmp(&s->field, &prev->field, sizeof(s->field)) != 0))
@@ -1284,7 +1328,23 @@ static void applyState(const DrawState *s, const DrawState *prev)
         GPU_WRITEMASK writeMask = (GPU_WRITEMASK)(s->colorMask | ((s->depthTest && s->depthMask)? GPU_WRITE_DEPTH : 0));
         C3D_DepthTest(s->depthTest, s->depthTest? depthFunc(s->depthFunc) : GPU_ALWAYS, writeMask);
     }
-    if (CHANGED(alphaTest) || CHANGED(alphaFunc) || CHANGED(alphaRef)) C3D_AlphaTest(s->alphaTest, testFunc(s->alphaFunc), s->alphaRef);
+    if (CHANGED(alphaTest) || CHANGED(alphaFunc) || CHANGED(alphaRef) || CHANGED(stipple))
+    {
+        // Stage 3 passes the color through; with polygon stipple alpha = stipple? alpha : the failing alpha
+        C3D_TexEnv *env = C3D_GetTexEnv(3);
+        C3D_TexEnvInit(env);
+        if (s->stipple)
+        {
+            GPU_TESTFUNC func;
+            int ref;
+            u8 fail = stippleAlphaTest(s, &func, &ref);
+            C3D_AlphaTest(true, func, ref);
+            C3D_TexEnvSrc(env, C3D_Alpha, GPU_PREVIOUS, GPU_CONSTANT, GPU_TEXTURE0);
+            C3D_TexEnvFunc(env, C3D_Alpha, GPU_INTERPOLATE);
+            C3D_TexEnvColor(env, (u32)fail << 24);
+        }
+        else C3D_AlphaTest(s->alphaTest, testFunc(s->alphaFunc), s->alphaRef);
+    }
 
     // prepareDraw() zeroes the stencil fields while the test is off
     if (CHANGED(stencilTest) || CHANGED(stencilFunc) || CHANGED(stencilRef) || CHANGED(stencilFuncMask) ||
@@ -1325,10 +1385,15 @@ static void applyState(const DrawState *s, const DrawState *prev)
     }
 
     // Fragment stage: TexEnv stage n combines texture unit n with the result of stage n - 1 (glTexEnv per unit).
-    // Pixel rectangles have all units unused but set stage 0 themselves
+    // Pixel rectangles have all units unused but set stage 0 themselves. With polygon stipple GL unit n is PICA unit
+    // n + 1 (unit 2 is unused then, see drawKey()), PICA unit 0 samples the pattern
     bool pixelChanged = CHANGED(pixelMode) || CHANGED(pixelTex);
+    bool stippleChanged = CHANGED(stipple);
+    gl.texUnitShift = s->stipple? 1 : 0;
+    if (s->stipple && (stippleChanged || CHANGED(stippleTex))) C3D_TexBind(0, (C3D_Tex *)s->stippleTex);
     for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
     {
+        int pica = unit + gl.texUnitShift;
         const TexUnitState *u = &s->units[unit];
         bool sprite = (s->spriteUnits >> unit) & 1, texGen = (s->texGenUnits >> unit) & 1;
         if ((unit == 0) && s->pixelMode)
@@ -1359,7 +1424,7 @@ static void applyState(const DrawState *s, const DrawState *prev)
             C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat[0] + 2, 0.0f, 0.0f, 0.0f, 1.0f);
             continue;
         }
-        if ((prev != NULL) && !((unit == 0) && pixelChanged) && (memcmp(u, &prev->units[unit], sizeof(*u)) == 0) &&
+        if ((prev != NULL) && !((unit == 0) && pixelChanged) && !stippleChanged && (memcmp(u, &prev->units[unit], sizeof(*u)) == 0) &&
             ((u->texture == 0) || ((s->texMatrixSerial == prev->texMatrixSerial) && (s->texQ == prev->texQ) &&
                                    (sprite == ((prev->spriteUnits >> unit) & 1)) &&
                                    (texGen == ((prev->texGenUnits >> unit) & 1)))))
@@ -1376,23 +1441,23 @@ static void applyState(const DrawState *s, const DrawState *prev)
             // Unit 0 is switched off with NULL. C3D_TexBind reads the texture type for units 1/2 (only 2D allowed
             // there), so NULL would be dereferenced: they get a dummy texture instead (never sampled, the stage
             // does not use it)
-            C3D_TexBind(unit, unit? &gl.dummyTexture : NULL);
+            if (pica < C3DGL_TEXTURE_UNITS) C3D_TexBind(pica, pica? &gl.dummyTexture : NULL);
             continue;
         }
 
         Texture *t = &gl.textures[u->texture];
         bool projective;
-        applyTextureMatrix(unit, t, sprite || texGen, &projective);
+        applyTextureMatrix(unit, pica, t, sprite || texGen, &projective);
 
         // Unit 0 can let PICA divide s and t by q per pixel (projection mode); units 1/2 divide per vertex in the shader
-        if (unit == 0)
+        if (pica == 0)
         {
             projective = projective || s->texQ;
             t->tex.param = (t->tex.param & ~GPU_TEXTURE_MODE(7)) | GPU_TEXTURE_MODE(projective? GPU_TEX_PROJECTION : GPU_TEX_2D);
         }
         else t->tex.param = (t->tex.param & ~GPU_TEXTURE_MODE(7)) | GPU_TEXTURE_MODE(GPU_TEX_2D);
 
-        C3D_TexBind(unit, &t->tex);
+        C3D_TexBind(pica, &t->tex);
         setupTexEnv(env, unit, &u->env, t->format.format, t->base == GL_INTENSITY);
     }
 
@@ -1403,6 +1468,24 @@ static void applyState(const DrawState *s, const DrawState *prev)
         C3D_Mtx mtx;
         mat4ToC3D(&mvp, &mtx);
         C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, gl.uLocMvp, &mtx);
+    }
+
+    // Stipple texcoords (s, t, q) = (window x/32, window y/32, 1)*w_clip from the object position, PICA divides by q
+    // per pixel: pixel centers sample texel centers. Stippled batches are never in clip space
+    if (stippleChanged) C3D_BoolUnifSet(GPU_VERTEX_SHADER, gl.uLocStipple, s->stipple);
+    if (s->stipple && (stippleChanged || CHANGED(matrixSerial) || CHANGED(viewport)))
+    {
+        const float *m = projectionModelview()->m;
+        float halfW = 0.5f*(float)s->viewport[2], halfH = 0.5f*(float)s->viewport[3];
+        float ox = (float)s->viewport[0] + halfW, oy = (float)s->viewport[1] + halfH;
+        float row[3][4];
+        for (int i = 0; i < 4; i++)
+        {
+            row[0][i] = (m[4*i]*halfW + m[4*i + 3]*ox)/32.0f;
+            row[1][i] = (m[4*i + 1]*halfH + m[4*i + 3]*oy)/32.0f;
+            row[2][i] = m[4*i + 3];
+        }
+        for (int r = 0; r < 3; r++) C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocTexMat[0] + r, row[r][0], row[r][1], row[r][2], row[r][3]);
     }
 }
 
@@ -1466,6 +1549,14 @@ static void drawKey(DrawState *out, bool clipSpace, bool points)
 
     // Generated texcoords may have any q (eye linear q, projective texture matrices): unit 0 in projection mode
     key.texQ = (key.units[0].texture != 0) && (gl.texQUsed || (key.texGenUnits & 1)) && !(key.spriteUnits & 1);
+
+    // Polygon stipple applies to filled polygons, which are not drawn in clip space. The pattern takes PICA unit 0
+    if (gl.polygonStipple && !clipSpace)
+    {
+        if (key.units[2].texture) WARN_ONCE("Polygon stipple needs texture unit 2, which is in use: drawn without stipple\n");
+        else if ((key.stippleTex = stippleTexture()) != NULL) key.stipple = true;
+    }
+
     key.fog = gl.fog;
     if (gl.fog)
     {
@@ -1860,6 +1951,58 @@ static void emitExpandedQuad(const Vertex *a, const Vertex *b, const float pa[3]
     emitTriangle(&q[0], &q[2], &q[3]);
 }
 
+// Line stipple (GL 1.1 section 3.4.2): fragment s of a strip (counted along the major axis, carried over from segment to
+// segment) is drawn when bit (s/factor) % 16 of the pattern is set. Fragment k of the segment is the pixel column (row)
+// k whose center lies in [start, end) along the major axis; each run of drawn fragments becomes a quad that ends on the
+// pixel edges between them, clipped to the line with its square caps (capU along the major axis)
+static void emitStippledLine(const Vertex *a, const Vertex *b, const float pa[3], const float pb[3], float nx, float ny,
+                             float capU)
+{
+    const GLint *vp = gl.state.viewport;
+    float halfW = 0.5f*(float)vp[2], halfH = 0.5f*(float)vp[3];
+    float wa[2] = { vp[0] + (pa[0] + 1.0f)*halfW, vp[1] + (pa[1] + 1.0f)*halfH };
+    float wb[2] = { vp[0] + (pb[0] + 1.0f)*halfW, vp[1] + (pb[1] + 1.0f)*halfH };
+    int axis = (fabsf(wb[0] - wa[0]) >= fabsf(wb[1] - wa[1]))? 0 : 1;
+
+    // u: window coordinate along the major axis, mirrored to increase from a to b
+    float sign = (wb[axis] >= wa[axis])? 1.0f : -1.0f;
+    float ua = sign*wa[axis], ub = sign*wb[axis];
+    // First fragment, one past the last; endpoints within 1/256 pixel of a center (rounding of vertices given at
+    // pixel centers) count as on it
+    float first = ceilf(ua - 0.5f - 1.0f/256.0f), end = ceilf(ub - 0.5f - 1.0f/256.0f);
+    if (!(end > first)) return;
+
+    u32 factor = (u32)gl.lineStippleFactor, period = 16*factor, s = gl.stippleCounter;
+    gl.stippleCounter = (s + (u32)fmodf(end - first, (float)period)) % period;
+
+    // Quads only for the fragments that can be on the screen (window 0..400 along either axis, plus the line width)
+    float margin = ceilf(2.0f*capU) + 1.0f;
+    float screen0 = ((sign > 0.0f)? 0.0f : -(float)C3DGL_TOP_SCREEN_WIDTH) - margin;
+    float k0 = fmaxf(first, screen0), k1 = fminf(end, screen0 + (float)C3DGL_TOP_SCREEN_WIDTH + 2.0f*margin);
+    if (!(k1 > k0)) return;
+    s = (s + (u32)fmodf(k0 - first, (float)period)) % period;
+
+    int n = (int)(k1 - k0);
+    for (int k = 0; k < n; )
+    {
+        bool on = (gl.lineStipplePattern >> (((s + (u32)k) % period)/factor)) & 1;
+        int run = k + 1;
+        while ((run < n) && ((bool)((gl.lineStipplePattern >> (((s + (u32)run) % period)/factor)) & 1) == on)) run++;
+        if (on)
+        {
+            float u0 = fmaxf(k0 + (float)k, ua - capU), u1 = fminf(k0 + (float)run, ub + capU);
+            float t0 = (u0 - ua)/(ub - ua), t1 = (u1 - ua)/(ub - ua);
+            Vertex va, vb;
+            lerpVertex(&va, a, b, fminf(fmaxf(t0, 0.0f), 1.0f));
+            lerpVertex(&vb, a, b, fminf(fmaxf(t1, 0.0f), 1.0f));
+            float p0[3], p1[3];
+            for (int i = 0; i < 3; i++) { p0[i] = pa[i] + (pb[i] - pa[i])*t0; p1[i] = pa[i] + (pb[i] - pa[i])*t1; }
+            emitExpandedQuad(&va, &vb, p0, p1, nx, ny, 0.0f, 0.0f);
+        }
+        k = run;
+    }
+}
+
 // Expand a line to a screen-aligned quad in NDC (batch must be in clipSpace mode).
 // zBias is added to the NDC depth (polygon offset of polygon outlines)
 static void emitLine(const Vertex *a, const Vertex *b, float zBias)
@@ -1867,6 +2010,7 @@ static void emitLine(const Vertex *a, const Vertex *b, float zBias)
     Vertex clippedA, clippedB;
     if (!clipSegment(&a, &b, &clippedA, &clippedB)) return;
     if (gl.renderMode != GL_RENDER) { feedbackLine(a, b); return; }
+    if (gl.lineReset) { gl.stippleCounter = 0; gl.lineReset = false; }
 
     const Mat4 *pmv = projectionModelview();
 
@@ -1902,6 +2046,12 @@ static void emitLine(const Vertex *a, const Vertex *b, float zBias)
     else { dx /= len; dy /= len; }
 
     float r = 0.5f*gl.lineWidth;
+    if (gl.lineStipple && (len >= 1e-6f))
+    {
+        // The caps reach r further along the line, r*|major component of the direction| along the major axis
+        emitStippledLine(&va, &vb, pa, pb, -dy*r/halfW, dx*r/halfH, r*fmaxf(fabsf(dx), fabsf(dy)));
+        return;
+    }
     emitExpandedQuad(&va, &vb, pa, pb, -dy*r/halfW, dx*r/halfH, dx*r/halfW, dy*r/halfH);
 }
 
@@ -2100,7 +2250,9 @@ static void emitPolygon(const Vertex *const *vs, const bool *edges, int n, const
     }
     else
     {
-        // Edge i runs from vertex i to i + 1; its flag also decides whether vertex i is drawn as a point
+        // Edge i runs from vertex i to i + 1; its flag also decides whether vertex i is drawn as a point. The outline
+        // restarts the line stipple
+        gl.lineReset = true;
         for (int i = 0; i < n; i++)
         {
             if (!edges[i]) continue;
@@ -2680,6 +2832,7 @@ bool c3dglInit(void)
     gl.uLocTexMat[0] = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texmat0");
     gl.uLocTexMat[1] = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texmat1");
     gl.uLocTexMat[2] = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texmat2");
+    gl.uLocStipple = shaderInstanceGetUniformLocation(gl.program.vertexShader, "stipple");
 
     // Vertex layout: v0 = position (3 floats), v1 = texcoord s, t, q (3 floats), v2 = color (4 ubytes), v3 = depth bias (float)
     C3D_AttrInfo *attrInfo = C3D_GetAttrInfo();
@@ -2751,6 +2904,9 @@ bool c3dglInit(void)
     gl.clearDepth = 1.0f;
     gl.state.depthFar = 1.0f;
     gl.polygonMode[0] = gl.polygonMode[1] = GL_FILL;
+    gl.lineStippleFactor = 1;
+    gl.lineStipplePattern = 0xFFFF;
+    memset(gl.polygonStipplePattern, 0xFF, sizeof(gl.polygonStipplePattern));
     gl.currentEdge = true;
     gl.shadeModel = GL_SMOOTH;
     gl.currentNormal[2] = 1.0f;
@@ -2935,6 +3091,8 @@ static void setCapability(GLenum cap, bool enable)
         case GL_POLYGON_OFFSET_LINE: gl.offsetLine = enable; break;
         case GL_POLYGON_OFFSET_POINT: gl.offsetPoint = enable; break;
         case GL_POINT_SPRITE_OES: gl.pointSprite = enable; break;
+        case GL_LINE_STIPPLE: gl.lineStipple = enable; break;
+        case GL_POLYGON_STIPPLE: gl.polygonStipple = enable; break;
         default:
             WARN_ONCE("glEnable/glDisable: capability 0x%x not supported\n", cap);
             setError(GL_INVALID_ENUM);
@@ -3010,6 +3168,8 @@ GLboolean glIsEnabled(GLenum cap)
         case GL_POLYGON_OFFSET_LINE: return gl.offsetLine;
         case GL_POLYGON_OFFSET_POINT: return gl.offsetPoint;
         case GL_POINT_SPRITE_OES: return gl.pointSprite;
+        case GL_LINE_STIPPLE: return gl.lineStipple;
+        case GL_POLYGON_STIPPLE: return gl.polygonStipple;
         default: setError(GL_INVALID_ENUM); return GL_FALSE;
     }
 }
@@ -3336,6 +3496,8 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_COLOR_MATERIAL_PARAMETER: v[0] = gl.lighting.colorMaterialMode; return 1;
 
         case GL_LINE_WIDTH: v[0] = gl.lineWidth; return 1;
+        case GL_LINE_STIPPLE_PATTERN: v[0] = gl.lineStipplePattern; return 1;
+        case GL_LINE_STIPPLE_REPEAT: v[0] = gl.lineStippleFactor; return 1;
         case GL_POINT_SIZE: v[0] = gl.pointSize; return 1;
         case GL_POINT_SIZE_RANGE: case GL_ALIASED_POINT_SIZE_RANGE: v[0] = 1.0; v[1] = C3DGL_MAX_POINT_SIZE; return 2;
         case GL_POINT_SIZE_GRANULARITY: v[0] = 0.0; return 1;     // Any size (points are quads)
@@ -3387,6 +3549,7 @@ static int getState(GLenum pname, double v[16], bool *normalized)
                 ((pname >= GL_LIGHT0) && (pname <= GL_LIGHT7)) || (pname == GL_COLOR_MATERIAL) ||
                 ((pname >= GL_CLIP_PLANE0) && (pname < GL_CLIP_PLANE0 + C3DGL_MAX_CLIP_PLANES)) ||
                 (pname == GL_NORMALIZE) || (pname == GL_RESCALE_NORMAL) || (pname == GL_POINT_SPRITE_OES) ||
+                (pname == GL_LINE_STIPPLE) || (pname == GL_POLYGON_STIPPLE) ||
                 ((pname >= GL_TEXTURE_GEN_S) && (pname <= GL_TEXTURE_GEN_Q)) ||
                 ((pname >= GL_MAP1_COLOR_4) && (pname <= GL_MAP1_VERTEX_4)) || ((pname >= GL_MAP2_COLOR_4) && (pname <= GL_MAP2_VERTEX_4)))
             {
@@ -3678,6 +3841,58 @@ void glLineWidth(GLfloat width)
 {
     LIST_SAVE(LINE_WIDTH, "f", width);
     gl.lineWidth = width;
+}
+
+void glLineStipple(GLint factor, GLushort pattern)
+{
+    LIST_SAVE(LINE_STIPPLE, "iu", factor, (unsigned)pattern);
+    gl.lineStippleFactor = (factor < 1)? 1 : (factor > 256)? 256 : factor;
+    gl.lineStipplePattern = pattern;
+}
+
+// The pattern from 32 words of 4 bytes (display lists and glPolygonStipple); draws issued before keep the old one
+static void setPolygonStipple(const ListWord *w)
+{
+    memcpy(gl.polygonStipplePattern, w, sizeof(gl.polygonStipplePattern));
+    gl.stippleTex = NULL;
+}
+
+// Unpacked like a 32x32 glBitmap (GL 1.1 section 3.5.6), without pixel transfer
+void glPolygonStipple(const GLubyte *mask)
+{
+    ListWord pattern[32];
+    u8 *bytes = (u8 *)pattern;
+    if (mask == NULL) return;
+    packBitmap(mask, &gl.unpack, 32, 32, bytes);
+    if (gl.listCompiling)
+    {
+        ListWord *w = listBegin(LIST_POLYGON_STIPPLE, 32);
+        if (w == NULL) return;
+        memcpy(w, pattern, sizeof(pattern));
+        listEnd();
+        return;
+    }
+    setPolygonStipple(pattern);
+}
+
+// Packed like glReadPixels of a 32x32 GL_BITMAP image
+void glGetPolygonStipple(GLubyte *mask)
+{
+    if (mask == NULL) return;
+    const PixelStore *ps = &gl.pack;
+    size_t rowBytes = ((size_t)((ps->rowLength > 0)? ps->rowLength : 32) + 7)/8;
+    rowBytes = (rowBytes + ps->alignment - 1)/ps->alignment*ps->alignment;
+    for (int y = 0; y < 32; y++)
+    {
+        u8 *row = mask + (size_t)(ps->skipRows + y)*rowBytes;
+        for (int x = 0; x < 32; x++)
+        {
+            int col = ps->skipPixels + x;
+            u8 bit = ps->lsbFirst? (u8)(1 << (col & 7)) : (u8)(0x80 >> (col & 7));
+            if ((gl.polygonStipplePattern[4*y + x/8] << (x & 7)) & 0x80) row[col/8] |= bit;
+            else row[col/8] &= (u8)~bit;
+        }
+    }
 }
 
 void glPointSize(GLfloat size)
@@ -7151,8 +7366,7 @@ void glGetMapiv(GLenum target, GLenum query, GLint *v)
 // OpenGL: attribute stacks (glPushAttrib, glPushClientAttrib)
 //
 // A push saves a snapshot of everything; a pop restores only the groups of the pushed mask (GL 1.1 tables
-// 6.x). Groups of features that do not exist yet (stipple, pixel transfer, accumulation)
-// save nothing so far. When a feature moves out of ignoredCaps, its state has to be added here.
+// 6.x). Groups of features that do not exist yet (accumulation) save nothing so far. When a feature moves out of ignoredCaps, its state has to be added here.
 //----------------------------------------------------------------------------------
 typedef struct {
     GLuint id;                  // Texture bound to the unit (and target) at push time
@@ -7168,6 +7382,10 @@ typedef struct {
     bool currentEdge;
     float currentNormal[3], currentTexR[C3DGL_TEXTURE_UNITS];
     float lineWidth, pointSize;
+    bool lineStipple, polygonStipple;
+    GLint lineStippleFactor;
+    GLushort lineStipplePattern;
+    u8 polygonStipplePattern[128];
     float pointSizeMin, pointSizeMax, pointFadeThreshold, pointAttenuation[3];
     bool pointSprite;
     u8 coordReplace;
@@ -7233,6 +7451,11 @@ void glPushAttrib(GLbitfield mask)
     memcpy(a->currentNormal, gl.currentNormal, sizeof(a->currentNormal));
     memcpy(a->currentTexR, gl.currentTexR, sizeof(a->currentTexR));
     a->lineWidth = gl.lineWidth;
+    a->lineStipple = gl.lineStipple;
+    a->lineStippleFactor = gl.lineStippleFactor;
+    a->lineStipplePattern = gl.lineStipplePattern;
+    a->polygonStipple = gl.polygonStipple;
+    memcpy(a->polygonStipplePattern, gl.polygonStipplePattern, sizeof(a->polygonStipplePattern));
     a->pointSize = gl.pointSize;
     a->pointSizeMin = gl.pointSizeMin;
     a->pointSizeMax = gl.pointSizeMax;
@@ -7340,6 +7563,9 @@ void glPopAttrib(void)
     if (mask & GL_LINE_BIT)
     {
         gl.lineWidth = a->lineWidth;
+        gl.lineStipple = a->lineStipple;
+        gl.lineStippleFactor = a->lineStippleFactor;
+        gl.lineStipplePattern = a->lineStipplePattern;
         caps |= capBits((const GLenum[]){ GL_LINE_SMOOTH }, 1);
     }
     if (mask & GL_POLYGON_BIT)
@@ -7353,7 +7579,14 @@ void glPopAttrib(void)
         gl.offsetPoint = a->offsetPoint;
         gl.offsetFactor = a->offsetFactor;
         gl.offsetUnits = a->offsetUnits;
+        gl.polygonStipple = a->polygonStipple;
         caps |= capBits((const GLenum[]){ GL_POLYGON_SMOOTH }, 1);
+    }
+    if ((mask & GL_POLYGON_STIPPLE_BIT) &&
+        (memcmp(gl.polygonStipplePattern, a->polygonStipplePattern, sizeof(gl.polygonStipplePattern)) != 0))
+    {
+        memcpy(gl.polygonStipplePattern, a->polygonStipplePattern, sizeof(gl.polygonStipplePattern));
+        gl.stippleTex = NULL;
     }
     if (mask & GL_LIGHTING_BIT)
     {
@@ -7430,6 +7663,8 @@ void glPopAttrib(void)
         gl.rescaleNormal = a->rescaleNormal;
         gl.fog = a->fog;
         gl.pointSprite = a->pointSprite;
+        gl.lineStipple = a->lineStipple;
+        gl.polygonStipple = a->polygonStipple;
         gl.clipEnabled = a->clipEnabled;
         gl.clipObjectSerial = 0;
         caps = 0xFFFFFFFFu;     // All stored-only capabilities
@@ -8011,6 +8246,23 @@ static C3D_Tex *pixelTexture(int width, int height, GPU_TEXCOLOR format, int bpp
     tex->height = (u16)height;
     tex->param = GPU_TEXTURE_MAG_FILTER(GPU_NEAREST) | GPU_TEXTURE_MIN_FILTER(GPU_NEAREST) |
                  GPU_TEXTURE_WRAP_S(GPU_CLAMP_TO_EDGE) | GPU_TEXTURE_WRAP_T(GPU_CLAMP_TO_EDGE) | GPU_TEXTURE_MODE(GPU_TEX_2D);
+    return tex;
+}
+
+// The polygon stipple pattern as a 32x32 A8 texture (repeated, sampled in projection mode, see applyState()), made at
+// the first stippled draw of a frame or after a pattern change
+static const C3D_Tex *stippleTexture(void)
+{
+    if (gl.stippleTex != NULL) return gl.stippleTex;
+    C3D_Tex *tex = pixelTexture(32, 32, GPU_A8, 1);
+    if (tex == NULL) return NULL;
+    tex->param = GPU_TEXTURE_MAG_FILTER(GPU_NEAREST) | GPU_TEXTURE_MIN_FILTER(GPU_NEAREST) |
+                 GPU_TEXTURE_WRAP_S(GPU_REPEAT) | GPU_TEXTURE_WRAP_T(GPU_REPEAT) | GPU_TEXTURE_MODE(GPU_TEX_PROJECTION);
+    u8 *data = (u8 *)tex->data;
+    for (int y = 0; y < 32; y++)
+        for (int x = 0; x < 32; x++)
+            data[tiledOffset(32, 32, x, y, 1)] = ((gl.polygonStipplePattern[4*y + x/8] << (x & 7)) & 0x80)? 255 : 0;
+    gl.stippleTex = tex;
     return tex;
 }
 

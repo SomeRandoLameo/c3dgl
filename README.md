@@ -87,7 +87,7 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
   edge flags, polygon offset, depth range
 - `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks, display lists,
   texgen, texture formats, 1D textures, color buffers, pixel drawing and transfer (rendered and read back), feedback
-  and selection and the ES API; green screen = all passed
+  and selection, line and polygon stipple (rendered and read back) and the ES API; green screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
   page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps, page 5: compressed textures (paletted, ETC1)
@@ -112,6 +112,9 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `select`: picking with a cursor (circle pad / D-pad): `GL_SELECT` with `gluPickMatrix` finds the nearest cube under
   it in a turning ring, `GL_FEEDBACK` gives back the picked cube's front faces in window coordinates, drawn as a yellow
   outline that must sit exactly on the cube; the hit records are listed on the bottom screen
+- `stipple`: line stipple (dashes, factor 2, dash-dot, dots, a wide line, a turning star as one line loop), two
+  rectangles with complementary halftone patterns that fill each other in, and in perspective a textured screen door
+  cube (polygon stipple fixed to the window) circling an opaque cube with dashed `glPolygonMode(GL_LINE)` edges
 
 Every example shows the CPU and GPU time of the last frame, the command buffer usage and the frames per second
 (averaged over one second) in rows 2-5 of the bottom screen (`C3D_GetProcessingTime`, `C3D_GetDrawingTime`,
@@ -194,6 +197,10 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
   `glInitNames`, `glLoadName`, `glPushName`, `glPopName` (64 names); points, lines (with `GL_LINE_RESET_TOKEN`),
   polygons (clipped, culled, polygon mode) and the raster position of `glBitmap`/`glDrawPixels`/`glCopyPixels`.
   Feedback colors have 8 bits per component, nothing is drawn or cleared meanwhile
+- Line stipple (`glLineStipple`, `GL_LINE_STIPPLE`; the counter runs on along strips and loops) and polygon stipple
+  (`glPolygonStipple`, `glGetPolygonStipple`, `GL_POLYGON_STIPPLE`) with their queries, attribute groups and display
+  lists. Polygon stipple needs texture unit 2 to be unused (drawn without stipple otherwise); with the alpha test off,
+  stippled fragments of alpha exactly 1/255 are dropped too
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
@@ -258,6 +265,13 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
   view volume in clip space (Sutherland-Hodgman for polygons, with colors and texcoords interpolated), culled and split
   by polygon mode like for drawing, then written as tokens in window coordinates or recorded as a hit instead of being
   drawn. `GL_POLYGON` is kept whole so that it comes back as one polygon.
+- Line stipple splits each expanded line into one quad per run of drawn fragments: the fragments are counted per pixel
+  along the major axis, the runs end on pixel edges.
+- Polygon stipple is a 32x32 alpha texture on PICA texture unit 0 with texcoords window position / 32, which the
+  shader computes from the vertex position in projection mode (PICA divides by w per pixel, so the pattern stays fixed
+  to the window under perspective). GL texture units 0 and 1 move to PICA units 1 and 2 meanwhile (a projective
+  texcoord of unit 0 is then divided per vertex). TexEnv stage 3 gives the fragments outside the pattern an alpha that
+  fails the alpha test, which is set up to combine with the GL alpha test.
 - Display lists store each command with its arguments; client memory is copied at compile time (texture images
   tightly packed, vertex array elements as the immediate mode calls they stand for). `glCallList` runs the commands
   through the same entry points, so a list renders exactly like the calls it recorded; it costs about as much CPU
