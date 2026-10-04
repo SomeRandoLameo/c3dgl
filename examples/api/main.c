@@ -3421,6 +3421,68 @@ static void testNpotWrap(void)
     glPopAttrib();
 }
 
+// Texture updates within a frame (glTexSubImage2D, glTexImage2D of the same size, a new level, glDeleteTextures and
+// reuse of the id) leave the draws issued before them as they were
+static void fillTexture(GLenum target, GLint level, bool sub, int size, GLubyte r, GLubyte g, GLubyte b)
+{
+    static GLubyte texels[16*16*4];
+    for (int i = 0; i < size*size; i++) { texels[i*4] = r; texels[i*4 + 1] = g; texels[i*4 + 2] = b; texels[i*4 + 3] = 255; }
+    if (sub) glTexSubImage2D(target, level, 0, 0, size, size, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+    else glTexImage2D(target, level, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+}
+
+static void texturedSquare(int x)
+{
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.0f, 0.0f); glVertex2i(x, 120);
+    glTexCoord2f(1.0f, 0.0f); glVertex2i(x + 20, 120);
+    glTexCoord2f(1.0f, 1.0f); glVertex2i(x + 20, 140);
+    glTexCoord2f(0.0f, 1.0f); glVertex2i(x, 140);
+    glEnd();
+}
+
+static void testTexUpdateInFrame(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    windowProjection();
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    fillTexture(GL_TEXTURE_2D, 0, false, 16, 255, 0, 0);
+    texturedSquare(10);
+    fillTexture(GL_TEXTURE_2D, 0, true, 16, 0, 255, 0);
+    texturedSquare(40);
+    fillTexture(GL_TEXTURE_2D, 0, false, 16, 0, 0, 255);
+    texturedSquare(70);
+    fillTexture(GL_TEXTURE_2D, 1, false, 8, 0, 0, 0);       // Becomes a mip chain (level 0 is copied over)
+    texturedSquare(100);
+    fillTexture(GL_TEXTURE_2D, 0, true, 16, 255, 255, 0);   // Changes the whole chain
+    texturedSquare(130);
+    glDeleteTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);                      // Same id again
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    fillTexture(GL_TEXTURE_2D, 0, false, 16, 255, 0, 255);
+    texturedSquare(160);
+
+    CHECK(pixelNear(20, 130, 255, 0, 0, -1));
+    CHECK(pixelNear(50, 130, 0, 255, 0, -1));
+    CHECK(pixelNear(80, 130, 0, 0, 255, -1));
+    CHECK(pixelNear(110, 130, 0, 0, 255, -1));
+    CHECK(pixelNear(140, 130, 255, 255, 0, -1));
+    CHECK(pixelNear(170, 130, 255, 0, 255, -1));
+    glDisable(GL_TEXTURE_2D);
+    glDeleteTextures(1, &tex);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glPopAttrib();
+}
+
 int main(void)
 {
     gfxInitDefault();
@@ -3463,6 +3525,7 @@ int main(void)
     testStipple();
     testAccum();
     testNpotWrap();
+    testTexUpdateInFrame();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

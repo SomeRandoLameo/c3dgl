@@ -330,7 +330,11 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 ## Known Bugs / Limits
 
-* [ ] `glTexSubImage2D` during a frame also changes draws issued earlier in that frame
+* [x] `glTexSubImage2D` during a frame also changed draws issued earlier in that frame (also `glTexImage2D` of the same
+  size, new mip levels, wrap changes of NPOT textures). Fixed with copy-on-write: a texture a draw of the current frame
+  used is copied before its texels change (the old storage is freed once the frame is done); between frames the next
+  frame is begun first, which waits for the GPU still rendering the previous one. Verified in Azahar and on real
+  hardware (api checks, 2026-10-04)
 * [ ] 64K vertices per frame and 511 texture ids, the rest is dropped
 * [~] Testing mipmaps in Azahar: the software renderer samples only level 0; the Vulkan renderer picks the level from
   the t derivative alone (a quad with constant t samples level 0) and its resolution scale lowers the LOD

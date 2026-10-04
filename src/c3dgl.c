@@ -192,6 +192,7 @@ typedef struct {
     bool generateMipmap;        // GL_GENERATE_MIPMAP
     GLenum minFilter, magFilter, wrapS, wrapT;
     float priority, borderColor[4];     // Stored only
+    u32 drawnFrame;             // gl.frameSerial when a draw last used tex (0: none), see textureBusy()
 } Texture;
 
 // Texture environment of one unit (glTexEnv)
@@ -470,6 +471,7 @@ static struct {
     // Frame and vertex batching
     bool frameActive;
     bool drawnThisFrame;
+    u32 frameSerial;                    // Counts the waits for the GPU (frame begun, frame resumed), see textureBusy()
     C3D_Tex dummyTexture;               // 8x8, bound to units 1/2 while they are unused (see applyState)
     u8 *vbo;                            // Vertex buffer 0, GPU_VERTEX_SIZE per vertex; linear memory, rewritten every frame
     float (*vboExtra)[C3DGL_TEXTURE_UNITS - 1][3];  // Vertex buffer 1: texcoords of units 1, 2
@@ -992,6 +994,7 @@ static void ensureFrame(void)
 
     gl.frameActive = true;
     gl.drawnThisFrame = false;
+    gl.frameSerial++;           // The GPU is done with the previous frame
     gl.vertexCount = 0;
     gl.batchStart = 0;
     gl.cacheFlushed = 0;
@@ -1041,6 +1044,7 @@ static void flush(void)
 
     C3D_DrawArrays(GPU_TRIANGLES, gl.batchStart, count);
     if (gl.batch.units[1].texture || gl.batch.units[2].texture) gl.extraUsed = true;
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) gl.textures[gl.batch.units[unit].texture].drawnFrame = gl.frameSerial;
 
     gl.batchStart = gl.vertexCount;
     gl.drawnThisFrame = true;
@@ -5795,6 +5799,33 @@ static void textureModified(GLuint slot)
     }
 }
 
+// The GPU may still read the storage of t: a draw of the current frame used it (submitted only when the frame ends), or
+// one of the previous frame, which renders until the next frame begins
+static bool textureBusy(const Texture *t) { return (t->drawnFrame != 0) && (t->drawnFrame == gl.frameSerial); }
+
+// Storage of t no longer used: deleted once the GPU is done with it
+static void releaseTexture(Texture *t)
+{
+    if (textureBusy(t)) deferTextureDelete(&t->tex);
+    else C3D_TexDelete(&t->tex);
+    t->drawnFrame = 0;
+}
+
+// Texels of t about to change in place (after textureModified()): draws issued before keep the old ones. Between frames
+// the next frame is begun, which waits for the GPU; within a frame the texels move to a copy and the old storage is
+// deleted once the frame is done
+static void copyOnWrite(Texture *t)
+{
+    if (!textureBusy(t)) return;
+    if (!gl.frameActive) { ensureFrame(); return; }
+    size_t size = C3D_TexCalcTotalSize(t->tex.size, t->levels - 1);
+    void *data = linearAlloc(size);
+    if (data == NULL) { WARN_ONCE("Out of memory for a texture copy, earlier draws of the frame get the new texels\n"); return; }
+    memcpy(data, t->tex.data, size);
+    releaseTexture(t);
+    t->tex.data = data;
+}
+
 static void applyTextureParams(Texture *t)
 {
     C3D_TexSetFilter(&t->tex, texFilter(t->magFilter), texFilter(t->minFilter));
@@ -5845,8 +5876,7 @@ static bool ensureMipmapStorage(Texture *t)
     }
     else memcpy(mip.data, t->tex.data, t->tex.size);    // Level 0 comes first in both
 
-    if (gl.frameActive) deferTextureDelete(&t->tex);
-    else C3D_TexDelete(&t->tex);
+    releaseTexture(t);
     t->tex = mip;
     t->levels = mip.maxLevel + 1;
     replicateRows(t, 0, 0, t->tex.width);
@@ -5998,9 +6028,7 @@ void glDeleteTextures(GLsizei n, const GLuint *textures)
         Texture *t = &gl.textures[id];
         if (t->loaded)
         {
-            // The GPU may still read it in the current frame
-            if (gl.frameActive) deferTextureDelete(&t->tex);
-            else C3D_TexDelete(&t->tex);
+            releaseTexture(t);
         }
         memset(t, 0, sizeof(*t));
         for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
@@ -6287,6 +6315,7 @@ static void setTexParameter(GLenum target, GLenum pname, const GLfloat *v)
             if (t->loaded)
             {
                 textureModified(textureSlotOf(t));
+                copyOnWrite(t);
                 flushTexture(t);        // The padding depends on the wrap modes
             }
             break;
@@ -6295,6 +6324,7 @@ static void setTexParameter(GLenum target, GLenum pname, const GLfloat *v)
             if (t->generateMipmap && t->loaded)
             {
                 textureModified(textureSlotOf(t));
+                copyOnWrite(t);
                 generateMipmaps(t);
                 flushTexture(t);
             }
@@ -6482,6 +6512,7 @@ static Texture *defineTexImage(GLenum target, GLint level, GLint internalformat,
         bool matches = (lv.width == levelSize(t->width, level)) && (lv.height == levelSize(t->height, level)) &&
                        (f->format == t->format.format);
         *stored = matches && (level <= maxStoredLevel(t)) && ensureMipmapStorage(t);
+        if (*stored) copyOnWrite(t);
         return t;
     }
 
@@ -6492,8 +6523,7 @@ static Texture *defineTexImage(GLenum target, GLint level, GLint internalformat,
     {
         if (t->loaded)
         {
-            if (gl.frameActive) deferTextureDelete(&t->tex);
-            else C3D_TexDelete(&t->tex);
+            releaseTexture(t);
             t->loaded = false;
         }
         if (!C3D_TexInit(&t->tex, texWidth, texHeight, f->format))
@@ -6510,6 +6540,7 @@ static Texture *defineTexImage(GLenum target, GLint level, GLint internalformat,
         t->width = imageWidth;
         t->height = imageHeight;
     }
+    else copyOnWrite(t);
     t->base = base;
     t->level[0] = lv;
     *stored = true;
@@ -6833,6 +6864,7 @@ static void texSubImage(GLenum target, GLint level, GLint xoffset, GLint yoffset
     if (pixels == NULL) return;
 
     textureModified(textureSlotOf(t));
+    copyOnWrite(t);
     if (level < t->levels) loadTexels(t, level, xoffset, yoffset, width, height, format, type, pixels, &gl.unpack, lv->base);
     if ((level == 0) && t->generateMipmap) generateMipmaps(t);
     flushTexture(t);
@@ -7803,7 +7835,7 @@ void glPopAttrib(void)
             {
                 textureModified(slot);
                 applyTextureParams(t);
-                if (wrapChanged) flushTexture(t);
+                if (wrapChanged) { copyOnWrite(t); flushTexture(t); }
             }
         }
         gl.activeTexture = a->activeTexture;
@@ -7898,7 +7930,8 @@ static bool suspendFrame(bool used[C3DGL_SCREEN_COUNT])
 static void resumeFrame(bool suspended, const bool used[C3DGL_SCREEN_COUNT])
 {
     if (!suspended) return;
-    C3D_FrameBegin(0);
+    C3D_FrameBegin(0);          // Waits for the GPU
+    gl.frameSerial++;
     C3D_FrameDrawOn(gl.targets[gl.screen]);
     for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) gl.targets[i]->used = used[i];
     gl.batchValid = false;
