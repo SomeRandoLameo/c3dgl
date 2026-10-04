@@ -3144,7 +3144,8 @@ static void testStipple(void)
     CHECK(checker);
     glDeleteTextures(2, tex);
 
-    // Alpha test: fragments that fail it stay away; without it alpha 0 is drawn (stipple off: the whole quad)
+    // Alpha test: fragments that fail it stay away; without it alpha 1/255 is drawn (stipple off: the whole quad) and
+    // alpha keeps its exact value (alpha 0 is dropped then, see README)
     windowProjection();
     glClear(GL_COLOR_BUFFER_BIT);
     glEnable(GL_ALPHA_TEST);
@@ -3158,14 +3159,25 @@ static void testStipple(void)
     glColor4f(0.0f, 1.0f, 0.0f, 0.25f);
     glRectf(70.0f, 10.0f, 80.0f, 20.0f);
     glDisable(GL_ALPHA_TEST);
-    glColor4f(0.0f, 0.0f, 1.0f, 0.0f);
+    glColor4ub(0, 0, 255, 1);
     glRectf(90.0f, 10.0f, 100.0f, 20.0f);
+    glColor4ub(255, 0, 0, 200);
+    glRectf(130.0f, 10.0f, 140.0f, 20.0f);
+    glColor4ub(255, 0, 0, 255);
+    glRectf(150.0f, 10.0f, 160.0f, 20.0f);
     glDisable(GL_POLYGON_STIPPLE);
+    glColor4ub(0, 0, 255, 1);
     glRectf(110.0f, 10.0f, 120.0f, 20.0f);
     CHECK(pixelNear(10, 10, 0, 0, 0, 255) && pixelNear(11, 11, 0, 0, 0, 255));
     CHECK(pixelNear(30, 10, 0, 255, 0, -1) && pixelNear(31, 10, 0, 0, 0, 255) && pixelNear(50, 10, 0, 0, 0, 255));
     CHECK(pixelNear(70, 10, 0, 255, 0, -1) && pixelNear(71, 10, 0, 0, 0, 255));
-    CHECK(pixelNear(90, 10, 0, 0, 255, 0) && pixelNear(91, 10, 0, 0, 0, 255) && pixelNear(111, 10, 0, 0, 255, 0));
+    CHECK(pixelNear(90, 10, 0, 0, 255, 1) && pixelNear(91, 10, 0, 0, 0, 255) && pixelNear(111, 10, 0, 0, 255, 1));
+    GLubyte alpha[3][4];
+    glReadPixels(90, 10, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, alpha[0]);
+    glReadPixels(130, 10, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, alpha[1]);
+    glReadPixels(150, 10, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, alpha[2]);
+    CHECK((alpha[0][3] == 1) && (alpha[1][3] == 200) && (alpha[2][3] == 255));     // Exact in the pattern
+    CHECK(pixelNear(131, 10, 0, 0, 0, 255) && pixelNear(151, 10, 0, 0, 0, 255));
     CHECK(glGetError() == GL_NO_ERROR);
     glPopAttrib();
 }

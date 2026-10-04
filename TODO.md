@@ -197,8 +197,12 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   pattern for earlier draws. Both stipples in `GL_LINE_BIT`/`GL_POLYGON_BIT`/`GL_POLYGON_STIPPLE_BIT`/`GL_ENABLE_BIT`
   and display lists. Verified in Azahar (api checks in Vulkan at 2x and the software renderer, stipple example)
   * [~] Needs texture unit 2 unused (drawn without stipple otherwise, with a warning); a projective unit 0 texcoord
-    is divided per vertex while stippled; with the alpha test off, stippled fragments of alpha exactly 1/255 are dropped
-  * [ ] Not yet verified on real hardware (shader branch, unit remapping)
+    is divided per vertex while stippled; with the alpha test off (or an alpha test that passes 0 and 1), stippled
+    fragments of alpha exactly 0 are dropped; with `GL_NOTEQUAL` r (0 < r < 1) fragments of alpha r are drawn
+  * [x] Verified on real hardware (stipple example, api checks, 2026-10-04)
+  * [x] Fixed: on real hardware fragments outside the pattern were drawn with the alpha test off: the TexEnv interpolation
+    that gave them alpha 1/255 rounds down to 0 there (exact in Azahar) and also lowered every stippled alpha by 1/255.
+    Outside fragments now get alpha 0 or 1 from a saturating subtract/add of the inverted pattern alpha (exact)
 
 ## Clear
 
@@ -262,7 +266,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   (`GL_POLYGON` whole) in window coordinates, clip w, lit/flat/two-sided colors and unit 0 texcoords through the
   texture matrix (r too, also from arrays and evaluators). Selection hits with the window depth range. Nothing is
   drawn or cleared in these modes (like Mesa). Verified in Azahar (api checks in Vulkan and the software renderer,
-  select example with `gluPickMatrix`)
+  select example with `gluPickMatrix`) and on real hardware (api checks, select example, 2026-10-04)
   * [~] Feedback colors are the 8-bit vertex colors; with texgen on unit 0 the fed back r is 0; polygon offset is not
     applied to fed back depths
 * [x] Accumulation buffer: `glAccum` (`GL_ACCUM`, `GL_LOAD`, `GL_ADD`, `GL_MULT`, `GL_RETURN`), `glClearAccum`,
@@ -270,10 +274,10 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   mode (like Mesa). One buffer per screen in normal memory (allocated at first use), two signed 16-bit components per
   word processed with the ARMv6 SIMD/DSP instructions, only within the scissor box. `GL_ACCUM`/`GL_LOAD` read the color
   buffer like `glReadPixels`; `GL_RETURN` draws RGBA8 textures over the scissor box with only the scissor test and color
-  mask (queued, no wait). Verified in Azahar (api checks in Vulkan at 2x and the software renderer, accum example)
+  mask (queued, no wait). Verified in Azahar (api checks in Vulkan at 2x and the software renderer, accum example) and
+  on real hardware (api checks, accum example, 2026-10-04)
   * [~] Performance: CPU bound, ~4 ms per operation on half the top screen in Azahar (the accum example: motion blur
     plus 6 depth of field views at ~12 FPS); each `GL_ACCUM`/`GL_LOAD` also ends the frame so far and waits for the GPU
-  * [ ] Not yet verified on real hardware
 * [x] `glDrawBuffer`, `glReadBuffer`: double-buffered, no stereo or aux buffers (`GL_INVALID_OPERATION` for them).
   Front buffers are drawn/read like the back buffer (the frame is presented by `c3dglSwapBuffers()`), `GL_NONE` draws
   and clears no color. `GL_DRAW_BUFFER`, `GL_READ_BUFFER`, `GL_DOUBLEBUFFER`, `GL_STEREO`, `GL_AUX_BUFFERS`; in
@@ -312,7 +316,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   command list submission instead of one per batch, `glEvalMesh2` evaluates each grid point once
 * [~] Real hardware verification (all features up to color buffers verified on hardware; display lists, texgen, internal
   formats, 1D textures, color buffers, drawing pixels, pixel transfer and default textures through the api checks,
-  2026-10-04; feedback and selection, stipple, accumulation buffer not yet)
+  2026-10-04; feedback and selection, stipple and the accumulation buffer too, 2026-10-04)
   * [x] Fixed: GPU lockup on the first draw (since bf91bd4): the vertex shader left `outtc0.w` unwritten
   * [x] Fixed: GPU lockup when a readback followed `glCopyPixels(GL_COLOR)` or a `glClear` after draws in a frame: the
     command list split before the GX command was not flushed from the CPU cache (`C3D_FrameSplit(0)`), and

@@ -204,7 +204,7 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
 - Line stipple (`glLineStipple`, `GL_LINE_STIPPLE`; the counter runs on along strips and loops) and polygon stipple
   (`glPolygonStipple`, `glGetPolygonStipple`, `GL_POLYGON_STIPPLE`) with their queries, attribute groups and display
   lists. Polygon stipple needs texture unit 2 to be unused (drawn without stipple otherwise); with the alpha test off,
-  stippled fragments of alpha exactly 1/255 are dropped too
+  stippled fragments of alpha exactly 0 are dropped too
 - Accumulation buffer: `glAccum` (`GL_ACCUM`, `GL_LOAD`, `GL_ADD`, `GL_MULT`, `GL_RETURN`), `glClearAccum`,
   `glClear(GL_ACCUM_BUFFER_BIT)`, 16 bits per component, one per screen (allocated at its first use, 750 KB for the
   top screen). Operations work on the CPU within the scissor box; `GL_ACCUM`/`GL_LOAD` wait for the GPU like
@@ -279,7 +279,8 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
   shader computes from the vertex position in projection mode (PICA divides by w per pixel, so the pattern stays fixed
   to the window under perspective). GL texture units 0 and 1 move to PICA units 1 and 2 meanwhile (a projective
   texcoord of unit 0 is then divided per vertex). TexEnv stage 3 gives the fragments outside the pattern an alpha that
-  fails the alpha test, which is set up to combine with the GL alpha test.
+  fails the alpha test, which is set up to combine with the GL alpha test: 0 or 1 from a saturating subtract or add of
+  the inverted pattern alpha (exact; an interpolation rounds down on real hardware).
 - The accumulation buffer lives in normal memory, two 16-bit components per word, so that the ARMv6 SIMD and DSP
   instructions (`QADD16`, `SMLAWB`/`SMLAWT`, `SSAT`/`USAT`) handle a pair at a time. `GL_ACCUM` and `GL_LOAD` read
   the color buffer like `glReadPixels` (the frame so far is run, then copied out by a display transfer). `GL_RETURN`

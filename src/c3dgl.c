@@ -1281,9 +1281,11 @@ static void updateFogLut(const DrawState *s)
 }
 
 // Polygon stipple: TexEnv stage 3 gives the fragments outside the pattern (stipple texel alpha 0) an alpha that fails
-// the alpha test, which is set up here; returns that alpha. A test that passes every alpha becomes alpha != 1/255, so
-// fragments of exactly that alpha are dropped as well
-static u8 stippleAlphaTest(const DrawState *s, GPU_TESTFUNC *func, int *ref)
+// the alpha test, which is set up here; returns true for alpha 1 (alpha + (1 - texel alpha)), false for alpha 0
+// (alpha - (1 - texel alpha)). Both saturate exactly and keep the alpha in the pattern (an interpolation rounds on real
+// hardware: an alpha of 1/255 came out as 0). A test that passes 0 and 1 becomes alpha != 0, so fragments of alpha 0 are
+// dropped as well; alpha != r (0 < r < 1) becomes alpha != 0 too, so fragments of alpha r are no longer dropped then
+static bool stippleAlphaTest(const DrawState *s, GPU_TESTFUNC *func, int *ref)
 {
     GLenum f = s->alphaTest? s->alphaFunc : GL_ALWAYS;
     int r = s->alphaRef;
@@ -1291,17 +1293,20 @@ static u8 stippleAlphaTest(const DrawState *s, GPU_TESTFUNC *func, int *ref)
     *ref = r;
     switch (f)
     {
-        case GL_NEVER: case GL_GREATER: return 0;
-        case GL_LESS: return 255;
-        case GL_LEQUAL: if (r < 255) return 255; break;
-        case GL_GEQUAL: if (r > 0) return 0; break;
-        case GL_EQUAL: return r? 0 : 255;
-        case GL_NOTEQUAL: return (u8)r;
+        case GL_NEVER: case GL_GREATER: return false;
+        case GL_LESS: return true;
+        case GL_LEQUAL: if (r < 255) return true; break;
+        case GL_GEQUAL: if (r > 0) return false; break;
+        case GL_EQUAL: return r == 0;
+        case GL_NOTEQUAL:
+            if ((r == 0) || (r == 255)) return r == 255;
+            WARN_ONCE("Polygon stipple with glAlphaFunc(GL_NOTEQUAL): fragments of the reference alpha are drawn\n");
+            break;
         default: break;
     }
     *func = GPU_NOTEQUAL;
-    *ref = 1;
-    return 1;
+    *ref = 0;
+    return false;
 }
 
 // Set the GPU state of a batch. prev: the state applied for the previous batch (NULL: unknown), only what differs
@@ -1348,11 +1353,11 @@ static void applyState(const DrawState *s, const DrawState *prev)
         {
             GPU_TESTFUNC func;
             int ref;
-            u8 fail = stippleAlphaTest(s, &func, &ref);
+            bool high = stippleAlphaTest(s, &func, &ref);
             C3D_AlphaTest(true, func, ref);
-            C3D_TexEnvSrc(env, C3D_Alpha, GPU_PREVIOUS, GPU_CONSTANT, GPU_TEXTURE0);
-            C3D_TexEnvFunc(env, C3D_Alpha, GPU_INTERPOLATE);
-            C3D_TexEnvColor(env, (u32)fail << 24);
+            C3D_TexEnvSrc(env, C3D_Alpha, GPU_PREVIOUS, GPU_TEXTURE0, GPU_PRIMARY_COLOR);
+            C3D_TexEnvOpAlpha(env, GPU_TEVOP_A_SRC_ALPHA, GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA, GPU_TEVOP_A_SRC_ALPHA);
+            C3D_TexEnvFunc(env, C3D_Alpha, high? GPU_ADD : GPU_SUBTRACT);
         }
         else C3D_AlphaTest(s->alphaTest, testFunc(s->alphaFunc), s->alphaRef);
     }
