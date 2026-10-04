@@ -100,7 +100,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   in 8 bits per component. Images in any GL 1.1 format/type (`GL_RED`..`GL_BLUE`, `GL_BYTE` .. `GL_FLOAT`, swapped
   bytes) are converted on load (fast path when they are already in the stored layout); sub images convert to the
   texture's format; `glGetTexImage` returns any format/type (table 6.1 components, luminance = R + G + B).
-  `GL_COLOR_INDEX` images come with pixel maps (below)
+  `GL_COLOR_INDEX` images (also `GL_BITMAP`) through the pixel maps, with the pixel transfer (below)
 * [x] `glGetTexParameter*` (`iv`, `fv`, `xv`)
 * [x] `glCopyTexImage2D`, `glCopyTexSubImage2D`: internal formats `GL_ALPHA`, `GL_LUMINANCE(_ALPHA)`, `GL_RGB`,
   `GL_RGBA` (sized ones come with the internal formats above), borders; sub-copies keep the texture's format (also the
@@ -215,10 +215,19 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   Verified in Azahar (api checks in Vulkan at 1x and the software renderer, pixels example)
   * [ ] Real hardware not tested yet
   * [~] Texturing does not apply to `glDrawPixels`/`glBitmap` fragments; depth images do not write the raster color
-  * [~] `GL_COLOR_INDEX` images come with the pixel maps (below); feedback/selection tokens with feedback mode
+  * [x] `GL_COLOR_INDEX` images (also `GL_BITMAP`) through the `I_TO_*` pixel maps
+  * [~] Feedback/selection tokens come with feedback mode
   * [~] Azahar's Vulkan renderer at `resolution_factor=2` reads back depth with ~1/256 error after a CPU depth write
     (exact at 1x and in the software renderer), so 2 api checks fail there
-* [ ] `glPixelTransfer*`, `glPixelMap*`, `glGetPixelMap*` (GL)
+* [x] Pixel transfer (GL): `glPixelTransfer{i,f}` (`GL_RED/GREEN/BLUE/ALPHA/DEPTH_SCALE/BIAS`, `GL_INDEX_SHIFT/OFFSET`,
+  `GL_MAP_COLOR`, `GL_MAP_STENCIL`), `glPixelMap{fv,uiv,usv}`, `glGetPixelMap{fv,uiv,usv}` (all 10 tables, 256 entries,
+  2^n for the index tables, `GL_PIXEL_MAP_*_SIZE`, `GL_MAX_PIXEL_MAP_TABLE`). Applied (GL 1.1 section 3.6.3) by
+  `glDrawPixels` (color, color index, depth, stencil), `glReadPixels`, `glCopyPixels` (once), `glTexImage*`,
+  `glTexSubImage*` and `glCopyTex*` (once), not by `glGetTexImage`; index output masked per table 4.6. Transfer state in
+  `GL_PIXEL_MODE_BIT` (the maps in no group), both recorded in display lists. On the CPU during image conversion
+  (unsigned bytes through 256-entry tables); `glCopyPixels(GL_COLOR)` with a color transfer is read back on the CPU.
+  Verified in Azahar (api checks in Vulkan at 1x/2x and the software renderer, pixels example)
+  * [ ] Real hardware not tested yet
 
 ## Desktop GL 1.1 Only
 
@@ -287,9 +296,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 
 ```text
 [ ] Lighting in the vertex shader     [ ] Feedback / selection (GL)
-[ ] Smooth points/lines (GL)
-                                      [~] Pixel ops: pixel maps / transfer (GL)
-                                      [ ] Accumulation buffer (GL)
+[ ] Smooth points/lines (GL)           [ ] Accumulation buffer (GL)
 [ ] Complete state queries            [ ] Stipple (GL)
 ```
 
@@ -312,4 +319,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Logic ops, sample coverage state  [x] Display lists (GL)
 [x] Texture coordinate generation (GL) [x] 1D textures, all internal formats (GL)
 [x] glDrawBuffer / glReadBuffer (GL)   [x] Default texture objects (GL)
+[x] Pixel ops: draw/copy, transfer, maps (GL)
 ```

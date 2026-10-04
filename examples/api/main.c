@@ -1804,6 +1804,261 @@ static void testPixels(void)
     CHECK(f[0] == 1.0f && f[3] == 1.0f && glGetError() == GL_NO_ERROR);
 }
 
+// glPixelTransfer and glPixelMap: state, queries, errors, attribute group and display lists, and their effect on
+// glDrawPixels (color, color index, depth, stencil), glReadPixels, glCopyPixels and texture images (not glGetTexImage).
+// Images are drawn zoomed to 8 x 4 per pixel and checked in the middle: Azahar's upscaled readbacks mix neighbors
+static void testPixelTransfer(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    GLfloat f[4], mf[4];
+    GLint v[4];
+    GLuint mui[4];
+    GLushort mus[4];
+
+    // Defaults
+    glGetIntegerv(GL_MAP_COLOR, v);
+    glGetIntegerv(GL_MAP_STENCIL, v + 1);
+    glGetIntegerv(GL_INDEX_SHIFT, v + 2);
+    glGetIntegerv(GL_INDEX_OFFSET, v + 3);
+    CHECK(v[0] == 0 && v[1] == 0 && v[2] == 0 && v[3] == 0);
+    glGetFloatv(GL_RED_SCALE, f);
+    glGetFloatv(GL_ALPHA_BIAS, f + 1);
+    glGetFloatv(GL_DEPTH_SCALE, f + 2);
+    CHECK(f[0] == 1.0f && f[1] == 0.0f && f[2] == 1.0f);
+    glGetIntegerv(GL_MAX_PIXEL_MAP_TABLE, v);
+    glGetIntegerv(GL_PIXEL_MAP_I_TO_I_SIZE, v + 1);
+    glGetIntegerv(GL_PIXEL_MAP_A_TO_A_SIZE, v + 2);
+    CHECK(v[0] == 256 && v[1] == 1 && v[2] == 1);
+    mf[0] = -1.0f;
+    glGetPixelMapfv(GL_PIXEL_MAP_R_TO_R, mf);
+    CHECK(mf[0] == 0.0f);
+
+    // Setting and querying, errors
+    glPixelTransferf(GL_GREEN_BIAS, 0.25f);
+    glPixelTransferi(GL_INDEX_SHIFT, -2);
+    glPixelTransferf(GL_INDEX_OFFSET, 3.0f);
+    glPixelTransferi(GL_MAP_STENCIL, GL_TRUE);
+    glGetFloatv(GL_GREEN_BIAS, f);
+    glGetIntegerv(GL_INDEX_SHIFT, v);
+    glGetIntegerv(GL_INDEX_OFFSET, v + 1);
+    glGetIntegerv(GL_MAP_STENCIL, v + 2);
+    CHECK(f[0] == 0.25f && v[0] == -2 && v[1] == 3 && v[2] == 1);
+    glPixelTransferf(GL_ZOOM_X, 1.0f);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glBegin(GL_POINTS);
+    glPixelTransferf(GL_RED_SCALE, 2.0f);
+    glEnd();
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+
+    // Pixel maps: unsigned integers normalized for the color tables, as they are for the index tables; colors clamped
+    const GLuint ui[2] = { 0xFFFFFFFF, 0 };
+    const GLushort us[4] = { 7, 1, 2, 65535 };
+    const GLfloat fl[3] = { 2.0f, 0.5f, -1.0f };
+    glPixelMapuiv(GL_PIXEL_MAP_I_TO_R, 2, ui);
+    glPixelMapusv(GL_PIXEL_MAP_S_TO_S, 4, us);
+    glPixelMapfv(GL_PIXEL_MAP_G_TO_G, 3, fl);         // Color-to-color tables can have any size
+    glGetIntegerv(GL_PIXEL_MAP_I_TO_R_SIZE, v);
+    glGetIntegerv(GL_PIXEL_MAP_S_TO_S_SIZE, v + 1);
+    glGetIntegerv(GL_PIXEL_MAP_G_TO_G_SIZE, v + 2);
+    CHECK(v[0] == 2 && v[1] == 4 && v[2] == 3 && glGetError() == GL_NO_ERROR);
+    glGetPixelMapfv(GL_PIXEL_MAP_I_TO_R, mf);
+    CHECK(mf[0] == 1.0f && mf[1] == 0.0f);
+    glGetPixelMapfv(GL_PIXEL_MAP_S_TO_S, mf);
+    CHECK(mf[0] == 7.0f && mf[3] == 65535.0f);
+    glGetPixelMapfv(GL_PIXEL_MAP_G_TO_G, mf);
+    CHECK(mf[0] == 1.0f && mf[1] == 0.5f && mf[2] == 0.0f);
+    glGetPixelMapuiv(GL_PIXEL_MAP_G_TO_G, mui);
+    glGetPixelMapusv(GL_PIXEL_MAP_G_TO_G, mus);
+    CHECK(mui[0] == 0xFFFFFFFF && mui[2] == 0 && mus[1] == 32768);
+    glGetPixelMapuiv(GL_PIXEL_MAP_S_TO_S, mui);
+    glGetPixelMapusv(GL_PIXEL_MAP_S_TO_S, mus);
+    CHECK(mui[0] == 7 && mui[2] == 2 && mus[3] == 65535);
+    glPixelMapfv(GL_PIXEL_MAP_I_TO_G, 3, fl);         // Index tables: 2^n entries
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glPixelMapfv(GL_PIXEL_MAP_R_TO_R, 0, fl);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glPixelMapfv(GL_PIXEL_MAP_R_TO_R, 257, fl);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glPixelMapfv(GL_PIXEL_MAP_A_TO_A + 1, 1, fl);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glGetPixelMapfv(GL_PIXEL_MAP_I_TO_R_SIZE, mf);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+
+    // Attribute groups: the transfer state is in GL_PIXEL_MODE_BIT, the maps in none
+    glPushAttrib(GL_PIXEL_MODE_BIT);
+    glPixelTransferf(GL_GREEN_BIAS, 0.5f);
+    glPixelMapfv(GL_PIXEL_MAP_I_TO_R, 1, fl + 1);
+    glPopAttrib();
+    glGetFloatv(GL_GREEN_BIAS, f);
+    glGetIntegerv(GL_PIXEL_MAP_I_TO_R_SIZE, v);
+    CHECK(f[0] == 0.25f && v[0] == 1);
+    glPopAttrib();                              // The transfer back to the defaults
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+
+    windowProjection();
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClearDepth(0.5);
+    glClearStencil(0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    glPixelZoom(8.0f, 4.0f);
+
+    // Color images: scale and bias on the unclamped components (float 2.0 scaled by 0.25), then the color tables
+    const GLfloat red2[4] = { 2.0f, 0.0f, 0.0f, 1.0f };
+    const GLubyte rgba[8] = { 255, 0, 0, 255,  0, 255, 0, 255 };
+    const GLfloat invert[2] = { 1.0f, 0.0f };
+    glPixelTransferf(GL_RED_SCALE, 0.25f);
+    glPixelTransferf(GL_GREEN_BIAS, 0.25f);
+    glRasterPos2i(10, 10);
+    glDrawPixels(1, 1, GL_RGBA, GL_FLOAT, red2);
+    glPixelTransferf(GL_RED_SCALE, 1.0f);
+    glPixelTransferf(GL_GREEN_BIAS, 0.0f);
+    glPixelMapfv(GL_PIXEL_MAP_R_TO_R, 2, invert);
+    glPixelMapfv(GL_PIXEL_MAP_G_TO_G, 2, invert);
+    glPixelTransferi(GL_MAP_COLOR, GL_TRUE);    // B_TO_B and A_TO_A are still { 0 }
+    glRasterPos2i(20, 10);
+    glDrawPixels(2, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glPixelTransferi(GL_MAP_COLOR, GL_FALSE);
+    CHECK(pixelNear(14, 12, 128, 64, 0, 255) && pixelNear(24, 12, 0, 255, 0, 0) && pixelNear(32, 12, 255, 0, 0, 0));
+
+    // glReadPixels: transferred before the conversion (luminance = R + G + B afterwards)
+    GLfloat rf[4] = { -1.0f, -1.0f, -1.0f, -1.0f };
+    GLubyte lum = 0;
+    glPixelTransferf(GL_RED_SCALE, 0.5f);
+    glPixelTransferf(GL_BLUE_BIAS, 1.0f);
+    glReadPixels(32, 12, 1, 1, GL_RGBA, GL_FLOAT, rf);
+    glReadPixels(32, 12, 1, 1, GL_LUMINANCE, GL_UNSIGNED_BYTE, &lum);
+    glPixelTransferf(GL_RED_SCALE, 1.0f);
+    glPixelTransferf(GL_BLUE_BIAS, 0.0f);
+    CHECK(near(rf[0], 0.5) && rf[1] == 0.0f && rf[2] == 1.0f && rf[3] == 0.0f && lum == 255);
+
+    // Color index images: shifted, offset and looked up in the I_TO_* tables (wrapping around), not scaled or biased
+    const GLfloat iR[4] = { 1, 0, 0, 1 }, iG[4] = { 0, 1, 0, 1 }, iB[4] = { 0, 0, 1, 1 }, iA[4] = { 1, 1, 1, 1 };
+    glPixelMapfv(GL_PIXEL_MAP_I_TO_R, 4, iR);   // 0 red, 1 green, 2 blue, 3 white
+    glPixelMapfv(GL_PIXEL_MAP_I_TO_G, 4, iG);
+    glPixelMapfv(GL_PIXEL_MAP_I_TO_B, 4, iB);
+    glPixelMapfv(GL_PIXEL_MAP_I_TO_A, 4, iA);
+    const GLubyte indices[4] = { 0, 2, 4, 7 };
+    glPixelTransferi(GL_INDEX_SHIFT, -1);       // 0, 1, 2, 3
+    glPixelTransferi(GL_INDEX_OFFSET, 1);       // 1, 2, 3, 0
+    glPixelTransferf(GL_RED_SCALE, 0.0f);
+    glRasterPos2i(10, 20);
+    glDrawPixels(4, 1, GL_COLOR_INDEX, GL_UNSIGNED_BYTE, indices);
+    glPixelTransferi(GL_INDEX_SHIFT, 0);
+    glPixelTransferi(GL_INDEX_OFFSET, 0);
+    const GLubyte indexBits[1] = { 0x40 };      // 0, 1
+    glRasterPos2i(50, 20);
+    glDrawPixels(2, 1, GL_COLOR_INDEX, GL_BITMAP, indexBits);
+    glPixelTransferf(GL_RED_SCALE, 1.0f);
+    CHECK(pixelNear(14, 22, 0, 255, 0, 255) && pixelNear(22, 22, 0, 0, 255, 255) && pixelNear(30, 22, 255, 255, 255, 255));
+    CHECK(pixelNear(38, 22, 255, 0, 0, 255) && pixelNear(54, 22, 255, 0, 0, 255) && pixelNear(62, 22, 0, 255, 0, 255));
+
+    // Depth images: scale and bias, also when read
+    const GLfloat depth[1] = { 0.5f };
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_ALWAYS);
+    glPixelTransferf(GL_DEPTH_SCALE, 0.5f);
+    glPixelTransferf(GL_DEPTH_BIAS, 0.5f);
+    glRasterPos2i(10, 30);
+    glDrawPixels(1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, depth);
+    glPixelTransferf(GL_DEPTH_SCALE, 1.0f);
+    glPixelTransferf(GL_DEPTH_BIAS, 0.0f);
+    CHECK(depthNear(14, 32, 0.75f));
+    glPixelTransferf(GL_DEPTH_BIAS, -0.25f);
+    CHECK(depthNear(100, 100, 0.25f));          // Cleared to 0.5
+    glPixelTransferf(GL_DEPTH_BIAS, 0.0f);
+
+    // Stencil images: shift and offset, the S_TO_S table with GL_MAP_STENCIL; when read too
+    const GLubyte stencil[1] = { 3 };
+    const GLfloat stencilMap[2] = { 5.0f, 9.0f };
+    glPixelTransferi(GL_INDEX_SHIFT, 1);
+    glPixelTransferi(GL_INDEX_OFFSET, 1);
+    glRasterPos2i(10, 40);
+    glDrawPixels(1, 1, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, stencil);    // 7
+    glPixelTransferi(GL_INDEX_SHIFT, 0);
+    glPixelTransferi(GL_INDEX_OFFSET, 0);
+    glPixelMapfv(GL_PIXEL_MAP_S_TO_S, 2, stencilMap);
+    glPixelTransferi(GL_MAP_STENCIL, GL_TRUE);
+    glRasterPos2i(20, 40);
+    glDrawPixels(1, 1, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, stencil);    // 3 & 1 -> 9
+    glPixelTransferi(GL_MAP_STENCIL, GL_FALSE);
+    CHECK(stencilAt(14, 42) == 7 && stencilAt(24, 42) == 9);
+    glPixelTransferi(GL_INDEX_OFFSET, 100);
+    CHECK(stencilAt(24, 42) == 109);
+    glPixelTransferi(GL_INDEX_OFFSET, 0);
+
+    // glCopyPixels: transferred once (green 64 biased by 0.25 is 128, not 192); depth and stencil too
+    glPixelZoom(1.0f, 1.0f);
+    glPixelTransferf(GL_GREEN_BIAS, 0.25f);
+    glRasterPos2i(100, 10);
+    glCopyPixels(10, 10, 8, 4, GL_COLOR);
+    glPixelTransferf(GL_GREEN_BIAS, 0.0f);
+    CHECK(pixelNear(104, 12, 128, 128, 0, 255));
+    glPixelTransferf(GL_DEPTH_BIAS, 0.125f);
+    glPixelTransferi(GL_INDEX_OFFSET, 1);
+    glRasterPos2i(110, 30);
+    glCopyPixels(10, 30, 8, 4, GL_DEPTH);
+    glRasterPos2i(110, 40);
+    glCopyPixels(10, 40, 8, 4, GL_STENCIL);
+    glPixelTransferf(GL_DEPTH_BIAS, 0.0f);
+    glPixelTransferi(GL_INDEX_OFFSET, 0);
+    glDisable(GL_DEPTH_TEST);
+    CHECK(depthNear(114, 32, 0.875f) && stencilAt(114, 42) == 8);
+
+    // Textures: loaded and copied with the transfer (copies once), glGetTexImage without it
+    GLuint tex;
+    GLubyte texels[8*8*4], texIndices[64];
+    for (int i = 0; i < 64; i++) texIndices[i] = (GLubyte)(i & 3);
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 8, 8, 0, GL_COLOR_INDEX, GL_UNSIGNED_BYTE, texIndices);
+    glPixelTransferf(GL_RED_SCALE, 0.0f);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+    CHECK(texels[0] == 255 && texels[1] == 0 && texels[5] == 255 && texels[10] == 255 && texels[12] == 255 && texels[15] == 255);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);    // Red scaled to 0
+    glPixelTransferf(GL_RED_SCALE, 1.0f);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+    CHECK(texels[0] == 0 && texels[3] == 255 && texels[5] == 255);
+    glPixelTransferf(GL_GREEN_BIAS, 0.25f);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 12, 12, 1, 1);     // (128, 64, 0)
+    glPixelTransferf(GL_GREEN_BIAS, 0.0f);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+    CHECK(abs(texels[0] - 128) <= 2 && abs(texels[1] - 128) <= 2);
+    const GLubyte texBits[8] = { 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40 };     // Columns 0, 1: index 0, 1
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 8, 8, 0, GL_COLOR_INDEX, GL_BITMAP, texBits);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+    CHECK(texels[0] == 255 && texels[1] == 0 && texels[4] == 0 && texels[5] == 255 && texels[8] == 255);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_COLOR_INDEX, GL_UNSIGNED_BYTE, texels);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 8, 8, 0, GL_RGB, GL_BITMAP, texBits);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+
+    // Display lists: glPixelTransfer and glPixelMap are recorded (the values copied), bitmap texture images too
+    GLfloat listMap[2] = { 0.0f, 1.0f };
+    GLubyte listBits[8] = { 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80 };      // Column 0: index 1
+    GLuint list = glGenLists(1);
+    glNewList(list, GL_COMPILE);
+    glPixelTransferf(GL_BLUE_SCALE, 0.5f);
+    glPixelMapfv(GL_PIXEL_MAP_B_TO_B, 2, listMap);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 8, 8, 0, GL_COLOR_INDEX, GL_BITMAP, listBits);
+    glEndList();
+    listMap[1] = 0.5f;
+    memset(listBits, 0, sizeof(listBits));
+    glGetFloatv(GL_BLUE_SCALE, f);
+    CHECK(f[0] == 1.0f);
+    glCallList(list);
+    glDeleteLists(list, 1);
+    glGetFloatv(GL_BLUE_SCALE, f);
+    glGetPixelMapfv(GL_PIXEL_MAP_B_TO_B, mf);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+    CHECK(f[0] == 0.5f && mf[1] == 1.0f && texels[0] == 0 && texels[1] == 255 && texels[4] == 255 && texels[5] == 0);
+    glDeleteTextures(1, &tex);
+
+    glPopAttrib();
+    glGetFloatv(GL_BLUE_SCALE, f);
+    CHECK(f[0] == 1.0f && glGetError() == GL_NO_ERROR);
+}
+
 static void testDisplayLists(void)
 {
     glPushAttrib(GL_ALL_ATTRIB_BITS);
@@ -2405,6 +2660,7 @@ int main(void)
     test1D();
     testColorBuffers();
     testPixels();
+    testPixelTransfer();
     testDefaultTextures();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over

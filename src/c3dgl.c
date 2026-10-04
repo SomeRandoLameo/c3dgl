@@ -65,6 +65,7 @@
 #define C3DGL_MAX_LIGHTS        8
 #define C3DGL_MAX_CLIP_PLANES   6           // User clip planes, clipped on the CPU (GL minimum 6, ES 1)
 #define C3DGL_MAX_TEXTURE_SIZE  1024
+#define C3DGL_MAX_PIXEL_MAP_TABLE 256       // Entries of a glPixelMap table (GL minimum 32)
 #define C3DGL_MAX_POINT_SIZE    256.0f      // Points are quads, so any size works; a bit more than the screen height
 #define MAX_TEXTURE_LEVEL       10          // log2(C3DGL_MAX_TEXTURE_SIZE)
 
@@ -268,6 +269,23 @@ typedef struct {
     float distance;             // Eye distance
 } RasterState;
 
+// glPixelTransfer (GL 1.1 section 3.6.3), GL_PIXEL_MODE_BIT
+typedef struct {
+    bool mapColor, mapStencil;
+    GLint indexShift, indexOffset;
+    float scale[5], bias[5];    // R, G, B, A, depth
+} PixelTransfer;
+
+static const PixelTransfer noTransfer = { .scale = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } };
+
+// glPixelMap tables in GL_PIXEL_MAP_I_TO_I .. GL_PIXEL_MAP_A_TO_A order (not in an attribute group)
+enum { PIXEL_MAP_I_TO_I, PIXEL_MAP_S_TO_S, PIXEL_MAP_I_TO_R, PIXEL_MAP_R_TO_R = PIXEL_MAP_I_TO_R + 4, PIXEL_MAP_COUNT = PIXEL_MAP_R_TO_R + 4 };
+
+typedef struct {
+    int size;
+    float values[C3DGL_MAX_PIXEL_MAP_TABLE];    // Color maps: clamped to [0, 1]; index maps: as given
+} PixelMap;
+
 typedef struct {
     bool enabled;
     const void *pointer;        // Offset into `buffer` if that is not 0
@@ -391,6 +409,8 @@ typedef struct {
     X(DRAW_PIXELS,      listPixels(w, false)) \
     X(COPY_PIXELS,      glCopyPixels(w[0].i, w[1].i, w[2].i, w[3].i, w[4].u)) \
     X(PIXEL_ZOOM,       glPixelZoom(w[0].f, w[1].f)) \
+    X(PIXEL_TRANSFER,   glPixelTransferf(w[0].u, w[1].f)) \
+    X(PIXEL_MAP,        setPixelMap(w[0].u, w[1].i, &w[2].f)) \
     X(MAP,              defineMap(w[0].u, listDouble(&w[2]), listDouble(&w[4]), w[6].i, w[7].i, listDouble(&w[8]), \
                                   listDouble(&w[10]), w[12].i, w[13].i, &w[14].f, false, w[1].i != 0)) \
     X(MAP_GRID1,        glMapGrid1f(w[0].i, w[1].f, w[2].f)) \
@@ -452,6 +472,8 @@ static struct {
     GLenum drawBuffer, readBuffer;      // glDrawBuffer, glReadBuffer: GL_NONE, GL_BACK, ...; all but GL_NONE are the frame
     RasterState raster;                 // glRasterPos
     float zoomX, zoomY;                 // glPixelZoom
+    PixelTransfer transfer;             // glPixelTransfer
+    PixelMap pixelMaps[PIXEL_MAP_COUNT];    // glPixelMap
     struct PixelChunk {                 // Linear memory for the textures of pixel rectangles drawn this frame
         u8 *data;
         size_t size, used, flushed;     // Bytes [flushed, used) are not flushed from the CPU cache yet
@@ -580,6 +602,7 @@ static void listSaveImage(ListCommand command, const GLint args[8], GLsizei widt
 static void listArrayElement(int index);
 static void listPixels(const ListWord *w, bool bitmap);
 static void setRasterPos(float x, float y, float z, float w);
+static void setPixelMap(GLenum map, GLsizei mapsize, const GLfloat *values);
 static void initTexture(Texture *t);
 
 // While a display list is compiled: record the command instead of executing it, and return from the gl* function
@@ -2500,6 +2523,8 @@ bool c3dglInit(void)
     gl.drawBuffer = gl.readBuffer = GL_BACK;
     gl.raster = (RasterState){ .pos = { 0, 0, 0, 1 }, .valid = true, .color = { 255, 255, 255, 255 }, .tex = { 0, 0, 0, 1 } };
     gl.zoomX = gl.zoomY = 1.0f;
+    gl.transfer = noTransfer;
+    for (int i = 0; i < PIXEL_MAP_COUNT; i++) gl.pixelMaps[i].size = 1;    // One entry, 0
     memset(gl.current.color, 255, 4);
     gl.current.tex[2] = 1.0f;
     gl.current.pointSize = -1.0f;   // No point size array: glPointSize
@@ -2798,6 +2823,117 @@ void glPixelStorei(GLenum pname, GLint param)
 
 void glPixelStoref(GLenum pname, GLfloat param) { glPixelStorei(pname, (GLint)lroundf(param)); }
 
+// Component (R, G, B, A, depth) of a glPixelTransfer scale/bias, -1 for the other pnames
+static int transferComponent(GLenum pname)
+{
+    switch (pname)
+    {
+        case GL_RED_SCALE: case GL_RED_BIAS: return 0;
+        case GL_GREEN_SCALE: case GL_GREEN_BIAS: return 1;
+        case GL_BLUE_SCALE: case GL_BLUE_BIAS: return 2;
+        case GL_ALPHA_SCALE: case GL_ALPHA_BIAS: return 3;
+        case GL_DEPTH_SCALE: case GL_DEPTH_BIAS: return 4;
+        default: return -1;
+    }
+}
+
+static bool transferIsBias(GLenum pname)
+{
+    return (pname == GL_RED_BIAS) || (pname == GL_GREEN_BIAS) || (pname == GL_BLUE_BIAS) || (pname == GL_ALPHA_BIAS) ||
+           (pname == GL_DEPTH_BIAS);
+}
+
+void glPixelTransferf(GLenum pname, GLfloat param)
+{
+    LIST_SAVE(PIXEL_TRANSFER, "uf", pname, param);
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    PixelTransfer *t = &gl.transfer;
+    int i = transferComponent(pname);
+    if (i >= 0)
+    {
+        (transferIsBias(pname)? t->bias : t->scale)[i] = param;
+        return;
+    }
+    switch (pname)
+    {
+        case GL_MAP_COLOR: t->mapColor = (param != 0.0f); break;
+        case GL_MAP_STENCIL: t->mapStencil = (param != 0.0f); break;
+        case GL_INDEX_SHIFT: t->indexShift = (GLint)lroundf(param); break;
+        case GL_INDEX_OFFSET: t->indexOffset = (GLint)lroundf(param); break;
+        default: setError(GL_INVALID_ENUM); break;
+    }
+}
+
+void glPixelTransferi(GLenum pname, GLint param) { glPixelTransferf(pname, (GLfloat)param); }
+
+// Table of a GL_PIXEL_MAP_* enum, -1 if map is not one
+static int pixelMapIndex(GLenum map)
+{
+    return ((map >= GL_PIXEL_MAP_I_TO_I) && (map <= GL_PIXEL_MAP_A_TO_A))? (int)(map - GL_PIXEL_MAP_I_TO_I) : -1;
+}
+
+// glPixelMap with the values as floats (see pixelMap()). Tables that are looked up by index (I_TO_*, S_TO_S) need 2^n
+// entries; color components are clamped to [0, 1]
+static void setPixelMap(GLenum map, GLsizei mapsize, const GLfloat *values)
+{
+    if (gl.inBegin) { setError(GL_INVALID_OPERATION); return; }
+    int m = pixelMapIndex(map);
+    if (m < 0) { setError(GL_INVALID_ENUM); return; }
+    bool pow2 = (m < PIXEL_MAP_R_TO_R);
+    if ((mapsize < 1) || (mapsize > C3DGL_MAX_PIXEL_MAP_TABLE) || (pow2 && (mapsize & (mapsize - 1))))
+    {
+        setError(GL_INVALID_VALUE);
+        return;
+    }
+    PixelMap *p = &gl.pixelMaps[m];
+    p->size = mapsize;
+    for (int i = 0; i < mapsize; i++)
+    {
+        float v = values[i];
+        p->values[i] = (m < PIXEL_MAP_I_TO_R)? v : !(v > 0.0f)? 0.0f : (v > 1.0f)? 1.0f : v;
+    }
+}
+
+// glPixelMap{fv,uiv,usv}: unsigned integers of the color tables are normalized (GL 1.1 table 2.9), index tables take
+// them as they are. Recorded in display lists with the converted values (an invalid size without them)
+static void pixelMap(GLenum map, GLsizei mapsize, const void *values, GLenum type)
+{
+    int m = pixelMapIndex(map), count = ((mapsize > 0) && (mapsize <= C3DGL_MAX_PIXEL_MAP_TABLE))? mapsize : 0;
+    float v[C3DGL_MAX_PIXEL_MAP_TABLE];
+    for (int i = 0; i < count; i++)
+    {
+        if (type == GL_FLOAT) v[i] = ((const GLfloat *)values)[i];
+        else if (type == GL_UNSIGNED_INT) v[i] = (float)((m >= PIXEL_MAP_I_TO_R)? ((const GLuint *)values)[i]/4294967295.0 : ((const GLuint *)values)[i]);
+        else v[i] = (m >= PIXEL_MAP_I_TO_R)? ((const GLushort *)values)[i]/65535.0f : ((const GLushort *)values)[i];
+    }
+    if (gl.listCompiling) listSave(LIST_PIXEL_MAP, "uiF", map, mapsize, count, v);
+    else setPixelMap(map, mapsize, v);
+}
+
+void glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat *values) { pixelMap(map, mapsize, values, GL_FLOAT); }
+void glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint *values) { pixelMap(map, mapsize, values, GL_UNSIGNED_INT); }
+void glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort *values) { pixelMap(map, mapsize, values, GL_UNSIGNED_SHORT); }
+
+// glGetPixelMap{fv,uiv,usv}: color components scaled to the integer range, indices rounded
+static void getPixelMap(GLenum map, void *values, GLenum type)
+{
+    int m = pixelMapIndex(map);
+    if (m < 0) { setError(GL_INVALID_ENUM); return; }
+    const PixelMap *p = &gl.pixelMaps[m];
+    bool color = (m >= PIXEL_MAP_I_TO_R);
+    for (int i = 0; i < p->size; i++)
+    {
+        double v = p->values[i];
+        if (type == GL_FLOAT) ((GLfloat *)values)[i] = (GLfloat)v;
+        else if (type == GL_UNSIGNED_INT) ((GLuint *)values)[i] = (GLuint)(s64)llround(color? v*4294967295.0 : v);
+        else ((GLushort *)values)[i] = (GLushort)(s64)llround(color? v*65535.0 : v);
+    }
+}
+
+void glGetPixelMapfv(GLenum map, GLfloat *values) { getPixelMap(map, values, GL_FLOAT); }
+void glGetPixelMapuiv(GLenum map, GLuint *values) { getPixelMap(map, values, GL_UNSIGNED_INT); }
+void glGetPixelMapusv(GLenum map, GLushort *values) { getPixelMap(map, values, GL_UNSIGNED_SHORT); }
+
 // State for glGet*: fills v and returns the number of values (0: unknown pname).
 // *normalized: the values are colors/depths in [0, 1], which integer queries scale to [0, INT_MAX]
 static int getState(GLenum pname, double v[16], bool *normalized)
@@ -2847,6 +2983,22 @@ static int getState(GLenum pname, double v[16], bool *normalized)
         case GL_CURRENT_RASTER_INDEX: v[0] = 1; return 1;       // Color index mode only
         case GL_ZOOM_X: v[0] = gl.zoomX; return 1;
         case GL_ZOOM_Y: v[0] = gl.zoomY; return 1;
+        case GL_MAP_COLOR: v[0] = gl.transfer.mapColor; return 1;
+        case GL_MAP_STENCIL: v[0] = gl.transfer.mapStencil; return 1;
+        case GL_INDEX_SHIFT: v[0] = gl.transfer.indexShift; return 1;
+        case GL_INDEX_OFFSET: v[0] = gl.transfer.indexOffset; return 1;
+        case GL_RED_SCALE: case GL_GREEN_SCALE: case GL_BLUE_SCALE: case GL_ALPHA_SCALE: case GL_DEPTH_SCALE:
+        case GL_RED_BIAS: case GL_GREEN_BIAS: case GL_BLUE_BIAS: case GL_ALPHA_BIAS: case GL_DEPTH_BIAS:
+        {
+            int i = transferComponent(pname);
+            v[0] = (transferIsBias(pname)? gl.transfer.bias : gl.transfer.scale)[i];
+            return 1;
+        }
+        case GL_MAX_PIXEL_MAP_TABLE: v[0] = C3DGL_MAX_PIXEL_MAP_TABLE; return 1;
+        case GL_PIXEL_MAP_I_TO_I_SIZE: case GL_PIXEL_MAP_S_TO_S_SIZE: case GL_PIXEL_MAP_I_TO_R_SIZE:
+        case GL_PIXEL_MAP_I_TO_G_SIZE: case GL_PIXEL_MAP_I_TO_B_SIZE: case GL_PIXEL_MAP_I_TO_A_SIZE:
+        case GL_PIXEL_MAP_R_TO_R_SIZE: case GL_PIXEL_MAP_G_TO_G_SIZE: case GL_PIXEL_MAP_B_TO_B_SIZE:
+        case GL_PIXEL_MAP_A_TO_A_SIZE: v[0] = gl.pixelMaps[pname - GL_PIXEL_MAP_I_TO_I_SIZE].size; return 1;
         case GL_ACTIVE_TEXTURE: v[0] = GL_TEXTURE0 + gl.activeTexture; return 1;
         case GL_CLIENT_ACTIVE_TEXTURE: v[0] = GL_TEXTURE0 + gl.clientActiveTexture; return 1;
         case GL_MAX_TEXTURE_UNITS: v[0] = C3DGL_TEXTURE_UNITS; return 1;
@@ -4669,13 +4821,17 @@ static u16 pack16(GPU_TEXCOLOR format, const int c[4])
 }
 
 // Color image format/type (GL 1.1 tables 3.5 and 3.8, plus the packed 16-bit types): components, bytes per element and
-// per group; the error of an invalid pair otherwise
+// per group (0 for GL_COLOR_INDEX bitmaps); the error of an invalid pair otherwise
 static GLenum colorImageLayout(GLenum format, GLenum type, int *n, int *elemSize, int *groupSize)
 {
     int comp[4];
-    *n = colorComponents(format, comp);
-    if (format == GL_COLOR_INDEX) { WARN_ONCE("Color index images are not supported yet\n"); return GL_INVALID_ENUM; }
+    *n = (format == GL_COLOR_INDEX)? 1 : colorComponents(format, comp);
     if (*n == 0) return GL_INVALID_ENUM;
+    if (type == GL_BITMAP)
+    {
+        *elemSize = *groupSize = 0;
+        return (format == GL_COLOR_INDEX)? GL_NO_ERROR : GL_INVALID_ENUM;
+    }
 
     GLenum packed = packedFormat(type);
     if (packed)
@@ -4699,8 +4855,8 @@ static size_t imageRowBytes(const PixelStore *ps, int width, int elemSize, int g
     return bytes;
 }
 
-// One element of a color image as a value in [0, 1] (GL 1.1 table 2.9, clamped)
-static float loadElement(const u8 *src, GLenum type, bool swap)
+// One element of a color or depth image as a float (GL 1.1 table 2.9: integers normalized), not clamped
+static float loadElementRaw(const u8 *src, GLenum type, bool swap)
 {
     union { u8 b[4]; u8 ub; s8 sb; u16 us; s16 ss; u32 ui; s32 si; float f; } e;
     int size = typeSize(type);
@@ -4716,7 +4872,122 @@ static float loadElement(const u8 *src, GLenum type, bool swap)
         case GL_INT: v = (float)((2.0*e.si + 1.0)/4294967295.0); break;
         default: v = e.f; break;    // GL_FLOAT
     }
+    return v;
+}
+
+// The same clamped to [0, 1]
+static float loadElement(const u8 *src, GLenum type, bool swap)
+{
+    float v = loadElementRaw(src, type, swap);
     return !(v > 0.0f)? 0.0f : (v > 1.0f)? 1.0f : v;     // NaN: 0
+}
+
+// One element of a color index or stencil image (floats truncated)
+static s64 loadIndex(const u8 *src, GLenum type, bool swap)
+{
+    union { u8 b[4]; u8 ub; s8 sb; u16 us; s16 ss; u32 ui; s32 si; float f; } e;
+    int size = typeSize(type);
+    for (int i = 0; i < size; i++) e.b[i] = src[swap? size - 1 - i : i];
+    switch (type)
+    {
+        case GL_UNSIGNED_BYTE: return e.ub;
+        case GL_BYTE: return e.sb;
+        case GL_UNSIGNED_SHORT: return e.us;
+        case GL_SHORT: return e.ss;
+        case GL_UNSIGNED_INT: return e.ui;
+        case GL_INT: return e.si;
+        default: return (e.f > -2147483648.0f) && (e.f < 2147483648.0f)? (s64)e.f : 0;     // GL_FLOAT
+    }
+}
+
+// Bit (x, y) of a bitmap laid out as ps describes (GL 1.1 section 3.6.4): rows of whole bytes padded to the alignment,
+// the most significant bit first unless GL_UNPACK_LSB_FIRST
+static bool bitmapBit(const u8 *data, const PixelStore *ps, int width, int x, int y)
+{
+    size_t rowBytes = ((size_t)((ps->rowLength > 0)? ps->rowLength : width) + 7)/8;
+    rowBytes = (rowBytes + ps->alignment - 1)/ps->alignment*ps->alignment;
+    int bit = ps->skipPixels + x;
+    u8 b = data[(size_t)(ps->skipRows + y)*rowBytes + bit/8];
+    return (ps->lsbFirst? (b >> (bit & 7)) : (b >> (7 - (bit & 7)))) & 1;
+}
+
+// A width x height bitmap laid out as ps describes, tightly packed (rows of whole bytes, most significant bit first)
+static void packBitmap(const u8 *data, const PixelStore *ps, int width, int height, u8 *dst)
+{
+    size_t rowBytes = ((size_t)width + 7)/8;
+    memset(dst, 0, rowBytes*height);
+    for (int y = 0; y < height; y++)
+        for (int x = 0; x < width; x++)
+            if (bitmapBit(data, ps, width, x, y)) dst[(size_t)y*rowBytes + x/8] |= (u8)(0x80 >> (x & 7));
+}
+
+//----------------------------------------------------------------------------------
+// Pixel transfer (GL 1.1 section 3.6.3): glPixelTransfer, glPixelMap
+//----------------------------------------------------------------------------------
+// Whether color images are changed by the transfer (scale/bias of R, G, B, A or GL_MAP_COLOR)
+static bool colorTransferActive(void)
+{
+    const PixelTransfer *t = &gl.transfer;
+    bool active = t->mapColor;
+    for (int i = 0; i < 4; i++) active = active || (t->scale[i] != 1.0f) || (t->bias[i] != 0.0f);
+    return active;
+}
+
+static bool depthTransferActive(void) { return (gl.transfer.scale[4] != 1.0f) || (gl.transfer.bias[4] != 0.0f); }
+
+// RGBA components: scaled and biased, clamped to [0, 1], then looked up in the R_TO_R .. A_TO_A tables if GL_MAP_COLOR
+static void transferColor(float c[4])
+{
+    const PixelTransfer *t = &gl.transfer;
+    for (int i = 0; i < 4; i++)
+    {
+        float v = c[i]*t->scale[i] + t->bias[i];
+        v = !(v > 0.0f)? 0.0f : (v > 1.0f)? 1.0f : v;
+        if (t->mapColor)
+        {
+            const PixelMap *p = &gl.pixelMaps[PIXEL_MAP_R_TO_R + i];
+            v = p->values[(int)lroundf(v*(float)(p->size - 1))];
+        }
+        c[i] = v;
+    }
+}
+
+// Window depth: scaled and biased, clamped to [0, 1]
+static float transferDepth(float d)
+{
+    d = d*gl.transfer.scale[4] + gl.transfer.bias[4];
+    return !(d > 0.0f)? 0.0f : (d > 1.0f)? 1.0f : d;
+}
+
+// Entry `index` of a table looked up by index: wraps around its 2^n entries
+static float mapEntry(int map, s64 index)
+{
+    const PixelMap *p = &gl.pixelMaps[map];
+    return p->values[index & (p->size - 1)];
+}
+
+// Index arithmetic: shifted by GL_INDEX_SHIFT (left if positive), GL_INDEX_OFFSET added
+static s64 shiftIndex(s64 index)
+{
+    int shift = gl.transfer.indexShift;
+    if (shift > 0) index = (shift < 64)? (s64)((u64)index << shift) : 0;
+    else if (shift < 0) index = (shift > -64)? (index >> -shift) : (index < 0)? -1 : 0;
+    return index + gl.transfer.indexOffset;
+}
+
+// A color index to RGBA through the I_TO_R .. I_TO_A tables (RGBA mode: always, whatever GL_MAP_COLOR)
+static void indexColor(s64 index, float c[4])
+{
+    index = shiftIndex(index);
+    for (int i = 0; i < 4; i++) c[i] = mapEntry(PIXEL_MAP_I_TO_R + i, index);
+}
+
+// A stencil index: shifted and offset, then looked up in S_TO_S if GL_MAP_STENCIL
+static s64 transferStencil(s64 s)
+{
+    s = shiftIndex(s);
+    if (gl.transfer.mapStencil) s = llroundf(mapEntry(PIXEL_MAP_S_TO_S, s));
+    return s;
 }
 
 // Store one element of type `type`: v is a normalized value in [0, 1] (GL 1.1 table 2.9 inverted), or an index
@@ -4746,7 +5017,74 @@ static void unpackColorImage(const u8 *pixels, int w, int h, GLenum format, GLen
     colorImageLayout(format, type, &n, &elemSize, &groupSize);
     size_t rowBytes = imageRowBytes(ps, w, elemSize, groupSize);
     bool packed = packedFormat(type) != 0, swap = ps->swapBytes && (elemSize > 1);
+    const u8 *image = pixels;
     pixels += (size_t)ps->skipRows*rowBytes + (size_t)ps->skipPixels*groupSize;
+
+    // With the pixel transfer (always for color indices): components as floats, not clamped before it. Unsigned bytes
+    // through 256-entry tables: the components are independent, missing ones transferred from their defaults
+    bool index = (format == GL_COLOR_INDEX);
+    if ((index || colorTransferActive()) && (type == GL_UNSIGNED_BYTE))
+    {
+        u8 lut[256][4], fill[4];
+        float d[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+        transferColor(d);
+        for (int k = 0; k < 4; k++) fill[k] = colorByte(d[k]);
+        for (int i = 0; i < 256; i++)
+        {
+            float c[4] = { i/255.0f, i/255.0f, i/255.0f, i/255.0f };
+            if (index) indexColor(i, c);
+            else transferColor(c);
+            for (int k = 0; k < 4; k++) lut[i][k] = colorByte(c[k]);
+        }
+        for (int y = 0; y < h; y++)
+        {
+            const u8 *src = pixels + (size_t)y*rowBytes;
+            u8 *dst = rgba + (size_t)y*w*4;
+            for (int x = 0; x < w; x++, src += n, dst += 4)
+            {
+                if (index) { memcpy(dst, lut[src[0]], 4); continue; }
+                memcpy(dst, fill, 4);
+                for (int i = 0; i < n; i++)
+                {
+                    const u8 *e = lut[src[i]];
+                    if (comp[i] == 4) { dst[0] = e[0]; dst[1] = e[1]; dst[2] = e[2]; }
+                    else dst[comp[i]] = e[comp[i]];
+                }
+            }
+        }
+        return;
+    }
+    if (index || colorTransferActive())
+    {
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                const u8 *src = pixels + (size_t)y*rowBytes + (size_t)x*groupSize;
+                float c[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+                if (index) indexColor((type == GL_BITMAP)? bitmapBit(image, ps, w, x, y) : loadIndex(src, type, swap), c);
+                else
+                {
+                    if (packed)
+                    {
+                        int v[4];
+                        unpack16(packedTexColor(type), swap? (u16)((src[0] << 8) | src[1]) : (u16)(src[0] | (src[1] << 8)), v);
+                        for (int k = 0; k < 4; k++) c[k] = v[k]/255.0f;
+                    }
+                    else for (int i = 0; i < n; i++)
+                    {
+                        float v = loadElementRaw(src + i*elemSize, type, swap);
+                        if (comp[i] == 4) c[0] = c[1] = c[2] = v;
+                        else c[comp[i]] = v;
+                    }
+                    transferColor(c);
+                }
+                u8 *dst = rgba + ((size_t)y*w + x)*4;
+                for (int k = 0; k < 4; k++) dst[k] = colorByte(c[k]);
+            }
+        }
+        return;
+    }
 
     for (int y = 0; y < h; y++)
     {
@@ -4795,6 +5133,37 @@ static void storeColor(u8 *dst, const u8 rgba[4], GLenum format, GLenum type, bo
     }
     else if (type == GL_UNSIGNED_BYTE) for (int i = 0; i < n; i++) dst[i] = (u8)c[comp[i]];
     else for (int i = 0; i < n; i++) storeElement(dst + i*typeSize(type), type, c[comp[i]]/255.0, false, swap);
+}
+
+// storeColor() of float components in [0, 1] (after the pixel transfer)
+static void storeColorf(u8 *dst, const float rgba[4], GLenum format, GLenum type, bool swap)
+{
+    if ((type == GL_UNSIGNED_BYTE) || packedFormat(type))
+    {
+        const u8 c[4] = { colorByte(rgba[0]), colorByte(rgba[1]), colorByte(rgba[2]), colorByte(rgba[3]) };
+        storeColor(dst, c, format, type, swap);
+        return;
+    }
+    int comp[4], n = colorComponents(format, comp);
+    float l = rgba[0] + rgba[1] + rgba[2];
+    for (int i = 0; i < n; i++)
+        storeElement(dst + i*typeSize(type), type, (comp[i] == 4)? ((l > 1.0f)? 1.0f : l) : rgba[comp[i]], false, swap);
+}
+
+// Store an index as one element of type `type`, masked to the bits of table 4.6 (GL 1.1); GL_FLOAT takes it as it is
+static void storeIndex(u8 *dst, GLenum type, s64 index, bool swap)
+{
+    switch (type)
+    {
+        case GL_UNSIGNED_BYTE: index &= 0xFF; break;
+        case GL_BYTE: index &= 0x7F; break;
+        case GL_UNSIGNED_SHORT: index &= 0xFFFF; break;
+        case GL_SHORT: index &= 0x7FFF; break;
+        case GL_UNSIGNED_INT: index &= 0xFFFFFFFF; break;
+        case GL_INT: index &= 0x7FFFFFFF; break;
+        default: break;     // GL_FLOAT
+    }
+    storeElement(dst, type, (double)index, true, swap);
 }
 
 // w x h RGBA8 texels into a color image (a valid format/type) laid out as ps describes
@@ -5618,7 +5987,7 @@ static void loadTexels(Texture *t, int level, int x0, int y0, int w, int h, GLen
 {
     // Already in the stored format: copied as it is
     TexFormat f;
-    if (texFormat(format, type, &f) && (f.format == t->format.format) && (base != GL_INTENSITY))
+    if (texFormat(format, type, &f) && (f.format == t->format.format) && (base != GL_INTENSITY) && !colorTransferActive())
     {
         transferPixels(t, level, x0, y0, w, h, (u8 *)pixels, ps, true);
         replicateRows(t, level, x0, w);
@@ -5949,12 +6318,13 @@ void glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, G
 }
 
 // Any color format/type: texels in the stored layout are copied as they are, the others converted like glReadPixels
-// (luminance = R + G + B) from the components of table 6.1
+// (luminance = R + G + B) from the components of table 6.1, without the pixel transfer
 void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid *pixels)
 {
     Texture *t = boundTexture(target);
     if (t == NULL) { setError(targetError(target)); return; }
     if ((level < 0) || (level > MAX_TEXTURE_LEVEL)) { setError(GL_INVALID_VALUE); return; }
+    if ((format == GL_COLOR_INDEX) || (type == GL_BITMAP)) { setError(GL_INVALID_ENUM); return; }
     int n, elemSize, groupSize;
     GLenum error = colorImageLayout(format, type, &n, &elemSize, &groupSize);
     if (error != GL_NO_ERROR) { setError(error); return; }
@@ -6570,6 +6940,7 @@ typedef struct {
     GLenum drawBuffer, readBuffer;
     RasterState raster;
     float zoomX, zoomY;
+    PixelTransfer transfer;
 } AttribState;
 
 typedef struct {
@@ -6674,6 +7045,7 @@ void glPushAttrib(GLbitfield mask)
     a->raster = gl.raster;
     a->zoomX = gl.zoomX;
     a->zoomY = gl.zoomY;
+    a->transfer = gl.transfer;
 }
 
 void glPopAttrib(void)
@@ -6886,6 +7258,7 @@ void glPopAttrib(void)
         gl.readBuffer = a->readBuffer;
         gl.zoomX = a->zoomX;
         gl.zoomY = a->zoomY;
+        gl.transfer = a->transfer;
     }
 
     gl.ignoredCaps = (gl.ignoredCaps & ~caps) | (a->ignoredCaps & caps);
@@ -7030,6 +7403,7 @@ void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format
     size_t rowBytes = bitmap? (rowGroups + 7)/8 : rowGroups*groupSize;
     if (bitmap || (elemSize < ps->alignment)) rowBytes = (rowBytes + ps->alignment - 1)/ps->alignment*ps->alignment;
     bool swap = ps->swapBytes && (elemSize > 1);
+    bool transferActive = colorTransferActive(), transferDepthActive = depthTransferActive();
 
     u8 *base = (u8 *)pixels + (size_t)ps->skipRows*rowBytes;
     for (int wy = y0; wy < y1; wy++)
@@ -7043,20 +7417,28 @@ void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format
             if (bitmap)     // Stencil bit 0, MSB first unless GL_PACK_LSB_FIRST
             {
                 u8 bit = ps->lsbFirst? (u8)(1 << (col & 7)) : (u8)(0x80 >> (col & 7));
-                if (p[3] & 1) row[col/8] |= bit;
+                if (transferStencil(p[3]) & 1) row[col/8] |= bit;
                 else row[col/8] &= (u8)~bit;
                 continue;
             }
 
             u8 *dst = row + (size_t)col*groupSize;
-            if (stencil) { storeElement(dst, type, p[3], true, swap); continue; }
+            if (stencil) { storeIndex(dst, type, transferStencil(p[3]), swap); continue; }
             if (depth)
             {
                 u32 d = p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16);
-                storeElement(dst, type, 1.0 - d/16777215.0, false, swap);
+                double z = 1.0 - d/16777215.0;
+                storeElement(dst, type, transferDepthActive? transferDepth((float)z) : z, false, swap);
                 continue;
             }
 
+            if (transferActive)
+            {
+                float c[4] = { p[3]/255.0f, p[2]/255.0f, p[1]/255.0f, p[0]/255.0f };
+                transferColor(c);
+                storeColorf(dst, c, format, type, swap);
+                continue;
+            }
             const u8 rgba[4] = { p[3], p[2], p[1], p[0] };
             storeColor(dst, rgba, format, type, swap);
         }
@@ -7067,8 +7449,8 @@ void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format
 //----------------------------------------------------------------------------------
 // OpenGL: copying the framebuffer into textures
 //----------------------------------------------------------------------------------
-// Window rectangle as RGBA8 texels (malloc'ed), read like glReadPixels: a frame in progress is ended, so draws issued
-// before the copy still see the old texels. Pixels outside the window are 0
+// Window rectangle as RGBA8 texels (malloc'ed), read like glReadPixels (pixel transfer included): a frame in progress is
+// ended, so draws issued before the copy still see the old texels. Pixels outside the window are 0
 static u8 *copyPixels(GLint x, GLint y, GLsizei width, GLsizei height)
 {
     size_t count = (size_t)width*height;
@@ -7105,9 +7487,12 @@ static void copyTexImage(GLenum target, GLint level, GLenum internalformat, GLin
     u8 *pixels = copyPixels(x, y, width, oneD? 1 : height);
     if (pixels == NULL) return;
     PixelStore saved = gl.unpack;
+    PixelTransfer savedTransfer = gl.transfer;      // Applied once, by copyPixels()
     gl.unpack = (PixelStore){ .alignment = 1 };
+    gl.transfer = noTransfer;
     texImage(target, level, (GLint)internalformat, width, oneD? 1 : height, border, GL_RGBA, GL_UNSIGNED_BYTE, pixels, oneD);
     gl.unpack = saved;
+    gl.transfer = savedTransfer;
     free(pixels);
 }
 
@@ -7132,9 +7517,12 @@ static void copyTexSubImage(GLenum target, GLint level, GLint xoffset, GLint yof
     u8 *pixels = copyPixels(x, y, width, height);
     if (pixels == NULL) return;
     PixelStore saved = gl.unpack;
+    PixelTransfer savedTransfer = gl.transfer;
     gl.unpack = (PixelStore){ .alignment = 1 };
+    gl.transfer = noTransfer;
     texSubImage(target, level, xoffset, yoffset, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     gl.unpack = saved;
+    gl.transfer = savedTransfer;
     free(pixels);
 }
 
@@ -7264,7 +7652,6 @@ static GLenum pixelImageLayout(GLenum format, GLenum type, int *elemSize, int *g
     if ((format != GL_STENCIL_INDEX) && (format != GL_DEPTH_COMPONENT))
     {
         int n;
-        if ((type == GL_BITMAP) && (format != GL_COLOR_INDEX)) return GL_INVALID_ENUM;
         return colorImageLayout(format, type, &n, elemSize, groupSize);
     }
     if (type == GL_BITMAP)
@@ -7276,35 +7663,6 @@ static GLenum pixelImageLayout(GLenum format, GLenum type, int *elemSize, int *g
     if ((typeSize(type) == 0) || (type == GL_DOUBLE) || (type == GL_FIXED)) return GL_INVALID_ENUM;
     *elemSize = *groupSize = typeSize(type);
     return GL_NO_ERROR;
-}
-
-// Bit (x, y) of a bitmap laid out as ps describes (GL 1.1 section 3.6.4): rows of whole bytes padded to the alignment,
-// the most significant bit first unless GL_UNPACK_LSB_FIRST
-static bool bitmapBit(const u8 *data, const PixelStore *ps, int width, int x, int y)
-{
-    size_t rowBytes = ((size_t)((ps->rowLength > 0)? ps->rowLength : width) + 7)/8;
-    rowBytes = (rowBytes + ps->alignment - 1)/ps->alignment*ps->alignment;
-    int bit = ps->skipPixels + x;
-    u8 b = data[(size_t)(ps->skipRows + y)*rowBytes + bit/8];
-    return (ps->lsbFirst? (b >> (bit & 7)) : (b >> (7 - (bit & 7)))) & 1;
-}
-
-// One element of a stencil index image
-static u32 loadIndex(const u8 *src, GLenum type, bool swap)
-{
-    union { u8 b[4]; u8 ub; s8 sb; u16 us; s16 ss; u32 ui; s32 si; float f; } e;
-    int size = typeSize(type);
-    for (int i = 0; i < size; i++) e.b[i] = src[swap? size - 1 - i : i];
-    switch (type)
-    {
-        case GL_UNSIGNED_BYTE: return e.ub;
-        case GL_BYTE: return (u32)e.sb;
-        case GL_UNSIGNED_SHORT: return e.us;
-        case GL_SHORT: return (u32)e.ss;
-        case GL_UNSIGNED_INT: return e.ui;
-        case GL_INT: return (u32)e.si;
-        default: return (e.f > -2147483648.0f) && (e.f < 2147483648.0f)? (u32)(s32)e.f : 0;     // GL_FLOAT
-    }
 }
 
 // Columns (rows) [*i0, *i1) of an n pixels wide (high) rectangle at window position p with zoom z that land on a screen
@@ -7702,13 +8060,7 @@ static void listSavePixels(ListCommand command, GLsizei width, GLsizei height, G
     {
         const PixelStore *ps = &gl.unpack;
         u8 *dst = (u8 *)&w[9];
-        if (bits)
-        {
-            memset(dst, 0, rowBytes*height);
-            for (int y = 0; y < height; y++)
-                for (int x = 0; x < width; x++)
-                    if (bitmapBit(pixels, ps, width, x, y)) dst[(size_t)y*rowBytes + x/8] |= (u8)(0x80 >> (x & 7));
-        }
+        if (bits) packBitmap(pixels, ps, width, height, dst);
         else
         {
             size_t srcRow = imageRowBytes(ps, width, elemSize, groupSize);
@@ -7791,9 +8143,8 @@ void glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, con
         {
             u32 *v = &values[(size_t)y*width + x];
             const u8 *src = base + (size_t)y*rowBytes + (size_t)x*groupSize;
-            if (type == GL_BITMAP) *v = bitmapBit(pixels, ps, width, x, y);
-            else if (stencil) *v = loadIndex(src, type, swap);
-            else *v = (u32)((1.0f - loadElement(src, type, swap))*0xFFFFFF);  // Like glClear's depth
+            if (stencil) *v = (u32)transferStencil((type == GL_BITMAP)? bitmapBit(pixels, ps, width, x, y) : loadIndex(src, type, swap));
+            else *v = (u32)((1.0f - transferDepth(loadElementRaw(src, type, swap)))*0xFFFFFF);  // Like glClear's depth
         }
     }
     drawDepthStencil(values, width, height, stencil);
@@ -7809,7 +8160,16 @@ void glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type)
     if ((width < 0) || (height < 0)) { setError(GL_INVALID_VALUE); return; }
     if (!gl.raster.valid || (width == 0) || (height == 0)) return;
 
-    if (type == GL_COLOR) { copyColorRect(x, y, width, height); return; }
+    if ((type == GL_COLOR) && !colorTransferActive()) { copyColorRect(x, y, width, height); return; }
+    if (type == GL_COLOR)
+    {
+        // With the pixel transfer: read (and transferred) on the CPU like glReadPixels, then drawn like glDrawPixels
+        u8 *pixels = copyPixels(x, y, width, height);
+        if (pixels == NULL) return;
+        drawPixelRect(PIXEL_IMAGE, fillImage, pixels, width, height, gl.raster.pos[0], gl.raster.pos[1], gl.zoomX, gl.zoomY);
+        free(pixels);
+        return;
+    }
 
     bool stencil = (type == GL_STENCIL);
     if (!depthStencilWrites(stencil)) return;
@@ -7820,6 +8180,7 @@ void glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type)
     int x0 = (x < 0)? 0 : x, x1 = x + width, y0 = (y < 0)? 0 : y, y1 = y + height;
     if (x1 > screenWidth(gl.screen)) x1 = screenWidth(gl.screen);
     if (y1 > C3DGL_SCREEN_HEIGHT) y1 = C3DGL_SCREEN_HEIGHT;
+    bool transferDepthActive = depthTransferActive();
     if ((x0 < x1) && (y0 < y1))
     {
         int line0 = x0 & ~7;
@@ -7830,7 +8191,13 @@ void glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type)
             for (int wy = y0; wy < y1; wy++)
             {
                 const u8 *p = fb + (size_t)(wx - line0)*READ_LINE_BYTES + (size_t)wy*4;
-                values[(size_t)(wy - y)*width + (wx - x)] = stencil? p[3] : p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16);
+                u32 *v = &values[(size_t)(wy - y)*width + (wx - x)];
+                if (stencil) *v = (u32)transferStencil(p[3]);
+                else
+                {
+                    *v = p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16);
+                    if (transferDepthActive) *v = (u32)((1.0f - transferDepth(1.0f - *v/16777215.0f))*0xFFFFFF);
+                }
             }
         }
         linearFree(fb);
@@ -8038,13 +8405,15 @@ static void listSaveImage(ListCommand command, const GLint args[8], GLsizei widt
     int n, elemSize, groupSize;
     bool captured = (pixels != NULL) && sizeValid &&
                     (colorImageLayout((GLenum)args[6], (GLenum)args[7], &n, &elemSize, &groupSize) == GL_NO_ERROR);
-    size_t rowBytes = captured? (size_t)width*groupSize : 0;
+    bool bits = ((GLenum)args[7] == GL_BITMAP);
+    size_t rowBytes = !captured? 0 : bits? ((size_t)width + 7)/8 : (size_t)width*groupSize;
     ListWord *w = listBegin(command, 9 + (captured? (int)((rowBytes*height + 3)/4) : 0));
     if (w == NULL) return;
 
     for (int i = 0; i < 8; i++) w[i].i = args[i];
     w[8].i = (captured? 1 : 0) | (gl.unpack.swapBytes? 2 : 0) | (oneD? 4 : 0);
-    if (captured)
+    if (captured && bits) packBitmap(pixels, &gl.unpack, width, height, (u8 *)&w[9]);
+    else if (captured)
     {
         const PixelStore *ps = &gl.unpack;
         size_t srcRow = imageRowBytes(ps, width, elemSize, groupSize);

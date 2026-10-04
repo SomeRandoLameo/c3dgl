@@ -1076,7 +1076,8 @@ void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format
 // through the per-fragment operations (scissor, alpha, stencil and depth test with the raster depth, blending, logic op,
 // masks, fog); texturing does not apply to them. glCopyPixels(GL_COLOR) copies on the GPU without waiting. Depth and
 // stencil images (glDrawPixels, glCopyPixels) are written on the CPU (scissor, stencil and depth test, masks; the raster
-// color is not written) and wait for the GPU like glReadPixels. GL_COLOR_INDEX images come with the pixel maps
+// color is not written) and wait for the GPU like glReadPixels. GL_COLOR_INDEX images become RGBA through the pixel
+// maps; glCopyPixels(GL_COLOR) with an active color transfer reads back on the CPU (waits like glReadPixels)
 #define GL_CURRENT_RASTER_COLOR             0x0B04
 #define GL_CURRENT_RASTER_INDEX             0x0B05
 #define GL_CURRENT_RASTER_TEXTURE_COORDS    0x0B06
@@ -1117,6 +1118,54 @@ void glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig, GLflo
 void glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels);
 void glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type);
 void glPixelZoom(GLfloat xfactor, GLfloat yfactor);
+
+// Pixel transfer (GL): scale/bias and the color maps apply to color images drawn, read, copied and loaded into textures
+// (glDrawPixels, glReadPixels, glCopyPixels, glTexImage*, glTexSubImage*, glCopyTex*; not glGetTexImage), depth
+// scale/bias to depth images, index shift/offset to color index and stencil images, GL_MAP_STENCIL to stencil.
+// GL_COLOR_INDEX images (also GL_BITMAP) become RGBA through the GL_PIXEL_MAP_I_TO_* maps
+#define GL_MAP_COLOR                        0x0D10
+#define GL_MAP_STENCIL                      0x0D11
+#define GL_INDEX_SHIFT                      0x0D12
+#define GL_INDEX_OFFSET                     0x0D13
+#define GL_RED_SCALE                        0x0D14
+#define GL_RED_BIAS                         0x0D15
+#define GL_GREEN_SCALE                      0x0D18
+#define GL_GREEN_BIAS                       0x0D19
+#define GL_BLUE_SCALE                       0x0D1A
+#define GL_BLUE_BIAS                        0x0D1B
+// GL_ALPHA_SCALE (0x0D1C) is defined with the texture environment
+#define GL_ALPHA_BIAS                       0x0D1D
+#define GL_DEPTH_SCALE                      0x0D1E
+#define GL_DEPTH_BIAS                       0x0D1F
+#define GL_PIXEL_MAP_I_TO_I                 0x0C70
+#define GL_PIXEL_MAP_S_TO_S                 0x0C71
+#define GL_PIXEL_MAP_I_TO_R                 0x0C72
+#define GL_PIXEL_MAP_I_TO_G                 0x0C73
+#define GL_PIXEL_MAP_I_TO_B                 0x0C74
+#define GL_PIXEL_MAP_I_TO_A                 0x0C75
+#define GL_PIXEL_MAP_R_TO_R                 0x0C76
+#define GL_PIXEL_MAP_G_TO_G                 0x0C77
+#define GL_PIXEL_MAP_B_TO_B                 0x0C78
+#define GL_PIXEL_MAP_A_TO_A                 0x0C79
+#define GL_PIXEL_MAP_I_TO_I_SIZE            0x0CB0
+#define GL_PIXEL_MAP_S_TO_S_SIZE            0x0CB1
+#define GL_PIXEL_MAP_I_TO_R_SIZE            0x0CB2
+#define GL_PIXEL_MAP_I_TO_G_SIZE            0x0CB3
+#define GL_PIXEL_MAP_I_TO_B_SIZE            0x0CB4
+#define GL_PIXEL_MAP_I_TO_A_SIZE            0x0CB5
+#define GL_PIXEL_MAP_R_TO_R_SIZE            0x0CB6
+#define GL_PIXEL_MAP_G_TO_G_SIZE            0x0CB7
+#define GL_PIXEL_MAP_B_TO_B_SIZE            0x0CB8
+#define GL_PIXEL_MAP_A_TO_A_SIZE            0x0CB9
+#define GL_MAX_PIXEL_MAP_TABLE              0x0D34      // 256
+void glPixelTransferf(GLenum pname, GLfloat param);
+void glPixelTransferi(GLenum pname, GLint param);
+void glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat *values);
+void glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint *values);
+void glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort *values);
+void glGetPixelMapfv(GLenum map, GLfloat *values);
+void glGetPixelMapuiv(GLenum map, GLuint *values);
+void glGetPixelMapusv(GLenum map, GLushort *values);
 
 // OpenGL ES 1.1: float variants and the fixed-point API (more x functions come with their features)
 void glOrthof(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat zNear, GLfloat zFar);

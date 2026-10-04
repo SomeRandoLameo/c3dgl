@@ -1,7 +1,9 @@
 // c3dgl example: drawing pixels. A spinning cube with a text label at one of its corners (glRasterPos in 3D, glBitmap
 // text depth tested against the cube), its reflection copied below it with glCopyPixels (zoom 1 x -0.5), and an animated
-// glDrawPixels image with a pulsing glPixelZoom next to its mirror image (zoom -1). The text is the console font as
-// glBitmap display lists, drawn with glCallLists. A: pause the animation.
+// glDrawPixels image with a pulsing glPixelZoom next to its mirror image (zoom -1). The image is a color index image:
+// its palette is in the glPixelMap I_TO_R/G/B tables and cycles by GL_INDEX_OFFSET; the mirror image draws the same
+// bytes as luminance, tinted by glPixelTransfer scale/bias. The text is the console font as glBitmap display lists,
+// drawn with glCallLists. A: pause the animation.
 #include <3ds.h>
 #include <GL/gl.h>
 #include <c3dgl.h>
@@ -44,17 +46,22 @@ void windowText(GLuint font, int x, int y, const char *s) {
     text(font, s);
 }
 
-// Plasma, RGB: the sum of three sine waves (per column, row and diagonal) through a fixed palette
-void makeImage(GLubyte *image, float t) {
-    static GLubyte palette[256][3];
-    static bool paletteReady = false;
-    if (!paletteReady) {
-        for (int i = 0; i < 256; i++) {
-            const float v = (i / 255.0f * 6.0f - 3.0f) * 2.0f;
-            for (int c = 0; c < 3; c++) palette[i][c] = static_cast<GLubyte>(127.5f + 127.5f * std::sin(v + c * 2.1f));
-        }
-        paletteReady = true;
+// Palette of the color index image: glPixelMap tables I_TO_R, I_TO_G, I_TO_B (256 entries), I_TO_A (1 entry: opaque)
+void setPalette() {
+    static GLfloat palette[3][256];
+    for (int i = 0; i < 256; i++) {
+        const float v = (i / 255.0f * 6.0f - 3.0f) * 2.0f;
+        for (int c = 0; c < 3; c++) palette[c][i] = 0.5f + 0.5f * std::sin(v + c * 2.1f);
     }
+    glPixelMapfv(GL_PIXEL_MAP_I_TO_R, 256, palette[0]);
+    glPixelMapfv(GL_PIXEL_MAP_I_TO_G, 256, palette[1]);
+    glPixelMapfv(GL_PIXEL_MAP_I_TO_B, 256, palette[2]);
+    const GLfloat opaque = 1.0f;
+    glPixelMapfv(GL_PIXEL_MAP_I_TO_A, 1, &opaque);
+}
+
+// Plasma, color indices: the sum of three sine waves (per column, row and diagonal)
+void makeImage(GLubyte *image, float t) {
     float waveX[IMAGE_SIZE], waveY[IMAGE_SIZE], waveXY[2 * IMAGE_SIZE];
     for (int i = 0; i < IMAGE_SIZE; i++) {
         waveX[i] = std::sin(i * 0.2f + t);
@@ -64,11 +71,7 @@ void makeImage(GLubyte *image, float t) {
     for (int y = 0; y < IMAGE_SIZE; y++) {
         for (int x = 0; x < IMAGE_SIZE; x++) {
             const float v = waveX[x] + waveY[y] + waveXY[x + y];      // -3..3
-            const GLubyte *c = palette[static_cast<int>((v + 3.0f) * (255.0f / 6.0f))];
-            GLubyte *p = image + 3 * (y * IMAGE_SIZE + x);
-            p[0] = c[0];
-            p[1] = c[1];
-            p[2] = c[2];
+            image[y * IMAGE_SIZE + x] = static_cast<GLubyte>((v + 3.0f) * (255.0f / 6.0f));
         }
     }
 }
@@ -130,7 +133,8 @@ int main() {
     }
 
     const GLuint font = createFont();
-    static GLubyte image[IMAGE_SIZE * IMAGE_SIZE * 3];
+    static GLubyte image[IMAGE_SIZE * IMAGE_SIZE];
+    setPalette();
     glClearColor(0.08f, 0.08f, 0.15f, 1.0f);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
@@ -139,8 +143,11 @@ int main() {
                 "at a corner (glRasterPos in 3D,\n"
                 "depth tested), its reflection by\n"
                 "glCopyPixels (zoom 1 x -0.5).\n"
-                "Right: glDrawPixels with a pulsing\n"
-                "zoom, mirrored by zoom -1.\n"
+                "Right: a color index glDrawPixels\n"
+                "(glPixelMap palette cycled by\n"
+                "GL_INDEX_OFFSET), pulsing zoom;\n"
+                "mirrored by zoom -1 as luminance\n"
+                "tinted by glPixelTransfer.\n"
                 "Text: glBitmap display lists.\n\n"
                 "A: pause\n"
                 "START: exit\n\n");
@@ -197,18 +204,26 @@ int main() {
         const float half = IMAGE_SIZE * zoom * 0.5f;
         glRasterPos2f(270.0f - half, 150.0f - half);
         glPixelZoom(zoom, zoom);
-        glDrawPixels(IMAGE_SIZE, IMAGE_SIZE, GL_RGB, GL_UNSIGNED_BYTE, image);
+        glPixelTransferi(GL_INDEX_OFFSET, static_cast<int>(t * 60.0f) & 255);
+        glDrawPixels(IMAGE_SIZE, IMAGE_SIZE, GL_COLOR_INDEX, GL_UNSIGNED_BYTE, image);
+        glPixelTransferi(GL_INDEX_OFFSET, 0);
         glRasterPos2i(370, 30);
         glPixelZoom(-1.0f, 1.0f);
-        glDrawPixels(IMAGE_SIZE, IMAGE_SIZE, GL_RGB, GL_UNSIGNED_BYTE, image);
+        glPixelTransferf(GL_RED_SCALE, 0.3f);
+        glPixelTransferf(GL_GREEN_SCALE, 0.7f);
+        glPixelTransferf(GL_BLUE_BIAS, 0.4f);
+        glDrawPixels(IMAGE_SIZE, IMAGE_SIZE, GL_LUMINANCE, GL_UNSIGNED_BYTE, image);
+        glPixelTransferf(GL_RED_SCALE, 1.0f);
+        glPixelTransferf(GL_GREEN_SCALE, 1.0f);
+        glPixelTransferf(GL_BLUE_BIAS, 0.0f);
         glPixelZoom(1.0f, 1.0f);
 
         glColor3ub(255, 220, 90);
         windowText(font, 8, 228, "glBitmap / glDrawPixels / glCopyPixels");
         glColor3ub(150, 200, 255);
         windowText(font, 40, 4, "glCopyPixels");
-        windowText(font, 310, 18, "zoom -1");
-        windowText(font, 236, 214, "glPixelZoom");
+        windowText(font, 278, 18, "zoom -1, tinted");
+        windowText(font, 214, 214, "glPixelMap palette");
 
         c3dglSwapBuffers();
     }

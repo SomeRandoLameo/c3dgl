@@ -86,8 +86,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `primitives`: every primitive mode with culling on to catch wrong winding; page 2: flat shading, polygon modes,
   edge flags, polygon offset, depth range
 - `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks, display lists,
-  texgen, texture formats, 1D textures, color buffers, pixel drawing (rendered and read back) and the ES API; green
-  screen = all passed
+  texgen, texture formats, 1D textures, color buffers, pixel drawing and transfer (rendered and read back) and the ES
+  API; green screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
   page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps, page 5: compressed textures (paletted, ETC1)
@@ -107,7 +107,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
   environment map), `GL_OBJECT_LINEAR` and `GL_EYE_LINEAR` stripes; A scrolls the stripes with the texture matrix
 - `pixels`: drawing pixels: text from `glBitmap` display lists (the console font), a label at a cube corner
   (`glRasterPos` in 3D, depth tested), the cube's reflection by `glCopyPixels` with zoom 1 x -0.5, an animated
-  `glDrawPixels` image with a pulsing `glPixelZoom` and its mirror image (zoom -1)
+  color index `glDrawPixels` image (palette in the `glPixelMap` tables, cycled by `GL_INDEX_OFFSET`) with a pulsing
+  `glPixelZoom` and its mirror image (zoom -1, drawn as luminance tinted by `glPixelTransfer` scale/bias)
 
 Every example shows the CPU and GPU time of the last frame, the command buffer usage and the frames per second
 (averaged over one second) in rows 2-5 of the bottom screen (`C3D_GetProcessingTime`, `C3D_GetDrawingTime`,
@@ -182,6 +183,10 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
   formats and types, depth, stencil, `GL_BITMAP` stencil), `glCopyPixels` (color, depth, stencil), `glPixelZoom`
   (also negative); color goes through all per-fragment operations, texturing does not apply. Depth and stencil
   images are written on the CPU and wait for the GPU; their fragments' raster color is not written
+- Pixel transfer: `glPixelTransfer{i,f}` (scale/bias of R, G, B, A and depth, `GL_INDEX_SHIFT/OFFSET`,
+  `GL_MAP_COLOR`, `GL_MAP_STENCIL`), `glPixelMap{fv,uiv,usv}` and `glGetPixelMap*` (all 10 tables, 256 entries) for
+  `glDrawPixels`, `glReadPixels`, `glCopyPixels` and texture images and copies; `GL_COLOR_INDEX` images (also
+  `GL_BITMAP`) drawn or loaded as textures through the `I_TO_*` tables
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
@@ -239,6 +244,9 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
   raster color is decided on the CPU). `glCopyPixels(GL_COLOR)` queues a GX texture copy of the color buffer between the
   draws before and after it (the color buffer is tiled like a texture), so it does not wait for the GPU. PICA cannot
   output a per-pixel depth: depth and stencil images are read, tested and written back on the CPU.
+- The pixel transfer runs on the CPU while images are converted (unsigned byte images through 256-entry tables).
+  `glCopyPixels(GL_COLOR)` with an active color transfer is read back like `glReadPixels` (waits for the GPU) and
+  drawn like `glDrawPixels`.
 - Display lists store each command with its arguments; client memory is copied at compile time (texture images
   tightly packed, vertex array elements as the immediate mode calls they stand for). `glCallList` runs the commands
   through the same entry points, so a list renders exactly like the calls it recorded; it costs about as much CPU
