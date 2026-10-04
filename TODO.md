@@ -202,7 +202,21 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
   pack store modes, clipped to the window, ES `GL_IMPLEMENTATION_COLOR_READ_FORMAT/TYPE_OES` (`GL_RGBA`/ubyte).
   Within a frame the frame is ended without presenting (runs the draws so far), the rows are copied out by a display
   transfer and the frame is begun again; GPU time stats then cover only the part after the last read
-* [ ] `glDrawPixels`, `glCopyPixels`, `glBitmap`, `glRasterPos*`, `glPixelZoom` (GL)
+* [~] Drawing pixels (GL): `glRasterPos{2,3,4}{s,i,f,d}[v]` (transformed and clipped like a point, also against the user
+  clip planes; lit color, texcoords through the texture matrix, eye distance; `GL_CURRENT_RASTER_*` queries),
+  `glBitmap`, `glDrawPixels` (color in all GL 1.1 formats/types and the packed 16-bit ones, `GL_DEPTH_COMPONENT`,
+  `GL_STENCIL_INDEX` incl. `GL_BITMAP`; unpack store modes), `glCopyPixels` (`GL_COLOR`, `GL_DEPTH`, `GL_STENCIL`),
+  `glPixelZoom` (`GL_ZOOM_X/Y`, negative zoom mirrors); raster state in `GL_CURRENT_BIT`, zoom in `GL_PIXEL_MODE_BIT`;
+  recorded in display lists (images copied with the unpack state, bitmaps repacked). Color images and bitmaps are
+  textured quads in window coordinates through all per-fragment operations (raster depth, fog); bitmaps share a per-frame
+  atlas (one batch per run of glyphs); `glCopyPixels(GL_COLOR)` is a GX texture copy queued between the draws (no wait).
+  Depth/stencil images are read, tested (scissor, stencil, depth, masks) and written back on the CPU (waits for the GPU).
+  Verified in Azahar (api checks in Vulkan at 1x and the software renderer, pixels example)
+  * [ ] Real hardware not tested yet
+  * [~] Texturing does not apply to `glDrawPixels`/`glBitmap` fragments; depth images do not write the raster color
+  * [~] `GL_COLOR_INDEX` images come with the pixel maps (below); feedback/selection tokens with feedback mode
+  * [~] Azahar's Vulkan renderer at `resolution_factor=2` reads back depth with ~1/256 error after a CPU depth write
+    (exact at 1x and in the software renderer), so 2 api checks fail there
 * [ ] `glPixelTransfer*`, `glPixelMap*`, `glGetPixelMap*` (GL)
 
 ## Desktop GL 1.1 Only
@@ -255,8 +269,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 * [x] Examples show CPU/GPU time, command buffer usage and FPS (bottom screen rows 2-5)
 * [x] Resource use: only changed GPU state is sent per batch (command buffer about halved), one vertex cache flush per
   command list submission instead of one per batch, `glEvalMesh2` evaluates each grid point once
-* [x] Real hardware verification (all features verified on hardware; display lists, texgen, internal formats, 1D
-  textures and color buffers through the api checks, 2026-10-04)
+* [~] Real hardware verification (all features up to color buffers verified on hardware; display lists, texgen, internal
+  formats, 1D textures and color buffers through the api checks, 2026-10-04). Drawing pixels not yet
   * [x] Fixed: GPU lockup on the first draw (since bf91bd4): the vertex shader left `outtc0.w` unwritten
 
 ## Known Bugs / Limits
@@ -273,7 +287,7 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 ```text
 [ ] Lighting in the vertex shader     [ ] Feedback / selection (GL)
 [ ] Smooth points/lines (GL)
-                                      [ ] Pixel ops: DrawPixels, Bitmap, RasterPos (GL)
+                                      [~] Pixel ops: pixel maps / transfer (GL)
                                       [ ] Accumulation buffer (GL)
                                       [ ] Default texture objects (GL)
 [ ] Complete state queries            [ ] Stipple (GL)

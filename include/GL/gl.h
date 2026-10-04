@@ -1072,6 +1072,52 @@ void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei widt
 #define GL_IMPLEMENTATION_COLOR_READ_FORMAT_OES 0x8B9B      // ES 1.1: GL_RGBA
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels);
 
+// Drawing pixels (GL) at the raster position. Color images and bitmaps are drawn on the GPU as textured rectangles and go
+// through the per-fragment operations (scissor, alpha, stencil and depth test with the raster depth, blending, logic op,
+// masks, fog); texturing does not apply to them. glCopyPixels(GL_COLOR) copies on the GPU without waiting. Depth and
+// stencil images (glDrawPixels, glCopyPixels) are written on the CPU (scissor, stencil and depth test, masks; the raster
+// color is not written) and wait for the GPU like glReadPixels. GL_COLOR_INDEX images come with the pixel maps
+#define GL_CURRENT_RASTER_COLOR             0x0B04
+#define GL_CURRENT_RASTER_INDEX             0x0B05
+#define GL_CURRENT_RASTER_TEXTURE_COORDS    0x0B06
+#define GL_CURRENT_RASTER_POSITION          0x0B07
+#define GL_CURRENT_RASTER_POSITION_VALID    0x0B08
+#define GL_CURRENT_RASTER_DISTANCE          0x0B09
+#define GL_ZOOM_X                           0x0D16
+#define GL_ZOOM_Y                           0x0D17
+#define GL_COLOR                            0x1800
+#define GL_DEPTH                            0x1801
+#define GL_STENCIL                          0x1802
+void glRasterPos2d(GLdouble x, GLdouble y);
+void glRasterPos2dv(const GLdouble *v);
+void glRasterPos2f(GLfloat x, GLfloat y);
+void glRasterPos2fv(const GLfloat *v);
+void glRasterPos2i(GLint x, GLint y);
+void glRasterPos2iv(const GLint *v);
+void glRasterPos2s(GLshort x, GLshort y);
+void glRasterPos2sv(const GLshort *v);
+void glRasterPos3d(GLdouble x, GLdouble y, GLdouble z);
+void glRasterPos3dv(const GLdouble *v);
+void glRasterPos3f(GLfloat x, GLfloat y, GLfloat z);
+void glRasterPos3fv(const GLfloat *v);
+void glRasterPos3i(GLint x, GLint y, GLint z);
+void glRasterPos3iv(const GLint *v);
+void glRasterPos3s(GLshort x, GLshort y, GLshort z);
+void glRasterPos3sv(const GLshort *v);
+void glRasterPos4d(GLdouble x, GLdouble y, GLdouble z, GLdouble w);
+void glRasterPos4dv(const GLdouble *v);
+void glRasterPos4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+void glRasterPos4fv(const GLfloat *v);
+void glRasterPos4i(GLint x, GLint y, GLint z, GLint w);
+void glRasterPos4iv(const GLint *v);
+void glRasterPos4s(GLshort x, GLshort y, GLshort z, GLshort w);
+void glRasterPos4sv(const GLshort *v);
+void glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove,
+              const GLubyte *bitmap);
+void glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels);
+void glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type);
+void glPixelZoom(GLfloat xfactor, GLfloat yfactor);
+
 // OpenGL ES 1.1: float variants and the fixed-point API (more x functions come with their features)
 void glOrthof(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat zNear, GLfloat zFar);
 void glFrustumf(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat zNear, GLfloat zFar);

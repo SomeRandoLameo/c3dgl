@@ -1498,6 +1498,315 @@ static void testColorBuffers(void)
     CHECK(v[0] == GL_BACK && glGetError() == GL_NO_ERROR);
 }
 
+// Depth of window pixel (x, y) within 1e-3
+static bool depthNear(int x, int y, float d)
+{
+    GLfloat f = -1.0f;
+    glReadPixels(x, y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &f);
+    bool ok = fabsf(f - d) < 1e-3f;
+    if (!ok) printf("  depth (%i, %i): %f\n", x, y, f);
+    return ok;
+}
+
+static GLubyte stencilAt(int x, int y)
+{
+    GLubyte s = 0;
+    glReadPixels(x, y, 1, 1, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, &s);
+    return s;
+}
+
+// glRasterPos (transform, clipping, lit color, queries), glDrawPixels (formats, unpack modes, zoom, tiles, fragment
+// operations, depth and stencil), glBitmap, glCopyPixels, attribute groups, display lists and errors
+static void testPixels(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    GLfloat f[4];
+    GLint v[4];
+    glGetFloatv(GL_CURRENT_RASTER_POSITION, f);
+    glGetIntegerv(GL_CURRENT_RASTER_POSITION_VALID, v);
+    CHECK(f[0] == 0.0f && f[1] == 0.0f && f[2] == 0.0f && f[3] == 1.0f && v[0] == 1);
+    glGetFloatv(GL_CURRENT_RASTER_COLOR, f);
+    CHECK(f[0] == 1.0f && f[1] == 1.0f && f[2] == 1.0f && f[3] == 1.0f);
+    glGetFloatv(GL_ZOOM_X, f);
+    glGetFloatv(GL_ZOOM_Y, f + 1);
+    CHECK(f[0] == 1.0f && f[1] == 1.0f);
+
+    // Raster position: transformed to window coordinates, current color and texcoords (texture matrix applied)
+    windowProjection();
+    glColor4ub(10, 20, 30, 40);
+    glTexCoord2f(0.5f, 0.25f);
+    glMatrixMode(GL_TEXTURE);
+    glTranslatef(1.0f, 0.0f, 0.0f);
+    glMatrixMode(GL_MODELVIEW);
+    glRasterPos3f(30.0f, 40.0f, 0.5f);         // Ortho z: window depth 0.25
+    glMatrixMode(GL_TEXTURE);
+    glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    glGetFloatv(GL_CURRENT_RASTER_POSITION, f);
+    CHECK(near(f[0], 30.0) && near(f[1], 40.0) && near(f[2], 0.25) && near(f[3], 1.0));
+    glGetFloatv(GL_CURRENT_RASTER_COLOR, f);
+    CHECK(fabsf(f[1] - 20/255.0f) < 1e-3f && fabsf(f[3] - 40/255.0f) < 1e-3f);
+    glGetFloatv(GL_CURRENT_RASTER_TEXTURE_COORDS, f);
+    CHECK(near(f[0], 1.5) && near(f[1], 0.25) && near(f[3], 1.0));
+    glGetFloatv(GL_CURRENT_RASTER_DISTANCE, f);
+    CHECK(fabsf(f[0] - sqrtf(30*30 + 40*40 + 0.25f)) < 1e-3f);
+    glTranslatef(5.0f, 0.0f, 0.0f);
+    glRasterPos4f(20.0f, 40.0f, 0.0f, 2.0f);    // (10, 20) moved by 5
+    glLoadIdentity();
+    glGetFloatv(GL_CURRENT_RASTER_POSITION, f);
+    CHECK(near(f[0], 15.0) && near(f[1], 20.0) && near(f[3], 2.0));
+
+    // Clipped: invalid, the rest stays
+    glRasterPos2i(-5, 10);
+    glGetIntegerv(GL_CURRENT_RASTER_POSITION_VALID, v);
+    glGetFloatv(GL_CURRENT_RASTER_POSITION, f);
+    CHECK(v[0] == 0 && near(f[0], 15.0));
+    glRasterPos2i(5, 10);
+    glGetIntegerv(GL_CURRENT_RASTER_POSITION_VALID, v);
+    CHECK(v[0] == 1);
+    GLdouble plane[4] = { -1.0, 0.0, 0.0, 4.0 };    // x <= 4
+    glClipPlane(GL_CLIP_PLANE0, plane);
+    glEnable(GL_CLIP_PLANE0);
+    glRasterPos2i(5, 10);
+    glGetIntegerv(GL_CURRENT_RASTER_POSITION_VALID, v);
+    CHECK(v[0] == 0);
+    glDisable(GL_CLIP_PLANE0);
+
+    // Lit raster color: ambient only
+    glEnable(GL_LIGHTING);
+    GLfloat white[4] = { 1, 1, 1, 1 }, ambient[4] = { 0.5f, 0.25f, 1.0f, 1.0f };
+    glLightModelfv(GL_LIGHT_MODEL_AMBIENT, white);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, ambient);
+    glRasterPos2i(5, 10);
+    glDisable(GL_LIGHTING);
+    glGetFloatv(GL_CURRENT_RASTER_COLOR, f);
+    CHECK(fabsf(f[0] - 0.5f) < 0.01f && fabsf(f[1] - 0.25f) < 0.01f && f[2] == 1.0f && f[3] == 1.0f);
+
+    // glDrawPixels: rows go up from the raster position
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClearDepth(0.5);
+    glClearStencil(0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    const GLubyte image[16] = { 255, 0, 0, 255,  0, 255, 0, 255,      // Bottom row: red, green
+                                0, 0, 255, 255,  255, 255, 255, 128 }; // Top row: blue, white
+    glRasterPos2i(20, 20);
+    glDrawPixels(2, 2, GL_RGBA, GL_UNSIGNED_BYTE, image);
+    CHECK(pixelNear(20, 20, 255, 0, 0, 255) && pixelNear(21, 20, 0, 255, 0, 255));
+    CHECK(pixelNear(20, 21, 0, 0, 255, 255) && pixelNear(21, 21, 255, 255, 255, 128));
+    CHECK(pixelNear(22, 20, 0, 0, 0, 0) && pixelNear(20, 22, 0, 0, 0, 0) && pixelNear(19, 19, 0, 0, 0, 0));
+
+    // Zoom (pixel (i, j) covers [x + zx*i, x + zx*(i + 1)) x ...), negative zoom mirrors
+    glPixelZoom(2.0f, 3.0f);
+    glRasterPos2i(40, 20);
+    glDrawPixels(2, 1, GL_RGBA, GL_UNSIGNED_BYTE, image);
+    CHECK(pixelNear(40, 20, 255, 0, 0, 255) && pixelNear(41, 22, 255, 0, 0, 255) && pixelNear(42, 20, 0, 255, 0, 255));
+    CHECK(pixelNear(43, 22, 0, 255, 0, 255) && pixelNear(44, 20, 0, 0, 0, 0) && pixelNear(40, 23, 0, 0, 0, 0));
+    glPixelZoom(-1.0f, 1.0f);
+    glRasterPos2i(60, 20);
+    glDrawPixels(2, 1, GL_RGBA, GL_UNSIGNED_BYTE, image);
+    CHECK(pixelNear(59, 20, 255, 0, 0, 255) && pixelNear(58, 20, 0, 255, 0, 255) && pixelNear(60, 20, 0, 0, 0, 0));
+    glPixelZoom(1.0f, 1.0f);
+
+    // Formats, types and unpack modes
+    const GLfloat lum[2] = { 0.5f, 1.0f };
+    glRasterPos2i(70, 20);
+    glDrawPixels(2, 1, GL_LUMINANCE, GL_FLOAT, lum);
+    CHECK(pixelNear(70, 20, 128, 128, 128, 255) && pixelNear(71, 20, 255, 255, 255, 255));
+    const GLushort rgb565[1] = { 0x07E0 };
+    glDrawPixels(1, 1, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, rgb565);
+    CHECK(pixelNear(70, 20, 0, 255, 0, 255));
+    // Rows of 8 bytes (alignment 8), each starting with a skipped pixel: red, then blue
+    const GLubyte rows2[16] = { 1, 2, 3, 255, 0, 0, 9, 9,  4, 5, 6, 0, 0, 255, 9, 9 };
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 8);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 1);
+    glRasterPos2i(80, 20);
+    glDrawPixels(1, 2, GL_RGB, GL_UNSIGNED_BYTE, rows2);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    CHECK(pixelNear(80, 20, 255, 0, 0, 255) && pixelNear(80, 21, 0, 0, 255, 255));
+
+    // More than one tile (256 pixels): a 300 x 1 ramp
+    GLubyte *ramp = malloc(300*3);
+    for (int i = 0; i < 300; i++) { ramp[3*i] = (GLubyte)(i & 0xFF); ramp[3*i + 1] = (GLubyte)(i >> 8); ramp[3*i + 2] = 7; }
+    glRasterPos2i(10, 30);
+    glDrawPixels(300, 1, GL_RGB, GL_UNSIGNED_BYTE, ramp);
+    free(ramp);
+    CHECK(pixelNear(10, 30, 0, 0, 7, 255) && pixelNear(265, 30, 255, 0, 7, 255) && pixelNear(266, 30, 0, 1, 7, 255));
+    CHECK(pixelNear(309, 30, 43, 1, 7, 255) && pixelNear(310, 30, 0, 0, 0, 0));
+
+    // Partly off screen
+    glRasterPos2i(398, 20);
+    glDrawPixels(2, 2, GL_RGBA, GL_UNSIGNED_BYTE, image);
+    CHECK(pixelNear(399, 21, 255, 255, 255, 128));
+
+    // Fragment operations: blending, depth test with the raster depth (cleared to 0.5), scissor
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    glRasterPos2i(20, 20);
+    glDrawPixels(1, 1, GL_RGBA, GL_UNSIGNED_BYTE, image + 4);      // Green onto red
+    glDisable(GL_BLEND);
+    CHECK(pixelNear(20, 20, 255, 255, 0, 255));
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glRasterPos3f(100.0f, 20.0f, -0.5f);       // Window depth 0.75: behind
+    glDrawPixels(1, 1, GL_RGBA, GL_UNSIGNED_BYTE, image);
+    glRasterPos3f(101.0f, 20.0f, 0.5f);        // 0.25: in front
+    glDrawPixels(1, 1, GL_RGBA, GL_UNSIGNED_BYTE, image);
+    glDisable(GL_DEPTH_TEST);
+    CHECK(pixelNear(100, 20, 0, 0, 0, 0) && pixelNear(101, 20, 255, 0, 0, 255) && depthNear(101, 20, 0.25f));
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(111, 0, 10, 240);
+    glRasterPos2i(110, 20);
+    glDrawPixels(2, 1, GL_RGBA, GL_UNSIGNED_BYTE, image);
+    glDisable(GL_SCISSOR_TEST);
+    CHECK(pixelNear(110, 20, 0, 0, 0, 0) && pixelNear(111, 20, 0, 255, 0, 255));
+
+    // Depth images: written with the depth test (color untouched), stencil images directly. Runs of 8 x 4 pixels per
+    // value: Azahar's upscaled readbacks mix neighboring pixels
+    GLfloat depths[64], depths2[64];
+    GLubyte stencils[64];
+    for (int i = 0; i < 64; i++)
+    {
+        depths[i] = (i % 16 < 8)? 0.25f : 0.75f;
+        depths2[i] = 0.5f;
+        stencils[i] = (i % 16 < 8)? 0x3C : 0xFF;
+    }
+    const GLubyte stencilBits[16] = { 0xFF, 0, 0, 0,  0xFF, 0, 0, 0,  0xFF, 0, 0, 0,  0xFF, 0, 0, 0 };   // Rows of 4 bytes
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_ALWAYS);
+    glRasterPos2i(120, 20);
+    glDrawPixels(16, 4, GL_DEPTH_COMPONENT, GL_FLOAT, depths);
+    CHECK(depthNear(123, 21, 0.25f) && depthNear(131, 21, 0.75f) && depthNear(145, 21, 0.5f));
+    glDepthFunc(GL_LESS);
+    glDrawPixels(16, 4, GL_DEPTH_COMPONENT, GL_FLOAT, depths2);
+    CHECK(depthNear(123, 21, 0.25f) && depthNear(131, 21, 0.5f) && pixelNear(123, 21, 0, 0, 0, 0));
+    glDisable(GL_DEPTH_TEST);
+    glDrawPixels(16, 4, GL_DEPTH_COMPONENT, GL_FLOAT, depths);      // Depth test off: depth not written
+    CHECK(depthNear(131, 21, 0.5f));
+    glStencilMask(0x0F);
+    glDrawPixels(16, 4, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, stencils);
+    glStencilMask(0xFF);
+    CHECK(stencilAt(123, 21) == 0x0C && stencilAt(131, 21) == 0x0F && stencilAt(145, 21) == 0);
+    glRasterPos2i(150, 20);
+    glDrawPixels(16, 4, GL_STENCIL_INDEX, GL_BITMAP, stencilBits);
+    CHECK(stencilAt(153, 21) == 1 && stencilAt(161, 21) == 0);
+    CHECK(depthNear(153, 21, 0.5f));            // Stencil images leave depth
+
+    // glCopyPixels: color (with zoom), depth, stencil
+    glRasterPos2i(140, 40);
+    glPixelZoom(2.0f, 1.0f);
+    glCopyPixels(20, 20, 2, 2, GL_COLOR);
+    glPixelZoom(1.0f, 1.0f);
+    CHECK(pixelNear(141, 40, 255, 255, 0, 255) && pixelNear(142, 40, 0, 255, 0, 255) && pixelNear(143, 41, 255, 255, 255, 128));
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_ALWAYS);
+    glRasterPos2i(170, 20);
+    glCopyPixels(120, 20, 16, 4, GL_DEPTH);
+    glDisable(GL_DEPTH_TEST);
+    glCopyPixels(120, 20, 16, 4, GL_STENCIL);
+    CHECK(depthNear(173, 21, 0.25f) && depthNear(181, 21, 0.5f) && stencilAt(173, 21) == 0x0C && stencilAt(181, 21) == 0x0F);
+
+    // glBitmap: the raster color where bits are set, at floor(raster - origin); the raster position moves
+    const GLubyte bits[2] = { 0xA5, 0x0F };     // Bottom row 10100101, top row 00001111
+    glColor3ub(255, 0, 0);
+    glRasterPos2f(150.5f, 60.5f);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glBitmap(8, 2, 0.5f, 0.0f, 10.0f, -1.0f, bits);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    CHECK(pixelNear(150, 60, 255, 0, 0, 255) && pixelNear(151, 60, 0, 0, 0, 0) && pixelNear(152, 60, 255, 0, 0, 255));
+    CHECK(pixelNear(157, 60, 255, 0, 0, 255) && pixelNear(153, 61, 0, 0, 0, 0) && pixelNear(154, 61, 255, 0, 0, 255));
+    glGetFloatv(GL_CURRENT_RASTER_POSITION, f);
+    CHECK(near(f[0], 160.5) && near(f[1], 59.5));
+    glPixelStorei(GL_UNPACK_LSB_FIRST, GL_TRUE);
+    glColor4ub(0, 0, 255, 0);                   // Alpha 0 is written too
+    glRasterPos2i(170, 60);
+    glBitmap(8, 1, 0.0f, 0.0f, 0.0f, 0.0f, bits + 1);    // LSB first: 11110000
+    glPixelStorei(GL_UNPACK_LSB_FIRST, GL_FALSE);
+    CHECK(pixelNear(170, 60, 0, 0, 255, 0) && pixelNear(173, 60, 0, 0, 255, 0) && pixelNear(174, 60, 0, 0, 0, 0));
+    glEnable(GL_ALPHA_TEST);                    // On the raster alpha
+    glAlphaFunc(GL_GREATER, 0.5f);
+    glColor4ub(0, 255, 0, 100);
+    glRasterPos2i(180, 60);
+    glBitmap(8, 1, 0.0f, 0.0f, 0.0f, 0.0f, bits);
+    glColor4ub(0, 255, 0, 200);
+    glRasterPos2i(190, 60);
+    glBitmap(8, 1, 0.0f, 0.0f, 0.0f, 0.0f, bits);
+    glDisable(GL_ALPHA_TEST);
+    CHECK(pixelNear(180, 60, 0, 0, 0, 0) && pixelNear(190, 60, 0, 255, 0, 200) && pixelNear(191, 60, 0, 0, 0, 0));
+    glBitmap(0, 0, 0.0f, 0.0f, 5.0f, 0.0f, NULL);     // Only moves
+    glGetFloatv(GL_CURRENT_RASTER_POSITION, f);
+    CHECK(near(f[0], 195.0));
+    glRasterPos2i(-1, 0);                       // Invalid: nothing drawn, no move
+    glBitmap(8, 1, 0.0f, 0.0f, 5.0f, 0.0f, bits);
+    glGetFloatv(GL_CURRENT_RASTER_POSITION, f);
+    CHECK(near(f[0], 195.0));
+
+    // Attribute groups: raster position in GL_CURRENT_BIT, zoom in GL_PIXEL_MODE_BIT
+    glRasterPos2i(1, 2);
+    glPixelZoom(3.0f, 4.0f);
+    glPushAttrib(GL_CURRENT_BIT | GL_PIXEL_MODE_BIT);
+    glRasterPos2i(5, 6);
+    glPixelZoom(1.0f, 1.0f);
+    glPopAttrib();
+    glGetFloatv(GL_CURRENT_RASTER_POSITION, f);
+    glGetFloatv(GL_ZOOM_Y, f + 2);
+    CHECK(near(f[0], 1.0) && near(f[1], 2.0) && f[2] == 4.0f);
+    glPixelZoom(1.0f, 1.0f);
+
+    // Display lists: images are copied with the unpack state of glNewList time
+    GLuint list = glGenLists(1);
+    GLubyte listImage[6] = { 255, 0, 255,  0, 255, 0 }, listBits[1] = { 0xC0 };
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 1);
+    glNewList(list, GL_COMPILE);
+    glRasterPos2i(200, 20);
+    glDrawPixels(1, 1, GL_RGB, GL_UNSIGNED_BYTE, listImage);         // Skip 1: green
+    glPixelZoom(1.0f, 2.0f);
+    glColor3ub(255, 255, 0);
+    glRasterPos2i(210, 20);
+    glBitmap(3, 1, 0.0f, 0.0f, 1.0f, 0.0f, listBits);   // Skip 1: bits 1, 0, 0 -> one pixel set
+    glCopyPixels(200, 20, 1, 1, GL_COLOR);      // At (211, 20) after the bitmap's move, 1 x 2
+    glEndList();
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    memset(listImage, 0, sizeof(listImage));
+    listBits[0] = 0;
+    glPixelZoom(1.0f, 1.0f);
+    glCallList(list);
+    glDeleteLists(list, 1);
+    glGetFloatv(GL_ZOOM_Y, f);
+    CHECK(f[0] == 2.0f);
+    glPixelZoom(1.0f, 1.0f);
+    CHECK(pixelNear(200, 20, 0, 255, 0, 255) && pixelNear(210, 20, 255, 255, 0, 255) && pixelNear(210, 21, 0, 0, 0, 0));
+    CHECK(pixelNear(211, 20, 0, 255, 0, 255) && pixelNear(211, 21, 0, 255, 0, 255) && pixelNear(212, 20, 0, 0, 0, 0));
+
+    // Errors
+    glDrawPixels(-1, 1, GL_RGBA, GL_UNSIGNED_BYTE, image);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glDrawPixels(1, 1, GL_RGBA, GL_BITMAP, image);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glDrawPixels(1, 1, GL_DEPTH_COMPONENT, GL_BITMAP, image);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glDrawPixels(1, 1, GL_RGBA, GL_UNSIGNED_SHORT_5_6_5, image);
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+    glDrawPixels(1, 1, 0x1234, GL_UNSIGNED_BYTE, image);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glCopyPixels(0, 0, 1, 1, GL_RGBA);
+    CHECK(glGetError() == GL_INVALID_ENUM);
+    glCopyPixels(0, 0, -1, 1, GL_COLOR);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glBitmap(-1, 1, 0.0f, 0.0f, 0.0f, 0.0f, bits);
+    CHECK(glGetError() == GL_INVALID_VALUE);
+    glBegin(GL_POINTS);
+    glRasterPos2i(0, 0);
+    glEnd();
+    CHECK(glGetError() == GL_INVALID_OPERATION);
+
+    glPopAttrib();
+    glGetFloatv(GL_CURRENT_RASTER_COLOR, f);
+    CHECK(f[0] == 1.0f && f[3] == 1.0f && glGetError() == GL_NO_ERROR);
+}
+
 static void testDisplayLists(void)
 {
     glPushAttrib(GL_ALL_ATTRIB_BITS);
@@ -2012,6 +2321,7 @@ int main(void)
     testTexFormats();
     test1D();
     testColorBuffers();
+    testPixels();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

@@ -86,7 +86,8 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
 - `primitives`: every primitive mode with culling on to catch wrong winding; page 2: flat shading, polygon modes,
   edge flags, polygon offset, depth range
 - `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks, display lists,
-  texgen, texture formats, 1D textures, color buffers (rendered and read back) and the ES API; green screen = all passed
+  texgen, texture formats, 1D textures, color buffers, pixel drawing (rendered and read back) and the ES API; green
+  screen = all passed
 - `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
 - `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
   page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps, page 5: compressed textures (paletted, ETC1)
@@ -104,6 +105,9 @@ cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
   `glCallList`; A switches to immediate mode, which looks identical
 - `texgen`: texture coordinate generation on tori without texcoords: `GL_SPHERE_MAP` (chrome from a generated
   environment map), `GL_OBJECT_LINEAR` and `GL_EYE_LINEAR` stripes; A scrolls the stripes with the texture matrix
+- `pixels`: drawing pixels: text from `glBitmap` display lists (the console font), a label at a cube corner
+  (`glRasterPos` in 3D, depth tested), the cube's reflection by `glCopyPixels` with zoom 1 x -0.5, an animated
+  `glDrawPixels` image with a pulsing `glPixelZoom` and its mirror image (zoom -1)
 
 Every example shows the CPU and GPU time of the last frame, the command buffer usage and the frames per second
 (averaged over one second) in rows 2-5 of the bottom screen (`C3D_GetProcessingTime`, `C3D_GetDrawingTime`,
@@ -174,6 +178,10 @@ plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.js
   waits for the GPU to finish the draws so far
 - `glCopyTexImage2D` / `glCopyTexSubImage2D` (render to texture): internal formats alpha, luminance(-alpha), RGB, RGBA;
   like `glReadPixels` they wait for the GPU, draws before the copy keep the old texels
+- Drawing pixels: `glRasterPos*` (all variants; clipped, lit, queries), `glBitmap`, `glDrawPixels` (color in all GL 1.1
+  formats and types, depth, stencil, `GL_BITMAP` stencil), `glCopyPixels` (color, depth, stencil), `glPixelZoom`
+  (also negative); color goes through all per-fragment operations, texturing does not apply. Depth and stencil
+  images are written on the CPU and wait for the GPU; their fragments' raster color is not written
 - Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
 
 The full list of functions is `include/GL/gl.h`.
@@ -225,6 +233,12 @@ below 8x8 are accepted but not sampled (PICA stops at 8x8).
   compared to the other formats, whose rows are flipped on upload; the texture matrix flips t for them instead.
 - Textures deleted during a frame are freed after the GPU finished that frame.
 - One render target per screen; switching flushes the batch and changes the target within the same frame.
+- `glDrawPixels` and `glBitmap` draw quads in window coordinates with the image as a texture (in per-frame linear
+  memory, `GL_NEAREST`, in tiles of up to 256x256; zoom is the quad's size). Bitmaps are packed into one atlas per frame,
+  so a line of text is one batch; fragments outside the bitmap are discarded by the alpha test (the GL alpha test on the
+  raster color is decided on the CPU). `glCopyPixels(GL_COLOR)` queues a GX texture copy of the color buffer between the
+  draws before and after it (the color buffer is tiled like a texture), so it does not wait for the GPU. PICA cannot
+  output a per-pixel depth: depth and stencil images are read, tested and written back on the CPU.
 - Display lists store each command with its arguments; client memory is copied at compile time (texture images
   tightly packed, vertex array elements as the immediate mode calls they stand for). `glCallList` runs the commands
   through the same entry points, so a list renders exactly like the calls it recorded; it costs about as much CPU

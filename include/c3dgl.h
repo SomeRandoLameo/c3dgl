@@ -35,6 +35,7 @@
 //   - Texture coordinate generation (glTexGen: object linear, eye linear, sphere map), per vertex on the CPU
 //   - GL_FLAT, glPolygonMode (with edge flags), glPolygonOffset, glDepthRange
 //   - Pixel store modes, texture borders, proxy textures, glGetTexLevelParameter
+//   - glRasterPos, glBitmap, glDrawPixels, glCopyPixels, glPixelZoom (color on the GPU, depth/stencil on the CPU)
 //   - GLU: Mesa GLU as c3dgl::glu (<GL/glu.h>), see README
 //   - Buffer objects (VBOs) for vertex arrays and indices
 //   - OpenGL ES 1.1: <GLES/gl.h>, fixed-point x functions, glOrthof/glFrustumf/... for the implemented features
