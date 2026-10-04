@@ -128,7 +128,8 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
     a cache of generated texcoords for shared mesh vertices (like the lit cache) would cut that for indexed meshes
 * [x] `glPrioritizeTextures`, `glAreTexturesResident`, `GL_TEXTURE_PRIORITY`, `GL_TEXTURE_RESIDENT` (GL): priorities
   stored, every texture is resident. `GL_TEXTURE_BORDER_COLOR` stored only (no border texels)
-* [ ] Default texture objects: texture 0 cannot be loaded or used (GL 1.0 style code without `glBindTexture`)
+* [x] Default texture objects: texture 0 of `GL_TEXTURE_1D` and `GL_TEXTURE_2D` is a texture of its own (GL 1.0 style
+  code without `glBindTexture`), shared by all units; deleting a bound texture falls back to it. Verified in Azahar (api checks)
 * [ ] `GL_REPEAT` on NPOT textures samples the padding
 
 ## Texture Environment
@@ -289,7 +290,6 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [ ] Smooth points/lines (GL)
                                       [~] Pixel ops: pixel maps / transfer (GL)
                                       [ ] Accumulation buffer (GL)
-                                      [ ] Default texture objects (GL)
 [ ] Complete state queries            [ ] Stipple (GL)
 ```
 
@@ -311,5 +311,5 @@ Target: everything in desktop OpenGL 1.1 and in OpenGL ES 1.1 (common profile). 
 [x] Compressed textures: paletted + ETC1 (ES) [x] Texture copies (glCopyTexImage2D)
 [x] Logic ops, sample coverage state  [x] Display lists (GL)
 [x] Texture coordinate generation (GL) [x] 1D textures, all internal formats (GL)
-[x] glDrawBuffer / glReadBuffer (GL)
+[x] glDrawBuffer / glReadBuffer (GL)   [x] Default texture objects (GL)
 ```

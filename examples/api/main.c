@@ -664,9 +664,6 @@ static void testCopyTexImage(void)
     glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_ETC1_RGB8_OES, 4, 4, 0, 8, etc1);
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 4, 4);
     CHECK(glGetError() == GL_INVALID_OPERATION);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 8, 8, 0);
-    CHECK(glGetError() == GL_INVALID_OPERATION);
 
     glDeleteTextures(2, tex);
     glPopAttrib();
@@ -2286,6 +2283,92 @@ static void printStats(void)
     printf("\x1b[u");
 }
 
+// Texture 0 of each target is a texture of its own (GL 1.0 style code without glBindTexture)
+static void testDefaultTextures(void)
+{
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, 400.0, 0.0, 240.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    GLint v = -1;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &v);
+    CHECK(v == 0);
+    CHECK(glIsTexture(0) == GL_FALSE);
+
+    // Defaults of the unloaded texture, then a 2x2 image: red, green / blue, white
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &v);
+    CHECK(v == GL_NEAREST_MIPMAP_LINEAR);
+    static const GLubyte rgba[16] = { 255, 0, 0, 255,  0, 255, 0, 255,  0, 0, 255, 255,  255, 255, 255, 255 };
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v);
+    CHECK(v == 2);
+
+    // The 1D default is separate from the 2D one
+    static const GLubyte lum[4] = { 10, 20, 30, 40 };
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_LUMINANCE, 4, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, lum);
+    glGetTexLevelParameteriv(GL_TEXTURE_1D, 0, GL_TEXTURE_WIDTH, &v);
+    CHECK(v == 4);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v);
+    CHECK(v == 2);
+    glGetTexParameteriv(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, &v);
+    CHECK(v == GL_NEAREST_MIPMAP_LINEAR);
+
+    // Deleting a bound texture binds texture 0 again, which keeps its image and parameters
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v);
+    CHECK(v == 0);
+    glDeleteTextures(1, &tex);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &v);
+    CHECK(v == 0);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v);
+    CHECK(v == 2);
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &v);
+    CHECK(v == GL_NEAREST);
+
+    // GL_TEXTURE_BIT saves and restores its parameters
+    glPushAttrib(GL_TEXTURE_BIT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+    glPopAttrib();
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &v);
+    CHECK(v == GL_REPEAT);
+
+    // Drawn with it: one 4x4 block per texel
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    glEnable(GL_TEXTURE_2D);
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.0f, 0.0f); glVertex2i(300, 100);
+    glTexCoord2f(1.0f, 0.0f); glVertex2i(308, 100);
+    glTexCoord2f(1.0f, 1.0f); glVertex2i(308, 108);
+    glTexCoord2f(0.0f, 1.0f); glVertex2i(300, 108);
+    glEnd();
+    glDisable(GL_TEXTURE_2D);
+    GLubyte p[16];
+    glReadPixels(301, 101, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    glReadPixels(306, 101, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p + 4);
+    glReadPixels(301, 106, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p + 8);
+    glReadPixels(306, 106, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p + 12);
+    CHECK(p[0] == 255 && p[1] == 0 && p[2] == 0);
+    CHECK(p[4] == 0 && p[5] == 255 && p[6] == 0);
+    CHECK(p[8] == 0 && p[9] == 0 && p[10] == 255);
+    CHECK(p[12] == 255 && p[13] == 255 && p[14] == 255);
+
+    // Copies into it
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 300, 100, 8, 8, 0);
+    CHECK(glGetError() == GL_NO_ERROR);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &v);
+    CHECK(v == 8);
+
+    glPopAttrib();
+}
+
 int main(void)
 {
     gfxInitDefault();
@@ -2322,6 +2405,7 @@ int main(void)
     test1D();
     testColorBuffers();
     testPixels();
+    testDefaultTextures();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
 

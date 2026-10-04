@@ -54,6 +54,9 @@
 //----------------------------------------------------------------------------------
 #define C3DGL_MAX_VERTICES      (64*1024)   // Per frame, 24 bytes each
 #define C3DGL_MAX_TEXTURES      512         // Texture ids 1..C3DGL_MAX_TEXTURES-1
+#define DEFAULT_TEXTURE_2D      C3DGL_MAX_TEXTURES          // Slots of the default textures (bound as texture 0)
+#define DEFAULT_TEXTURE_1D      (C3DGL_MAX_TEXTURES + 1)
+#define TEXTURE_SLOTS           (C3DGL_MAX_TEXTURES + 2)
 #define C3DGL_MATRIX_STACK      32
 #define C3DGL_TEXTURE_UNITS     3           // PICA texture units 0..2 (unit 3 is procedural only)
 #define C3DGL_ATTRIB_STACK      16          // glPushAttrib / glPushClientAttrib depth (GL minimum)
@@ -207,7 +210,7 @@ typedef struct {
 } TexGenTransform;
 
 typedef struct {
-    GLuint texture;             // 0: unit not used (set in prepareDraw)
+    GLuint texture;             // Slot in gl.textures, 0: unit not used (set in prepareDraw)
     TexEnvState env;            // Zeroed for unused units, so they don't split batches
 } TexUnitState;
 
@@ -549,7 +552,7 @@ static struct {
     u32 litCacheGen;                    // Valid entries of litCache, see lightVertexCached()
     u32 litCacheSerial;                 // matrixSerial the entries were lit with
 
-    Texture textures[C3DGL_MAX_TEXTURES];
+    Texture textures[TEXTURE_SLOTS];    // Index: texture id, or DEFAULT_TEXTURE_1D/2D for texture 0 of a target
 
     // Textures deleted during a frame are freed once the GPU is done with that frame
     C3D_Tex *deferredDeletes;
@@ -577,6 +580,7 @@ static void listSaveImage(ListCommand command, const GLint args[8], GLsizei widt
 static void listArrayElement(int index);
 static void listPixels(const ListWord *w, bool bitmap);
 static void setRasterPos(float x, float y, float z, float w);
+static void initTexture(Texture *t);
 
 // While a display list is compiled: record the command instead of executing it, and return from the gl* function
 #define LIST_SAVE(command, ...) do { if (gl.listCompiling) { listSave(LIST_##command, __VA_ARGS__); return; } } while (0)
@@ -1354,9 +1358,15 @@ static void applyState(const DrawState *s, const DrawState *prev)
 
 #undef CHANGED
 
-static bool textureValid(GLuint id)
+static bool textureValid(GLuint slot)
 {
-    return (id > 0) && (id < C3DGL_MAX_TEXTURES) && gl.textures[id].loaded;
+    return (slot > 0) && (slot < TEXTURE_SLOTS) && gl.textures[slot].loaded;
+}
+
+// Slot in gl.textures of a texture bound to target: its id, texture 0 is the target's default texture
+static GLuint textureSlot(GLenum target, GLuint id)
+{
+    return id? id : (target == GL_TEXTURE_1D)? DEFAULT_TEXTURE_1D : DEFAULT_TEXTURE_2D;
 }
 
 // Start a new batch if key differs from the applied state. memcmp: keys are built with zeroed padding
@@ -1386,8 +1396,9 @@ static void drawKey(DrawState *out, bool clipSpace, bool points)
     {
         TexUnitState *u = &key.units[unit];
         // GL_TEXTURE_2D takes precedence over GL_TEXTURE_1D
-        GLuint id = gl.texture2D[unit]? gl.boundTexture[unit] : gl.texture1D[unit]? gl.boundTexture1D[unit] : 0;
-        u->texture = textureValid(id)? id : 0;
+        GLuint slot = gl.texture2D[unit]? textureSlot(GL_TEXTURE_2D, gl.boundTexture[unit]) :
+                      gl.texture1D[unit]? textureSlot(GL_TEXTURE_1D, gl.boundTexture1D[unit]) : 0;
+        u->texture = textureValid(slot)? slot : 0;
         if (u->texture && mipmapFilter(gl.textures[u->texture].minFilter) && !gl.textures[u->texture].complete)
         {
             // GL: a mipmap filter without all levels disables the unit
@@ -2502,6 +2513,12 @@ bool c3dglInit(void)
 
     for (int i = 0; i < 2 + C3DGL_TEXTURE_UNITS; i++) mat4Identity(&gl.stack[i][0]);
 
+    // Texture 0 of each target (GL 1.0 style code without glBindTexture)
+    initTexture(&gl.textures[DEFAULT_TEXTURE_1D]);
+    gl.textures[DEFAULT_TEXTURE_1D].target = GL_TEXTURE_1D;
+    initTexture(&gl.textures[DEFAULT_TEXTURE_2D]);
+    gl.textures[DEFAULT_TEXTURE_2D].target = GL_TEXTURE_2D;
+
     // Evaluator defaults: grids of 1 segment over [0, 1]
     gl.grid1n = gl.grid2un = gl.grid2vn = 1;
     gl.grid1u2 = gl.grid2u2 = gl.grid2v2 = 1.0f;
@@ -2515,7 +2532,7 @@ void c3dglClose(void)
 {
     if (gl.frameActive) { flushVertexCache(); C3D_FrameEnd(0); gl.frameActive = false; }
 
-    for (int i = 1; i < C3DGL_MAX_TEXTURES; i++) if (gl.textures[i].loaded) C3D_TexDelete(&gl.textures[i].tex);
+    for (int i = 1; i < TEXTURE_SLOTS; i++) if (gl.textures[i].loaded) C3D_TexDelete(&gl.textures[i].tex);
     processDeferredDeletes();
     free(gl.deferredDeletes);
     for (int i = 0; i < gl.pixelChunkCount; i++) linearFree(gl.pixelChunks[i].data);
@@ -4867,14 +4884,14 @@ static GLuint *textureBinding(GLenum target)
 static Texture *boundTexture(GLenum target)
 {
     GLuint *binding = textureBinding(target);
-    if ((binding == NULL) || (*binding == 0) || (*binding >= C3DGL_MAX_TEXTURES)) return NULL;
-    return &gl.textures[*binding];
+    if ((binding == NULL) || (*binding >= C3DGL_MAX_TEXTURES)) return NULL;
+    return &gl.textures[textureSlot(target, *binding)];
 }
 
-// Error of a texture call on target that has no texture: unknown target, or no texture bound to it
+// Error of a texture call on target that has no texture: unknown target (every target has its default texture)
 static GLenum targetError(GLenum target) { return textureBinding(target)? GL_INVALID_OPERATION : GL_INVALID_ENUM; }
 
-static GLuint textureId(const Texture *t) { return (GLuint)(t - gl.textures); }
+static GLuint textureSlotOf(const Texture *t) { return (GLuint)(t - gl.textures); }
 
 // Size of a mipmap level (GL: halved, at least 1)
 static int levelSize(int size, int level) { return (size >> level)? (size >> level) : 1; }
@@ -4898,10 +4915,10 @@ static void replicateRows(Texture *t, int level, int x0, int w)
 
 // Texture about to change: submit pending vertices that use it and rebind it for the next draw
 // (C3D_TexBind() only keeps a pointer, changes are not picked up otherwise)
-static void textureModified(GLuint id)
+static void textureModified(GLuint slot)
 {
     bool used = false;
-    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) used = used || (gl.batch.units[unit].texture == id);
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) used = used || (gl.batch.units[unit].texture == slot);
     if (gl.batchValid && used)
     {
         flush();
@@ -5359,7 +5376,7 @@ static void setTexParameter(GLenum target, GLenum pname, const GLfloat *v)
             t->generateMipmap = (param != 0);
             if (t->generateMipmap && t->loaded)
             {
-                textureModified(textureId(t));
+                textureModified(textureSlotOf(t));
                 generateMipmaps(t);
                 flushTexture(t);
             }
@@ -5371,7 +5388,7 @@ static void setTexParameter(GLenum target, GLenum pname, const GLfloat *v)
 
     if (t->loaded)
     {
-        textureModified(textureId(t));
+        textureModified(textureSlotOf(t));
         applyTextureParams(t);
     }
 }
@@ -5536,7 +5553,7 @@ static Texture *defineTexImage(GLenum target, GLint level, GLint internalformat,
     }
 
     TexLevel lv = { true, imageWidth, imageHeight, border, internalformat, base, f->format };
-    textureModified(textureId(t));
+    textureModified(textureSlotOf(t));
 
     if (level > 0)
     {
@@ -5897,7 +5914,7 @@ static void texSubImage(GLenum target, GLint level, GLint xoffset, GLint yoffset
     }
     if (pixels == NULL) return;
 
-    textureModified(textureId(t));
+    textureModified(textureSlotOf(t));
     if (level < t->levels) loadTexels(t, level, xoffset, yoffset, width, height, format, type, pixels, &gl.unpack, lv->base);
     if ((level == 0) && t->generateMipmap) generateMipmaps(t);
     flushTexture(t);
@@ -6615,9 +6632,9 @@ void glPushAttrib(GLbitfield mask)
         GLuint id = (unit < C3DGL_TEXTURE_UNITS)? gl.boundTexture1D[unit] : gl.boundTexture[unit - C3DGL_TEXTURE_UNITS];
         SavedTexParams *p = &a->texParams[unit/C3DGL_TEXTURE_UNITS][unit % C3DGL_TEXTURE_UNITS];
         p->id = id;
-        if ((id > 0) && (id < C3DGL_MAX_TEXTURES))
+        if (id < C3DGL_MAX_TEXTURES)
         {
-            const Texture *t = &gl.textures[id];
+            const Texture *t = &gl.textures[textureSlot((unit < C3DGL_TEXTURE_UNITS)? GL_TEXTURE_1D : GL_TEXTURE_2D, id)];
             p->minFilter = t->minFilter;
             p->magFilter = t->magFilter;
             p->wrapS = t->wrapS;
@@ -6822,11 +6839,13 @@ void glPopAttrib(void)
         {
             // Textures deleted since the push are not bound again (nor recreated)
             const SavedTexParams *p = &a->texParams[unit/C3DGL_TEXTURE_UNITS][unit % C3DGL_TEXTURE_UNITS];
+            GLenum target = (unit < C3DGL_TEXTURE_UNITS)? GL_TEXTURE_1D : GL_TEXTURE_2D;
             GLuint *binding = (unit < C3DGL_TEXTURE_UNITS)? &gl.boundTexture1D[unit] : &gl.boundTexture[unit - C3DGL_TEXTURE_UNITS];
             *binding = (p->id < C3DGL_MAX_TEXTURES) && gl.textures[p->id].used? p->id : 0;
-            if ((p->id == 0) || (*binding != p->id)) continue;
+            if (*binding != p->id) continue;
 
-            Texture *t = &gl.textures[p->id];
+            GLuint slot = textureSlot(target, p->id);
+            Texture *t = &gl.textures[slot];
             t->minFilter = p->minFilter;
             t->magFilter = p->magFilter;
             t->wrapS = p->wrapS;
@@ -6836,7 +6855,7 @@ void glPopAttrib(void)
             memcpy(t->borderColor, p->borderColor, sizeof(t->borderColor));
             if (t->loaded)
             {
-                textureModified(p->id);
+                textureModified(slot);
                 applyTextureParams(t);
             }
         }
