@@ -5088,6 +5088,130 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
     endPrimitive();
 }
 
+//----------------------------------------------------------------------------------
+// Fast path for indexed triangles
+//----------------------------------------------------------------------------------
+// Most of a frame's geometry (chunk meshes, parts of the GUI) is drawn as indexed
+// triangles with one shared vertex layout: GL_SHORT position and texcoords plus a
+// GL_UNSIGNED_BYTE color. With no lighting, texgen, clip planes or polygon modes the
+// generic path costs, per index, three readArray() calls (each a per component type
+// switch and a float conversion), a whole Vertex copy, primitive assembly and a second
+// Vertex copy - far and away the largest CPU cost of a frame. For that layout the
+// vertices are decoded straight into the GPU vertex buffer instead; anything unusual
+// falls back to the generic loop.
+typedef struct {
+    float pos[3];
+    float tex[3];
+    u8 color[4];
+    float depthBias;
+} GpuVertex;                        // First GPU_VERTEX_SIZE bytes of a Vertex
+
+static u8 byteColor[256];           // colorByte(i / 255.0f), the normalized byte color
+static bool byteColorReady = false;
+
+static void initByteColor(void)
+{
+    if (byteColorReady) return;
+    for (int i = 0; i < 256; i++) byteColor[i] = colorByte((float)i/255.0f);
+    byteColorReady = true;
+}
+
+static inline s16 loadS16(const u8 *p)
+{
+    s16 v;
+    memcpy(&v, p, 2);
+    return v;
+}
+
+// Every element of `a` up to `maxIndex` has to be inside its buffer object
+// (the generic path skips single vertices that are not: give up on the call instead)
+static bool arrayInRange(const ClientArray *a, int maxIndex)
+{
+    if (a->buffer == 0) return true;
+    size_t elem = (size_t)a->size*typeSize(a->type);
+    size_t stride = a->stride? (size_t)a->stride : elem;
+    return bufferRange(a->buffer, a->pointer, (size_t)maxIndex*stride, elem) != NULL;
+}
+
+static const char *fastPathOff = NULL;
+static void fastPathReject(const char *why)
+{
+    if (fastPathOff == NULL) { fastPathOff = why; LOG("Indexed fast path unused: %s\n", why); }
+}
+
+// Returns true if the call was submitted
+static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, int count)
+{
+    if ((mode != GL_TRIANGLES) || (type != GL_UNSIGNED_SHORT)) { fastPathReject("mode/type"); return false; }
+    if (gl.renderMode != GL_RENDER) { fastPathReject("render mode"); return false; }
+    if (gl.lightingEnabled) { fastPathReject("lighting"); return false; }
+    if (gl.texGen[0].enabled || gl.texGen[1].enabled || gl.texGen[2].enabled) { fastPathReject("texgen"); return false; }
+    if (gl.clipEnabled) { fastPathReject("clip"); return false; }
+    if ((gl.polygonMode[0] != GL_FILL) || (gl.polygonMode[1] != GL_FILL) || gl.offsetFill) { fastPathReject("polygon mode"); return false; }
+    if (gl.batch.units[1].texture || gl.batch.units[2].texture) { fastPathReject("units 1/2 texture"); return false; }
+    if (arrayActive(ARRAY_TEXCOORD1) || arrayActive(ARRAY_TEXCOORD2)) { fastPathReject("texcoord 1/2 array"); return false; }
+    if (arrayActive(ARRAY_NORMAL) || arrayActive(ARRAY_EDGEFLAG) || arrayActive(ARRAY_POINTSIZE)) { fastPathReject("normal/edge/pointsize array"); return false; }
+    if (!arrayActive(ARRAY_VERTEX) || !arrayActive(ARRAY_TEXCOORD0) || !arrayActive(ARRAY_COLOR)) { fastPathReject("missing array"); return false; }
+    if (sizeof(GpuVertex) != GPU_VERTEX_SIZE) { fastPathReject("vertex layout"); return false; }
+
+    const ClientArray *av = &gl.arrays[ARRAY_VERTEX];
+    const ClientArray *at = &gl.arrays[ARRAY_TEXCOORD0];
+    const ClientArray *ac = &gl.arrays[ARRAY_COLOR];
+    if ((av->type != GL_SHORT) || (av->size != 3)) { fastPathReject("vertex array type"); return false; }
+    if ((at->type != GL_SHORT) || (at->size != 2)) { fastPathReject("texcoord array type"); return false; }
+    if ((ac->type != GL_UNSIGNED_BYTE) || (ac->size != 4)) { fastPathReject("color array type"); return false; }
+
+    int n = count - (count % 3);
+    if (n <= 0) return true;
+    if (gl.vertexCount + n > C3DGL_MAX_VERTICES) return false;      // The generic path drops what does not fit
+
+    const u16 *index = (const u16 *)data;
+    int maxIndex = 0;
+    for (int i = 0; i < n; i++) if (index[i] > maxIndex) maxIndex = index[i];
+    if (!arrayInRange(av, maxIndex) || !arrayInRange(at, maxIndex) || !arrayInRange(ac, maxIndex)) return false;
+
+    const u8 *vbase = bufferRange(av->buffer, av->pointer, 0, 0);
+    const u8 *tbase = bufferRange(at->buffer, at->pointer, 0, 0);
+    const u8 *cbase = bufferRange(ac->buffer, ac->pointer, 0, 0);
+    if ((vbase == NULL) || (tbase == NULL) || (cbase == NULL)) return false;
+
+    const int vstride = av->stride? av->stride : 3*(int)sizeof(s16);
+    const int tstride = at->stride? at->stride : 2*(int)sizeof(s16);
+    const int cstride = ac->stride? ac->stride : 4;
+    const float depthBias = gl.current.depthBias;
+    const bool flat = (gl.shadeModel == GL_FLAT);
+
+    initByteColor();
+    u8 *out = gl.vbo + (size_t)gl.vertexCount*GPU_VERTEX_SIZE;
+    for (int i = 0; i < n; i += 3, out += 3*GPU_VERTEX_SIZE)
+    {
+        // GL_FLAT: the color of all three vertices comes from the provoking vertex,
+        // the last one of the triangle (GL 1.1 section 2.13.8)
+        const u8 *flatColor = flat? cbase + (size_t)index[i + 2]*cstride : NULL;
+        for (int k = 0; k < 3; k++)
+        {
+            const int v = index[i + k];
+            const u8 *pv = vbase + (size_t)v*vstride;
+            const u8 *pt = tbase + (size_t)v*tstride;
+            const u8 *pc = flat? flatColor : cbase + (size_t)v*cstride;
+            GpuVertex *g = (GpuVertex *)(out + (size_t)k*GPU_VERTEX_SIZE);
+            g->pos[0] = loadS16(pv);
+            g->pos[1] = loadS16(pv + 2);
+            g->pos[2] = loadS16(pv + 4);
+            g->tex[0] = loadS16(pt);
+            g->tex[1] = loadS16(pt + 2);
+            g->tex[2] = 1.0f;               // Size 2 texcoords leave q at 1
+            g->color[0] = byteColor[pc[0]];
+            g->color[1] = byteColor[pc[1]];
+            g->color[2] = byteColor[pc[2]];
+            g->color[3] = byteColor[pc[3]];
+            g->depthBias = depthBias;
+        }
+    }
+    gl.vertexCount += n;
+    return true;
+}
+
 void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices)
 {
     if ((type != GL_UNSIGNED_BYTE) && (type != GL_UNSIGNED_SHORT) && (type != GL_UNSIGNED_INT)) { setError(GL_INVALID_ENUM); return; }
@@ -5106,6 +5230,12 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indic
         glBegin(mode);
     }
     else if (!arraysReady() || !beginPrimitive(mode)) return;
+
+    if (!compile && indexedTriangleFastPath(mode, type, data, count))
+    {
+        endPrimitive();
+        return;
+    }
 
     for (int i = 0; i < count; i++)
     {
