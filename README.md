@@ -228,6 +228,15 @@ edges are exact (the padding holds the clamped or wrapped image), except for ETC
   setters, so code that binds and unbinds a texture around every quad still ends up in one draw call. Only the
   parts of the state that differ from the previous batch are sent to the GPU, and the vertex buffer is flushed
   from the CPU cache once before the command list is submitted, not per batch.
+- Static indexed VBOs with short positions/UVs and byte colors can retain their converted triangle vertices
+  in linear GPU memory. Cache hits avoid index scanning, conversion and copying each frame; matrices and
+  fragment state still use the normal draw-state pipeline. Both flat and smooth shading are preserved.
+  Buffer writes/deletion, index-buffer generations, layouts, ranges and baked vertex state invalidate the
+  expansion. Unsupported features use the existing pipeline. Cached storage is immutable until the GPU
+  finishes using it, including deletion/reuse within a frame.
+  `C3DGL_GPU_CACHE_BYTES` defaults to 4 MiB (define it on the library target; 0 disables caching). The budget
+  includes retired storage, only completed draws can be evicted, and optional allocation failure falls back
+  to the per-frame buffer. Texture/pixel allocation pressure reclaims caches after a GPU wait before retrying.
 - The PICA200 vertex shader (`shaders/c3dgl.v.pica`) applies `post * projection * modelview`, where `post`
   rotates to the 3DS screen orientation and maps depth to PICA's [-1, 0] range.
 - Strips, fans, quads and polygons are split into triangles on the CPU. Lines and points have no PICA

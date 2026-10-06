@@ -317,12 +317,33 @@ typedef struct {
     int capacity;
 } PolygonList;
 
-// Buffer object (VBO). Kept in normal memory: vertices are converted into the per-frame vertex buffer anyway
+// Optional immutable expansion of a static indexed VBO. Raw OpenGL storage remains
+// authoritative; unsupported state still uses the ordinary vertex pipeline.
+typedef struct GpuBufferCache {
+    struct GpuBufferCache *next;
+    u8 *data;
+    size_t bytes;
+    u32 drawnFrame;
+    u64 indexRevision;
+    size_t indexOffset;
+    int count;
+    ClientArray arrays[3];
+    GLenum shadeModel;
+    float depthBias;
+} GpuBufferCache;
+
+#ifndef C3DGL_GPU_CACHE_BYTES
+#define C3DGL_GPU_CACHE_BYTES (4u * 1024u * 1024u)
+#endif
+
+// Buffer object (VBO), with an optional GPU-ready triangle expansion.
 typedef struct {
     bool used;                  // Id handed out by glGenBuffers or created by glBindBuffer
     u8 *data;
     GLsizeiptr size;
     GLenum usage;
+    u64 revision;
+    GpuBufferCache *gpuCache;
 } Buffer;
 
 enum { ARRAY_VERTEX, ARRAY_TEXCOORD0, ARRAY_TEXCOORD1, ARRAY_TEXCOORD2, ARRAY_COLOR, ARRAY_NORMAL, ARRAY_EDGEFLAG, ARRAY_POINTSIZE, ARRAY_COUNT };
@@ -473,6 +494,12 @@ static struct {
     // Frame and vertex batching
     bool frameActive;
     bool drawnThisFrame;
+#ifdef C3DGL_PROFILE_GPU_CACHE
+    u32 gpuCacheHits, gpuCacheMisses;
+#endif
+    u64 bufferRevision;
+    size_t gpuCacheBytes;
+    GpuBufferCache *retiredGpuCaches;
     u32 frameSerial;                    // Counts the waits for the GPU (frame begun, frame resumed), see textureBusy()
     C3D_Tex dummyTexture;               // 8x8, bound to units 1/2 while they are unused (see applyState)
     u8 *vbo;                            // Vertex buffer 0, GPU_VERTEX_SIZE per vertex; linear memory, rewritten every frame
@@ -663,6 +690,15 @@ static void initTexture(Texture *t);
 static const C3D_Tex *stippleTexture(void);
 static void setPolygonStipple(const ListWord *w);
 static void packBitmap(const u8 *data, const PixelStore *ps, int width, int height, u8 *dst);
+static bool reclaimGpuCaches(void);
+
+// Optional mesh caches must yield memory to ordinary OpenGL allocations.
+static void *cacheAwareLinearAlloc(size_t bytes)
+{
+    void *data = linearAlloc(bytes);
+    if (!data && reclaimGpuCaches()) data = linearAlloc(bytes);
+    return data;
+}
 
 // While a display list is compiled: record the command instead of executing it, and return from the gl* function
 #define LIST_SAVE(command, ...) do { if (gl.listCompiling) { listSave(LIST_##command, __VA_ARGS__); return; } } while (0)
@@ -938,6 +974,56 @@ static const GLenum compressedFormats[COMPRESSED_FORMAT_COUNT] = {
 //----------------------------------------------------------------------------------
 // Frame and batch management
 //----------------------------------------------------------------------------------
+static void freeGpuCache(GpuBufferCache *cache)
+{
+    gl.gpuCacheBytes -= cache->bytes;
+    linearFree(cache->data);
+    free(cache);
+}
+
+static void invalidateGpuCache(Buffer *b)
+{
+    GpuBufferCache *cache = b->gpuCache;
+    if (cache == NULL) return;
+    b->gpuCache = NULL;
+    // Commands may reference this memory even after a frame was submitted.
+    // frameSerial advances only after the GPU wait, never on FrameSplit/End.
+    if (cache->drawnFrame && cache->drawnFrame == gl.frameSerial) {
+        cache->next = gl.retiredGpuCaches;
+        gl.retiredGpuCaches = cache;
+    } else freeGpuCache(cache);
+}
+
+static void collectGpuCaches(void)
+{
+    GpuBufferCache **link = &gl.retiredGpuCaches;
+    while (*link) {
+        GpuBufferCache *cache = *link;
+        if (cache->drawnFrame == gl.frameSerial) { link = &cache->next; continue; }
+        *link = cache->next;
+        freeGpuCache(cache);
+    }
+}
+
+// Keep optional cache allocation bounded and leave linear memory for textures.
+// Only evict buffers whose last GPU use has completed.
+static bool makeGpuCacheRoom(size_t bytes)
+{
+    collectGpuCaches();
+    while (gl.gpuCacheBytes + bytes > C3DGL_GPU_CACHE_BYTES ||
+           linearSpaceFree() < bytes + 1024u * 1024u) {
+        Buffer *oldest = NULL;
+        for (GLuint i = 1; i < gl.bufferCount; i++) {
+            GpuBufferCache *cache = gl.buffers[i].gpuCache;
+            if (!cache || cache->drawnFrame == gl.frameSerial) continue;
+            if (!oldest || cache->drawnFrame < oldest->gpuCache->drawnFrame) oldest = &gl.buffers[i];
+        }
+        if (!oldest) return false;
+        invalidateGpuCache(oldest);
+    }
+    return true;
+}
+
 static void processDeferredDeletes(void)
 {
     for (int i = 0; i < gl.deferredCount; i++) C3D_TexDelete(&gl.deferredDeletes[i]);
@@ -997,6 +1083,14 @@ static void ensureFrame(void)
     gl.frameActive = true;
     gl.drawnThisFrame = false;
     gl.frameSerial++;           // The GPU is done with the previous frame
+#ifdef C3DGL_PROFILE_GPU_CACHE
+    if ((gl.frameSerial % 120) == 0) {
+        LOG("GPU cache hits=%lu misses=%lu bytes=%lu linear_free=%lu\n",
+            (unsigned long)gl.gpuCacheHits, (unsigned long)gl.gpuCacheMisses,
+            (unsigned long)gl.gpuCacheBytes, (unsigned long)linearSpaceFree());
+        gl.gpuCacheHits = gl.gpuCacheMisses = 0;
+    }
+#endif
     gl.vertexCount = 0;
     gl.batchStart = 0;
     gl.cacheFlushed = 0;
@@ -1004,6 +1098,7 @@ static void ensureFrame(void)
     gl.batchValid = false;
 
     processDeferredDeletes();
+    collectGpuCaches();
 
     // The GPU is done with the pixel rectangles of the previous frame; one chunk is kept for the next ones
     for (int i = 1; i < gl.pixelChunkCount; i++) linearFree(gl.pixelChunks[i].data);
@@ -1028,7 +1123,7 @@ static u8 *allocPixelMemory(size_t size)
         gl.pixelChunks = chunks;
         c = &chunks[gl.pixelChunkCount];
         c->size = (size > PIXEL_CHUNK_SIZE)? size : PIXEL_CHUNK_SIZE;
-        c->data = linearAlloc(c->size);
+        c->data = cacheAwareLinearAlloc(c->size);
         if (c->data == NULL) { LOG("Out of memory for drawing pixels\n"); setError(GL_OUT_OF_MEMORY); return NULL; }
         c->used = c->flushed = 0;
         gl.pixelChunkCount++;
@@ -1514,6 +1609,30 @@ static void applyState(const DrawState *s, const DrawState *prev)
 }
 
 #undef CHANGED
+
+// Rare allocation-pressure path: finish queued draws before discarding caches,
+// then continue the same logical frame. Required allocations retain priority.
+static bool reclaimGpuCaches(void)
+{
+    if (!gl.ready || !gl.gpuCacheBytes) return false;
+    bool used[C3DGL_SCREEN_COUNT];
+    bool active = gl.frameActive;
+    if (active) {
+        for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) used[i] = gl.targets[i]->used;
+        flushVertexCache();
+        C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    }
+    C3D_FrameBegin(0); // Wait for all references to immutable cache storage.
+    gl.frameSerial++;
+    if (active) {
+        C3D_FrameDrawOn(gl.targets[gl.screen]);
+        for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) gl.targets[i]->used = used[i];
+    } else C3D_FrameEnd(0);
+    gl.batchValid = false;
+    collectGpuCaches();
+    for (GLuint i = 1; i < gl.bufferCount; i++) invalidateGpuCache(&gl.buffers[i]);
+    return true;
+}
 
 static bool textureValid(GLuint slot)
 {
@@ -2978,6 +3097,11 @@ bool c3dglInit(void)
 void c3dglClose(void)
 {
     if (gl.frameActive) { flushVertexCache(); C3D_FrameEnd(0); gl.frameActive = false; }
+
+    // Finish outstanding commands before releasing immutable GPU buffers.
+    if (gl.ready) { C3D_FrameBegin(C3D_FRAME_SYNCDRAW); C3D_FrameEnd(0); gl.frameSerial++; }
+    collectGpuCaches();
+    for (GLuint i = 0; i < gl.bufferCount; i++) invalidateGpuCache(&gl.buffers[i]);
 
     for (int i = 1; i < TEXTURE_SLOTS; i++) if (gl.textures[i].loaded) C3D_TexDelete(&gl.textures[i].tex);
     processDeferredDeletes();
@@ -5141,6 +5265,23 @@ static void fastPathReject(const char *why)
     if (fastPathOff == NULL) { fastPathOff = why; LOG("Indexed fast path unused: %s\n", why); }
 }
 
+static void drawGpuCache(GpuBufferCache *cache)
+{
+    flush();  // Preserve submission order with ordinary immediate/array geometry.
+    C3D_BufInfo saved = *C3D_GetBufInfo();
+    C3D_BufInfo info;
+    BufInfo_Init(&info);
+    BufInfo_Add(&info, cache->data, GPU_VERTEX_SIZE, 4, 0x3210);
+    BufInfo_Add(&info, gl.vboExtra, GPU_EXTRA_SIZE, 2, 0x54);
+    C3D_SetBufInfo(&info);
+    C3D_DrawArrays(GPU_TRIANGLES, 0, cache->count);
+    C3D_SetBufInfo(&saved);
+    cache->drawnFrame = gl.frameSerial;
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+        gl.textures[gl.batch.units[unit].texture].drawnFrame = gl.frameSerial;
+    gl.drawnThisFrame = true;
+}
+
 // Returns true if the call was submitted
 static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, int count)
 {
@@ -5165,7 +5306,48 @@ static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, in
 
     int n = count - (count % 3);
     if (n <= 0) return true;
-    if (n > C3DGL_MAX_VERTICES - gl.vertexCount)
+    // Cache only immutable-usage buffer-backed input. Each key includes the
+    // complete layout, index storage generation/range and baked vertex state.
+    // Matrices, textures, fog and all other draw state remain in applyState().
+    Buffer *source = NULL;
+    GpuBufferCache *cache = NULL;
+    bool cacheable = gl.ready && av->buffer && av->buffer == at->buffer &&
+        av->buffer == ac->buffer && gl.elementArrayBuffer && n <= C3DGL_MAX_VERTICES &&
+        (size_t)n * GPU_VERTEX_SIZE <= C3DGL_GPU_CACHE_BYTES;
+    if (cacheable) {
+        source = &gl.buffers[av->buffer];
+        Buffer *ib = &gl.buffers[gl.elementArrayBuffer];
+        cacheable = source->usage == GL_STATIC_DRAW && ib->usage == GL_STATIC_DRAW;
+        if (cacheable) {
+            cache = source->gpuCache;
+            size_t offset = (size_t)(data - ib->data);
+            if (cache && cache->indexRevision == ib->revision && cache->indexOffset == offset &&
+                cache->count == n && cache->shadeModel == gl.shadeModel &&
+                memcmp(&cache->depthBias, &gl.current.depthBias, sizeof(float)) == 0 &&
+                memcmp(&cache->arrays[0], av, sizeof(ClientArray)) == 0 &&
+                memcmp(&cache->arrays[1], at, sizeof(ClientArray)) == 0 &&
+                memcmp(&cache->arrays[2], ac, sizeof(ClientArray)) == 0) {
+#ifdef C3DGL_PROFILE_GPU_CACHE
+                gl.gpuCacheHits++;
+#endif
+                drawGpuCache(cache);
+                return true;
+            }
+            invalidateGpuCache(source);
+            cache = NULL;
+        }
+    }
+    // A cache miss is validated and converted below exactly like the existing
+    // fast path. Optional allocation failure simply uses the per-frame buffer.
+    if (cacheable && makeGpuCacheRoom((size_t)n * GPU_VERTEX_SIZE)) {
+        cache = calloc(1, sizeof(*cache));
+        if (cache) {
+            cache->bytes = (size_t)n * GPU_VERTEX_SIZE;
+            cache->data = linearAlloc(cache->bytes);
+            if (!cache->data) { free(cache); cache = NULL; }
+        }
+    }
+    if (!cache && n > C3DGL_MAX_VERTICES - gl.vertexCount)
     {
         // Preserve the generic path's complete-triangle prefix without
         // decoding every remaining vertex just to drop it. In large worlds
@@ -5178,12 +5360,18 @@ static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, in
     const u16 *index = (const u16 *)data;
     int maxIndex = 0;
     for (int i = 0; i < n; i++) if (index[i] > maxIndex) maxIndex = index[i];
-    if (!arrayInRange(av, maxIndex) || !arrayInRange(at, maxIndex) || !arrayInRange(ac, maxIndex)) return false;
+    if (!arrayInRange(av, maxIndex) || !arrayInRange(at, maxIndex) || !arrayInRange(ac, maxIndex)) {
+        if (cache) { linearFree(cache->data); free(cache); }
+        return false;
+    }
 
     const u8 *vbase = bufferRange(av->buffer, av->pointer, 0, 0);
     const u8 *tbase = bufferRange(at->buffer, at->pointer, 0, 0);
     const u8 *cbase = bufferRange(ac->buffer, ac->pointer, 0, 0);
-    if ((vbase == NULL) || (tbase == NULL) || (cbase == NULL)) return false;
+    if ((vbase == NULL) || (tbase == NULL) || (cbase == NULL)) {
+        if (cache) { linearFree(cache->data); free(cache); }
+        return false;
+    }
 
     const int vstride = av->stride? av->stride : 3*(int)sizeof(s16);
     const int tstride = at->stride? at->stride : 2*(int)sizeof(s16);
@@ -5192,7 +5380,7 @@ static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, in
     const bool flat = (gl.shadeModel == GL_FLAT);
 
     initByteColor();
-    u8 *out = gl.vbo + (size_t)gl.vertexCount*GPU_VERTEX_SIZE;
+    u8 *out = cache? cache->data : gl.vbo + (size_t)gl.vertexCount*GPU_VERTEX_SIZE;
     for (int i = 0; i < n; i += 3, out += 3*GPU_VERTEX_SIZE)
     {
         // GL_FLAT: the color of all three vertices comes from the provoking vertex,
@@ -5218,7 +5406,21 @@ static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, in
             g->depthBias = depthBias;
         }
     }
-    gl.vertexCount += n;
+    if (cache) {
+        cache->count = n;
+        cache->indexRevision = gl.buffers[gl.elementArrayBuffer].revision;
+        cache->indexOffset = (size_t)(data - gl.buffers[gl.elementArrayBuffer].data);
+        cache->arrays[0] = *av; cache->arrays[1] = *at; cache->arrays[2] = *ac;
+        cache->shadeModel = gl.shadeModel;
+        cache->depthBias = depthBias;
+#ifdef C3DGL_PROFILE_GPU_CACHE
+        gl.gpuCacheMisses++;
+#endif
+        source->gpuCache = cache;
+        gl.gpuCacheBytes += cache->bytes;
+        GSPGPU_FlushDataCache(cache->data, cache->bytes);
+        drawGpuCache(cache);
+    } else gl.vertexCount += n;
     return true;
 }
 
@@ -5319,6 +5521,7 @@ void glDeleteBuffers(GLsizei n, const GLuint *buffers)
             gl.arrays[a].pointer = NULL;
         }
 
+        invalidateGpuCache(&gl.buffers[id]);
         free(gl.buffers[id].data);
         memset(&gl.buffers[id], 0, sizeof(Buffer));
     }
@@ -5374,6 +5577,8 @@ void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usa
         if (storage == NULL) { setError(GL_OUT_OF_MEMORY); return; }
         if (data != NULL) memcpy(storage, data, (size_t)size);
     }
+    invalidateGpuCache(b);
+    b->revision = ++gl.bufferRevision;
     free(b->data);
     b->data = storage;
     b->size = size;
@@ -5388,7 +5593,11 @@ void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvo
 
     Buffer *b = &gl.buffers[*binding];
     if ((offset < 0) || (size < 0) || (offset + size > b->size)) { setError(GL_INVALID_VALUE); return; }
-    if (size > 0) memcpy(b->data + offset, data, (size_t)size);
+    if (size > 0) {
+        invalidateGpuCache(b);
+        b->revision = ++gl.bufferRevision;
+        memcpy(b->data + offset, data, (size_t)size);
+    }
 }
 
 void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params)
@@ -5959,7 +6168,7 @@ static void copyOnWrite(Texture *t)
     if (!textureBusy(t)) return;
     if (!gl.frameActive) { ensureFrame(); return; }
     size_t size = C3D_TexCalcTotalSize(t->tex.size, t->levels - 1);
-    void *data = linearAlloc(size);
+    void *data = cacheAwareLinearAlloc(size);
     if (data == NULL) { WARN_ONCE("Out of memory for a texture copy, earlier draws of the frame get the new texels\n"); return; }
     memcpy(data, t->tex.data, size);
     releaseTexture(t);
@@ -6000,7 +6209,8 @@ static bool ensureMipmapStorage(Texture *t)
 
     bool oneD = (t->target == GL_TEXTURE_1D);
     C3D_Tex mip;
-    if (!C3D_TexInitMipmap(&mip, t->tex.width, oneD? t->tex.width : t->tex.height, t->format.format))
+    if (!C3D_TexInitMipmap(&mip, t->tex.width, oneD? t->tex.width : t->tex.height, t->format.format) &&
+        !(reclaimGpuCaches() && C3D_TexInitMipmap(&mip, t->tex.width, oneD? t->tex.width : t->tex.height, t->format.format)))
     {
         LOG("Out of memory for mipmaps\n");
         setError(GL_OUT_OF_MEMORY);
@@ -6666,7 +6876,8 @@ static Texture *defineTexImage(GLenum target, GLint level, GLint internalformat,
             releaseTexture(t);
             t->loaded = false;
         }
-        if (!C3D_TexInit(&t->tex, texWidth, texHeight, f->format))
+        if (!C3D_TexInit(&t->tex, texWidth, texHeight, f->format) &&
+            !(reclaimGpuCaches() && C3D_TexInit(&t->tex, texWidth, texHeight, f->format)))
         {
             LOG("glTexImage: out of memory for %ix%i texture\n", texWidth, texHeight);
             setError(GL_OUT_OF_MEMORY);
@@ -8084,7 +8295,7 @@ static void resumeFrame(bool suspended, const bool used[C3DGL_SCREEN_COUNT])
 static u8 *readLines(bool depthStencil, int line0, int lines)
 {
     size_t size = (size_t)lines*READ_LINE_BYTES;
-    u8 *out = linearAlloc(size);
+    u8 *out = cacheAwareLinearAlloc(size);
     if (out == NULL) { LOG("Out of memory for reading pixels\n"); setError(GL_OUT_OF_MEMORY); return NULL; }
     GSPGPU_FlushDataCache(out, size);       // No dirty cache lines may be written back over the transfer
 

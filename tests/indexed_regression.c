@@ -35,7 +35,7 @@ static void setup(int used, bool flat, bool vbo)
     gl.currentEdge = true;
     gl.buffers = buffers;
     gl.bufferCount = 2;
-    buffers[1] = (Buffer){ true, (u8*)input, sizeof(input), GL_STATIC_DRAW };
+    buffers[1] = (Buffer){ true, (u8*)input, sizeof(input), GL_STATIC_DRAW, 0, NULL };
     gl.arrays[ARRAY_VERTEX] = (ClientArray){true, vbo ? 0 : input[0].pos, vbo ? 1 : 0, 3, GL_SHORT, sizeof(Packed)};
     gl.arrays[ARRAY_TEXCOORD0] = (ClientArray){true, vbo ? (void*)8 : input[0].uv, vbo ? 1 : 0, 2, GL_SHORT, sizeof(Packed)};
     gl.arrays[ARRAY_COLOR] = (ClientArray){true, vbo ? (void*)12 : input[0].color, vbo ? 1 : 0, 4, GL_UNSIGNED_BYTE, sizeof(Packed)};
