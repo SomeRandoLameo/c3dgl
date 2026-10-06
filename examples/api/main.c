@@ -14,6 +14,7 @@
 #include <string.h>
 
 static int checks, failures;
+static FILE *checkLog;
 
 #define CHECK(cond) check((cond), #cond, __LINE__)
 
@@ -23,6 +24,7 @@ static void check(bool ok, const char *what, int line)
     if (ok) return;
     failures++;
     printf("FAIL %i: %s\n", line, what);
+    if (checkLog) fprintf(checkLog, "FAIL %i: %s\n", line, what);
 }
 
 static bool near(double a, double b) { return fabs(a - b) < 1e-4; }
@@ -3487,6 +3489,7 @@ int main(void)
 {
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, NULL);
+    checkLog = fopen("sdmc:/c3dgl-api.log", "w");
 
     if (!c3dglInit()) {
         printf("c3dglInit failed\n");
@@ -3528,6 +3531,11 @@ int main(void)
     testTexUpdateInFrame();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
+    if (checkLog) {
+        fprintf(checkLog, "checks=%d failures=%d\n", checks, failures);
+        fclose(checkLog);
+        checkLog = NULL;
+    }
 
     printf("\n%i/%i checks passed\n\n"
            "Expected on the top screen:\n"

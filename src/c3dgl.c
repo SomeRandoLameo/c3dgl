@@ -60,7 +60,9 @@
 //----------------------------------------------------------------------------------
 // Defines
 //----------------------------------------------------------------------------------
-#define C3DGL_MAX_VERTICES      (64*1024)   // Per frame, 24 bytes each
+#ifndef C3DGL_MAX_VERTICES
+#define C3DGL_MAX_VERTICES      (64*1024)
+#endif
 #define C3DGL_MAX_TEXTURES      512         // Texture ids 1..C3DGL_MAX_TEXTURES-1
 #define DEFAULT_TEXTURE_2D      C3DGL_MAX_TEXTURES          // Slots of the default textures (bound as texture 0)
 #define DEFAULT_TEXTURE_1D      (C3DGL_MAX_TEXTURES + 1)
@@ -5163,7 +5165,15 @@ static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, in
 
     int n = count - (count % 3);
     if (n <= 0) return true;
-    if (gl.vertexCount + n > C3DGL_MAX_VERTICES) return false;      // The generic path drops what does not fit
+    if (n > C3DGL_MAX_VERTICES - gl.vertexCount)
+    {
+        // Preserve the generic path's complete-triangle prefix without
+        // decoding every remaining vertex just to drop it. In large worlds
+        // that fallback used more CPU time than drawing the terrain itself.
+        reserveVertices(n);    // Report exhaustion once, as the generic path does
+        n = (C3DGL_MAX_VERTICES - gl.vertexCount) / 3 * 3;
+        if (n == 0) return true;
+    }
 
     const u16 *index = (const u16 *)data;
     int maxIndex = 0;

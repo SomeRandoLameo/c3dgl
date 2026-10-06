@@ -142,6 +142,7 @@ if(C3DGL_BUILD_GLU)
 endif()
 
 if(C3DGL_BUILD_EXAMPLES)
+    add_subdirectory(tests)
     add_subdirectory(examples/cube)
     add_subdirectory(examples/primitives)
     add_subdirectory(examples/fragment)

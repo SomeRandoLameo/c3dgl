@@ -1,0 +1,6 @@
+add_executable(c3dgl_indexed_regression indexed_regression.c)
+target_include_directories(c3dgl_indexed_regression PRIVATE ../include)
+target_link_libraries(c3dgl_indexed_regression PRIVATE c3dgl_shaders citro3d m)
+target_compile_options(c3dgl_indexed_regression PRIVATE -O2 -Wall -Wextra)
+ctr_generate_smdh(c3dgl_indexed_regression.smdh NAME "c3dgl regression" DESCRIPTION "Indexed fast path equivalence" AUTHOR "mc3ds")
+ctr_create_3dsx(c3dgl_indexed_regression SMDH c3dgl_indexed_regression.smdh)
