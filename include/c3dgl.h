@@ -84,6 +84,14 @@ int c3dglGetScreenWidth(C3DGLscreen screen);   // 400 or 320; the height is alwa
 // that is also where citro3d waits for VBlank (C3D_FRAME_SYNCDRAW).
 void c3dglSwapBuffers(void);
 
+// Frame statistics from citro3d: GPU time of the last drawn frame (ms), CPU time spent building
+// its command list (ms) and command buffer use (0..1). Only meaningful on real hardware.
+void c3dglGetFrameStats(float *gpuMs, float *cpuMs, float *cmdBufUsage);
+
+// Milliseconds spent waiting for the GPU (C3D_FrameBegin with SYNCDRAW) since the last call; resets.
+// A large value means the GPU is the bottleneck, a value near 0 means the CPU is.
+double c3dglGetGpuWaitMs(void);
+
 #ifdef __cplusplus
 }
 #endif

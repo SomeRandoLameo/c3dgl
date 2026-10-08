@@ -1072,12 +1072,30 @@ static void linkTarget(void)
     C3D_RenderTargetSetOutput(gl.targets[gl.screen], screen, GFX_LEFT, screenTransferFlags(screen));
 }
 
+static u64 gpuWaitTicks;    // Time spent in C3D_FrameBegin, see c3dglGetGpuWaitMs()
+
+// C3D_FRAME_SYNCDRAW makes every frame start at a VBlank. That is only there so that a frame is not presented while the
+// previous one is still being switched in, which can only happen when a frame is shorter than a refresh. A frame that took
+// longer needs no alignment, and waiting for the next VBlank anyway cost half a refresh (8 ms) per frame on average. So the
+// frame starts without the wait, and the wait is made before presenting, and only if the previous present was less than
+// C3DGL_PRESENT_GAP_MS ago. Define C3DGL_PRESENT_GAP_MS as 0 for the old behaviour.
+#ifndef C3DGL_PRESENT_GAP_MS
+#define C3DGL_PRESENT_GAP_MS 25
+#endif
+static u64 lastPresentMs;
+
 static void ensureFrame(void)
 {
     if (gl.frameActive) return;
 
     // SYNCDRAW: waits until the GPU finished the previous frame, so the vertex buffer can be reused
+    u64 waitStart = svcGetSystemTick();
+#if C3DGL_PRESENT_GAP_MS > 0
+    C3D_FrameBegin(0);          // still waits until the GPU is done with the previous frame
+#else
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+#endif
+    gpuWaitTicks += svcGetSystemTick() - waitStart;
     C3D_FrameDrawOn(gl.targets[gl.screen]);     // Also resets the viewport, hence batchValid = false
 
     gl.frameActive = true;
@@ -3164,11 +3182,29 @@ int c3dglGetScreenWidth(C3DGLscreen screen)
     return screenWidth(screen);
 }
 
+void c3dglGetFrameStats(float *gpuMs, float *cpuMs, float *cmdBufUsage)
+{
+    if (gpuMs) *gpuMs = C3D_GetDrawingTime();
+    if (cpuMs) *cpuMs = C3D_GetProcessingTime();
+    if (cmdBufUsage) *cmdBufUsage = C3D_GetCmdBufUsage();
+}
+
+double c3dglGetGpuWaitMs(void)
+{
+    double ms = (double)gpuWaitTicks * 1000.0 / SYSCLOCK_ARM11;
+    gpuWaitTicks = 0;
+    return ms;
+}
+
 void c3dglSwapBuffers(void)
 {
     ensureFrame();      // Present even if nothing was drawn
     flushVertexCache();
+#if C3DGL_PRESENT_GAP_MS > 0
+    if (osGetTime() - lastPresentMs < C3DGL_PRESENT_GAP_MS) C3D_FrameSync();
+#endif
     C3D_FrameEnd(0);
+    lastPresentMs = osGetTime();
     gl.frameActive = false;
 }
 
