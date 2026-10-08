@@ -165,6 +165,7 @@ static void ensureFrame(void)
     PROF_ENTER2();
 
     gl.frameActive = true;
+    gl.compactBufBound = false;     // (the next compact draw binds its buffer configuration in full)
     gl.drawnThisFrame = false;
     gl.frameSerial++;           // The GPU is done with the previous frame
 #ifdef C3DGL_PROFILE_GPU_CACHE
@@ -227,6 +228,7 @@ static void useStandardLayout(void)
     C3D_SetBufInfo(&gl.standardBufInfo);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocQBias, 0.0f, 0.0f, 0.0f, 0.0f);
     gl.compactLayout = false;
+    gl.compactBufBound = false;
 }
 
 static void flush(void)

@@ -52,6 +52,9 @@ static void fastPathReject(const char *why)
     if (fastPathOff == NULL) { fastPathOff = why; LOG("Indexed fast path unused: %s\n", why); }
 }
 
+// citro3d's context (see c3dglSubmit())
+extern u8 __C3D_Context[];
+
 // A compact cache: the buffer's own vertices, read in their 16-byte layout and drawn with indices. Switching to that
 // layout and back (useStandardLayout()) happens only where draws of the two kinds meet, not per draw
 static void drawCompactCache(GpuBufferCache *cache)
@@ -67,16 +70,31 @@ static void drawCompactCache(GpuBufferCache *cache)
         C3D_FixedAttribSet(3, cache->depthBias, 0.0f, 0.0f, 0.0f);
         gl.compactBias = cache->depthBias;
         gl.compactLayout = true;
+        gl.compactBufBound = false;
     }
     else if (memcmp(&gl.compactBias, &cache->depthBias, sizeof(float)) != 0)
     {
         C3D_FixedAttribSet(3, cache->depthBias, 0.0f, 0.0f, 0.0f);
         gl.compactBias = cache->depthBias;
     }
-    C3D_BufInfo info;
-    BufInfo_Init(&info);
-    BufInfo_Add(&info, cache->data, 16, 3, 0x210);
-    C3D_SetBufInfo(&info);
+    if (gl.compactBufBound)
+    {
+        // Compact draws in a row differ in the address of buffer 0 alone: that register instead of citro3d binding the
+        // whole configuration again (12 buffers). Its copy in citro3d's context (behind the GX queue and the state
+        // flags, see C3D_GetBufInfo()) follows, so a later full bind writes the same. Offset as in BufInfo_Add()
+        C3D_BufInfo *bound = (C3D_BufInfo *)(__C3D_Context + 64);
+        const u32 offset = osConvertVirtToPhys(cache->data) - bound->base_paddr;
+        bound->buffers[0].offset = offset;
+        GPUCMD_AddWrite(GPUREG_ATTRIBBUFFER0_OFFSET, offset);
+    }
+    else
+    {
+        C3D_BufInfo info;
+        BufInfo_Init(&info);
+        BufInfo_Add(&info, cache->data, 16, 3, 0x210);
+        C3D_SetBufInfo(&info);
+        gl.compactBufBound = true;
+    }
     C3D_DrawElements(GPU_TRIANGLES, cache->count, C3D_UNSIGNED_SHORT, cache->indices);
     cache->drawnFrame = gl.frameSerial;
     for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
