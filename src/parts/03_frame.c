@@ -111,7 +111,12 @@ static void linkTarget(void)
 {
     gfxScreen_t screen = (gl.screen == C3DGL_SCREEN_BOTTOM)? GFX_BOTTOM : GFX_TOP;
     gfx3dSide_t side = (curTargetIndex() == C3DGL_TARGET_RIGHT)? GFX_RIGHT : GFX_LEFT;
-    C3D_RenderTargetSetOutput(curTarget(), screen, side, screenTransferFlags(screen));
+    const u32 flags = screenTransferFlags(screen);
+    // About 1.5 ms per call in the Normal benchmark, twice a frame, but it is time spent waiting for the display to
+    // be done with the previous frame: not calling it only moves the wait to C3D_FrameBegin
+    PROF_ENTER();
+    C3D_RenderTargetSetOutput(curTarget(), screen, side, flags);
+    PROF_LEAVE(PB_LINK_TARGET, 0);
 }
 
 static u64 gpuWaitTicks;    // Time spent in C3D_FrameBegin, see c3dglGetGpuWaitMs()
@@ -135,6 +140,7 @@ static void ensureFrame(void)
     if (gl.frameActive) return;
 
     // SYNCDRAW: waits until the GPU finished the previous frame, so the vertex buffer can be reused
+    PROF_ENTER();
     u64 waitStart = svcGetSystemTick();
 #if C3DGL_PRESENT_GAP_MS > 0
     C3D_FrameBegin(0);          // still waits until the GPU is done with the previous frame
@@ -143,6 +149,8 @@ static void ensureFrame(void)
 #endif
     gpuWaitTicks += svcGetSystemTick() - waitStart;
     C3D_FrameDrawOn(curTarget());     // Also resets the viewport, hence batchValid = false
+    PROF_LEAVE(PB_FRAME_BEGIN, 0);
+    PROF_ENTER2();
 
     gl.frameActive = true;
     gl.drawnThisFrame = false;
@@ -170,6 +178,7 @@ static void ensureFrame(void)
     if (gl.pixelChunkCount) gl.pixelChunks[0].used = gl.pixelChunks[0].flushed = 0;
     gl.atlas = NULL;
     gl.stippleTex = NULL;
+    PROF_LEAVE2(PB_FRAME_SETUP, 0);
 }
 
 // Linear memory for a texture of a pixel rectangle, valid until the GPU finished the frame (128-byte aligned)

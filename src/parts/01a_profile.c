@@ -25,11 +25,16 @@ enum {
     PB_PREPARE,         // prepareDraw: building the draw state key and comparing it with the batch's
     PB_DRAWCACHE,       // drawGpuCache: buffer binding and draw of a cached mesh
     PB_PRESENT_SYNC,    // C3D_FrameSync before presenting: waiting for the VBlank
+    PB_FRAME_BEGIN,     // ensureFrame: C3D_FrameBegin and C3D_FrameDrawOn (the first draw of a frame pays for it)
+    PB_FRAME_SETUP,    // ensureFrame: deferred deletes, GPU cache collection, pixel chunks
+    PB_TARGET_SWITCH,  // c3dglSetScreen: relinking and drawing on the other render target
+    PB_LINK_TARGET,    // linkTarget inside it
+    PB_DRAW_ON,        // C3D_FrameDrawOn inside it
     PB_COUNT
 };
 static const char *const profNames[PB_COUNT] = {
     "arr-fast", "arr-gen", "el-cache", "el-fast", "el-gen", "imm", "lists", "apply", "flush", "cacheflush", "swap",
-    "tex", "buffer", "clear", "prepare", "drawcache", "presentsync"
+    "tex", "buffer", "clear", "prepare", "drawcache", "presentsync", "framebegin", "framesetup", "targetswitch", "linktarget", "drawon"
 };
 
 // Why the direct-decode paths gave up (fastPathReject), counted
@@ -73,6 +78,8 @@ static inline void profLeave(ProfScope *s, int bucket, u32 verts)
 
 #define PROF_ENTER()            ProfScope profScope; profEnter(&profScope)
 #define PROF_LEAVE(b, v)        profLeave(&profScope, (b), (u32)(v))
+#define PROF_ENTER2()           ProfScope profScope2; profEnter(&profScope2)    // A second scope in the same block
+#define PROF_LEAVE2(b, v)       profLeave(&profScope2, (b), (u32)(v))
 #define PROF_PATH(b)            (profPath = (b))
 #define PROF_COUNT(b)           (prof.verts[b]++)
 #define PROF_REJECT(why)        profReject(why)
@@ -109,6 +116,8 @@ void c3dglProfileDump(int frames)
 #else
 #define PROF_ENTER()            ((void)0)
 #define PROF_LEAVE(b, v)        ((void)0)
+#define PROF_ENTER2()           ((void)0)
+#define PROF_LEAVE2(b, v)       ((void)0)
 #define PROF_PATH(b)            ((void)0)
 #define PROF_COUNT(b)           ((void)0)
 #define PROF_REJECT(why)        ((void)0)

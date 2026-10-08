@@ -198,7 +198,11 @@ void c3dglClose(void)
 // Make the current screen/eye the render target: viewport and scissor box of its size, like a freshly bound framebuffer
 static void switchTarget(void)
 {
-    linkTarget();
+    {
+        PROF_ENTER();
+        linkTarget();
+        PROF_LEAVE(PB_LINK_TARGET, 0);
+    }
 
     gl.state.viewport[0] = gl.state.viewport[1] = 0;
     gl.state.viewport[2] = screenWidth(gl.screen);
@@ -207,7 +211,9 @@ static void switchTarget(void)
 
     if (gl.frameActive)
     {
+        PROF_ENTER();
         C3D_FrameDrawOn(curTarget());
+        PROF_LEAVE(PB_DRAW_ON, 0);
         gl.batchValid = false;
     }
 }
@@ -218,8 +224,10 @@ void c3dglSetScreen(C3DGLscreen screen)
 
     if (gl.frameActive) flush();    // Pending vertices belong to the previous screen
 
+    PROF_ENTER();
     gl.screen = screen;
     switchTarget();
+    PROF_LEAVE(PB_TARGET_SWITCH, 0);
 }
 
 bool c3dglSetStereo(bool enable)
