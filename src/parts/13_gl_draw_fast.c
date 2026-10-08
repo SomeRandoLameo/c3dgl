@@ -52,9 +52,44 @@ static void fastPathReject(const char *why)
     if (fastPathOff == NULL) { fastPathOff = why; LOG("Indexed fast path unused: %s\n", why); }
 }
 
-static void drawGpuCache(GpuBufferCache *cache)
+// A compact cache: the buffer's own vertices, read in their 16-byte layout and drawn with indices. Switching to that
+// layout and back (useStandardLayout()) happens only where draws of the two kinds meet, not per draw
+static void drawCompactCache(GpuBufferCache *cache)
 {
     flush();  // Preserve submission order with ordinary immediate/array geometry.
+    PROF_ENTER();
+    if (!gl.compactLayout)
+    {
+        C3D_SetAttrInfo(&gl.compactAttrInfo);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocQBias, 1.0f, 0.0f, 0.0f, 0.0f);
+        C3D_FixedAttribSet(4, 0.0f, 0.0f, 1.0f, 0.0f);     // Texcoords of units 1 and 2 (off): q = 1
+        C3D_FixedAttribSet(5, 0.0f, 0.0f, 1.0f, 0.0f);
+        C3D_FixedAttribSet(3, cache->depthBias, 0.0f, 0.0f, 0.0f);
+        gl.compactBias = cache->depthBias;
+        gl.compactLayout = true;
+    }
+    else if (memcmp(&gl.compactBias, &cache->depthBias, sizeof(float)) != 0)
+    {
+        C3D_FixedAttribSet(3, cache->depthBias, 0.0f, 0.0f, 0.0f);
+        gl.compactBias = cache->depthBias;
+    }
+    C3D_BufInfo info;
+    BufInfo_Init(&info);
+    BufInfo_Add(&info, cache->data, 16, 3, 0x210);
+    C3D_SetBufInfo(&info);
+    C3D_DrawElements(GPU_TRIANGLES, cache->count, C3D_UNSIGNED_SHORT, cache->indices);
+    cache->drawnFrame = gl.frameSerial;
+    for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
+        gl.textures[gl.batch.units[unit].texture].drawnFrame = gl.frameSerial;
+    gl.drawnThisFrame = true;
+    PROF_LEAVE(PB_DRAWCACHE, 0);
+}
+
+static void drawGpuCache(GpuBufferCache *cache)
+{
+    if (cache->compact) { drawCompactCache(cache); return; }
+    flush();  // Preserve submission order with ordinary immediate/array geometry.
+    useStandardLayout();
     PROF_ENTER();
     C3D_BufInfo saved = *C3D_GetBufInfo();
     C3D_BufInfo info;
@@ -86,6 +121,65 @@ static bool fastPathStateOk(void)
     if (arrayActive(ARRAY_NORMAL) || arrayActive(ARRAY_EDGEFLAG) || arrayActive(ARRAY_POINTSIZE)) { fastPathReject("normal/edge/pointsize array"); return false; }
     if (sizeof(GpuVertex) != GPU_VERTEX_SIZE) { fastPathReject("vertex layout"); return false; }
     return true;
+}
+
+// The compact cache (drawCompactCache()) for n indices of `index` into `source`, NULL if the arrays are not one
+// 16-byte vertex (short x, y, z, pad, short s, t, ubyte RGBA) or memory is short; the caller then expands as before.
+// It holds the vertices 0 .. max index as they are, at a third of an expansion (6 vertices of 32 bytes per quad).
+// Flat shading takes the color of a triangle's last vertex: only triangles of one color can share vertices.
+static GpuBufferCache *makeCompactCache(Buffer *source, const ClientArray *av, const ClientArray *at,
+                                        const ClientArray *ac, const u16 *index, int n)
+{
+    const uintptr_t base = (uintptr_t)av->pointer;
+    if ((av->stride != 16) || (at->stride != 16) || (ac->stride != 16) ||
+        ((uintptr_t)at->pointer != base + 8) || ((uintptr_t)ac->pointer != base + 12)) return NULL;
+    int maxIndex = 0;
+    bool quads = true;      // 0 1 2 0 2 3, 4 5 6 4 6 7, ...: gl.quadIndices serves
+    static const u8 quadPattern[6] = { 0, 1, 2, 0, 2, 3 };
+    for (int i = 0; i < n; i++)
+    {
+        if (index[i] > maxIndex) maxIndex = index[i];
+        quads = quads && (index[i] == (i/6)*4 + quadPattern[i % 6]);
+    }
+    const size_t vertexBytes = (size_t)(maxIndex + 1)*16;
+    if (base + vertexBytes > (size_t)source->size) return NULL;
+    const u8 *vertices = source->data + base;
+    if (gl.shadeModel == GL_FLAT)
+    {
+        for (int i = 0; i < n; i += 3)
+        {
+            u32 c0, c1, c2;
+            memcpy(&c0, vertices + (size_t)index[i]*16 + 12, 4);
+            memcpy(&c1, vertices + (size_t)index[i + 1]*16 + 12, 4);
+            memcpy(&c2, vertices + (size_t)index[i + 2]*16 + 12, 4);
+            if ((c0 != c1) || (c1 != c2)) return NULL;
+        }
+    }
+    if (quads && (gl.quadIndices == NULL))
+    {
+        gl.quadIndices = linearAlloc(C3DGL_MAX_VERTICES*sizeof(u16));
+        if (gl.quadIndices == NULL) return NULL;
+        for (int i = 0; i < C3DGL_MAX_VERTICES; i++) gl.quadIndices[i] = (u16)((i/6)*4 + quadPattern[i % 6]);
+        GSPGPU_FlushDataCache(gl.quadIndices, C3DGL_MAX_VERTICES*sizeof(u16));
+    }
+    const size_t bytes = vertexBytes + (quads? 0 : (size_t)n*sizeof(u16));
+    if (bytes > C3DGL_GPU_CACHE_BYTES || !makeGpuCacheRoom(bytes)) return NULL;
+    GpuBufferCache *cache = calloc(1, sizeof(*cache));
+    if (cache == NULL) return NULL;
+    cache->data = linearAlloc(bytes);
+    if (cache->data == NULL) { free(cache); return NULL; }
+    cache->bytes = bytes;
+    cache->compact = true;
+    memcpy(cache->data, vertices, vertexBytes);
+    if (quads) cache->indices = gl.quadIndices;
+    else
+    {
+        u16 *own = (u16 *)(cache->data + vertexBytes);
+        memcpy(own, index, (size_t)n*sizeof(u16));
+        cache->indices = own;
+    }
+    GSPGPU_FlushDataCache(cache->data, bytes);
+    return cache;
 }
 
 // Returns true if the call was submitted
@@ -134,6 +228,26 @@ static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, in
             }
             invalidateGpuCache(source);
             cache = NULL;
+        }
+    }
+    // The buffer's own vertices if their layout allows, an expansion otherwise
+    if (cacheable && arrayInRange(av, 0)) {
+        GpuBufferCache *compact = makeCompactCache(source, av, at, ac, (const u16 *)data, n);
+        if (compact) {
+            compact->count = n;
+            compact->indexRevision = gl.buffers[gl.elementArrayBuffer].revision;
+            compact->indexOffset = (size_t)(data - gl.buffers[gl.elementArrayBuffer].data);
+            compact->arrays[0] = *av; compact->arrays[1] = *at; compact->arrays[2] = *ac;
+            compact->shadeModel = gl.shadeModel;
+            compact->depthBias = gl.current.depthBias;
+#ifdef C3DGL_PROFILE_GPU_CACHE
+            gl.gpuCacheMisses++;
+#endif
+            source->gpuCache = compact;
+            gl.gpuCacheBytes += compact->bytes;
+            drawGpuCache(compact);
+            PROF_PATH(PB_EL_FAST);
+            return true;
         }
     }
     // A cache miss is validated and converted below exactly like the existing

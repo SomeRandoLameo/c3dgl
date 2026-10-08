@@ -275,6 +275,8 @@ typedef struct GpuBufferCache {
     ClientArray arrays[3];
     GLenum shadeModel;
     float depthBias;
+    bool compact;               // data holds the buffer's own vertices (16 bytes each), drawn indexed (drawCompactCache)
+    const u16 *indices;         // compact: the indices, gl.quadIndices or behind the vertices in data
 } GpuBufferCache;
 
 #ifndef C3DGL_GPU_CACHE_BYTES

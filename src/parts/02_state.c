@@ -11,7 +11,14 @@ static struct {
     bool stereo;                        // gfxSet3D(true), the right eye target exists
     DVLB_s *dvlb;
     shaderProgram_s program;
-    int uLocMvp, uLocTexMat[C3DGL_TEXTURE_UNITS], uLocStipple;
+    int uLocMvp, uLocTexMat[C3DGL_TEXTURE_UNITS], uLocStipple, uLocQBias;
+    // Vertex layouts: the standard one of gl.vbo and expanded caches, and the compact one that reads a buffer's own
+    // 16-byte vertices (short position, short texcoord, ubyte color) from its cache (drawCompactCache())
+    C3D_AttrInfo standardAttrInfo, compactAttrInfo;
+    C3D_BufInfo standardBufInfo;
+    bool compactLayout;                 // the compact layout is set on the GPU state
+    float compactBias;                  // depth bias last set as its fixed attribute
+    u16 *quadIndices;                   // 0 1 2 0 2 3, 4 5 6 4 6 7, ... in linear memory, C3DGL_MAX_VERTICES of them
     int texUnitShift;                   // PICA unit of GL unit 0 in the batch being set up (1 with polygon stipple)
     Mat4 post;                          // OpenGL clip space -> PICA clip space (rotation, depth range)
 

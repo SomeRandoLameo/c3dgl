@@ -219,10 +219,21 @@ static u8 *allocPixelMemory(size_t size)
 }
 
 // Submit the vertices collected since the last flush with the currently applied state
+// Back to the vertex layout of gl.vbo after compact cache draws (drawCompactCache())
+static void useStandardLayout(void)
+{
+    if (!gl.compactLayout) return;
+    C3D_SetAttrInfo(&gl.standardAttrInfo);
+    C3D_SetBufInfo(&gl.standardBufInfo);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocQBias, 0.0f, 0.0f, 0.0f, 0.0f);
+    gl.compactLayout = false;
+}
+
 static void flush(void)
 {
     int count = gl.vertexCount - gl.batchStart;
     if (count <= 0) return;
+    useStandardLayout();
 
     {
         PROF_ENTER();

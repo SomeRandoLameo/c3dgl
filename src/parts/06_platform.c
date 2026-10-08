@@ -38,6 +38,8 @@ bool c3dglInit(void)
     gl.uLocTexMat[1] = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texmat1");
     gl.uLocTexMat[2] = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texmat2");
     gl.uLocStipple = shaderInstanceGetUniformLocation(gl.program.vertexShader, "stipple");
+    gl.uLocQBias = shaderInstanceGetUniformLocation(gl.program.vertexShader, "qbias");
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocQBias, 0.0f, 0.0f, 0.0f, 0.0f);
 
     // Vertex layout: v0 = position (3 floats), v1 = texcoord s, t, q (3 floats), v2 = color (4 ubytes), v3 = depth bias (float)
     C3D_AttrInfo *attrInfo = C3D_GetAttrInfo();
@@ -53,6 +55,19 @@ bool c3dglInit(void)
     BufInfo_Init(bufInfo);
     BufInfo_Add(bufInfo, gl.vbo, GPU_VERTEX_SIZE, 4, 0x3210);
     BufInfo_Add(bufInfo, gl.vboExtra, GPU_EXTRA_SIZE, 2, 0x54);
+    gl.standardAttrInfo = *attrInfo;
+    gl.standardBufInfo = *bufInfo;
+
+    // Compact cache layout: v0 = x, y, z, pad (shorts; the shader takes w = 1), v1 = s, t (shorts; q = 0 + qbias),
+    // v2 = color (4 ubytes); the depth bias and the texcoords of units 1 and 2 are fixed attributes
+    AttrInfo_Init(&gl.compactAttrInfo);
+    AttrInfo_AddLoader(&gl.compactAttrInfo, 0, GPU_SHORT, 4);
+    AttrInfo_AddLoader(&gl.compactAttrInfo, 1, GPU_SHORT, 2);
+    AttrInfo_AddLoader(&gl.compactAttrInfo, 2, GPU_UNSIGNED_BYTE, 4);
+    AttrInfo_AddFixed(&gl.compactAttrInfo, 3);
+    AttrInfo_AddFixed(&gl.compactAttrInfo, 4);
+    AttrInfo_AddFixed(&gl.compactAttrInfo, 5);
+    gl.compactLayout = false;
 
     // Stored depth = -z_clip: near = 1, far = 0 (see depthFunc())
     C3D_DepthMap(true, -1.0f, 0.0f);
@@ -188,6 +203,8 @@ void c3dglClose(void)
     if (gl.dummyTexture.data != NULL) C3D_TexDelete(&gl.dummyTexture);
     if (gl.vbo != NULL) linearFree(gl.vbo);
     if (gl.vboExtra != NULL) linearFree(gl.vboExtra);
+    if (gl.quadIndices != NULL) linearFree(gl.quadIndices);
+    gl.quadIndices = NULL;
     for (int i = 0; i < C3DGL_TARGET_COUNT; i++) if (gl.targets[i] != NULL) C3D_RenderTargetDelete(gl.targets[i]);
     if (gl.stereo) gfxSet3D(false);
     C3D_Fini();

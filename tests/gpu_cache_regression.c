@@ -83,6 +83,27 @@ int main(void)
         if (memcmp(reference,actual,sizeof(reference))) fprintf(logFile,"pixel mismatch shade=%d state=%d\n",shade,state);
         CHECK(memcmp(reference,actual,sizeof(reference))==0);
         CHECK(gl.buffers[vbo].gpuCache != NULL);
+        // The vertices have a 16-byte layout: smooth shading draws them as they are (compact), flat shading of
+        // triangles whose corners differ in color needs the expansion
+        CHECK(gl.buffers[vbo].gpuCache->compact == (shade == 0));
+    }
+    // Flat shading of one-colored triangles is compact too, and looks the same as drawn without a cache
+    {
+        Packed uniform[4]; memcpy(uniform, vertices, sizeof(uniform));
+        for (int i = 0; i < 4; i++) { uniform[i].color[0] = 30; uniform[i].color[1] = 200; uniform[i].color[2] = 90; uniform[i].color[3] = 255; }
+        glBindBuffer(GL_ARRAY_BUFFER, vbo); glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(uniform), uniform);
+        glDisable(GL_FOG); glDisable(GL_STENCIL_TEST); glDisable(GL_TEXTURE_2D); glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND); glDisable(GL_SCISSOR_TEST); glDisable(GL_ALPHA_TEST); glColorMask(1,1,1,1); glLoadIdentity();
+        glShadeModel(GL_FLAT);
+        for (int cached=0; cached<2; cached++) {
+            glClearColor(0.1f,0.2f,0.3f,1); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+            gl.buffers[vbo].usage = cached ? GL_STATIC_DRAW : GL_DYNAMIC_DRAW;
+            draw();
+            readImage(cached ? actual : reference);
+        }
+        CHECK(memcmp(reference,actual,sizeof(reference))==0);
+        CHECK(gl.buffers[vbo].gpuCache && gl.buffers[vbo].gpuCache->compact);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
     }
     glDisable(GL_FOG); glDisable(GL_STENCIL_TEST); glDisable(GL_TEXTURE_2D); glColorMask(1,1,1,1); glLoadIdentity();
     glShadeModel(GL_FLAT); draw();
