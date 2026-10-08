@@ -298,6 +298,11 @@ void c3dglGetFrameStats(float *gpuMs, float *cpuMs, float *cmdBufUsage)
     if (cmdBufUsage) *cmdBufUsage = C3D_GetCmdBufUsage();
 }
 
+unsigned long long c3dglGetWaitTicksTotal(void)
+{
+    return waitTicksTotal;
+}
+
 double c3dglGetGpuWaitMs(void)
 {
     double ms = (double)gpuWaitTicks * 1000.0 / SYSCLOCK_ARM11;
@@ -315,7 +320,7 @@ void c3dglSwapBuffers(void)
         PROF_ENTER();
         const u64 syncStart = svcGetSystemTick();
         C3D_FrameSync();
-        gpuWaitTicks += svcGetSystemTick() - syncStart;    // idle time, not CPU load (see c3dglGetGpuWaitMs)
+        addWait(syncStart);    // idle time, not CPU load (see c3dglGetGpuWaitMs)
         PROF_LEAVE(PB_PRESENT_SYNC, 0);
     }
 #endif

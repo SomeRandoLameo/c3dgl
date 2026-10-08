@@ -108,6 +108,15 @@ static C3D_RenderTarget *curTarget(void)
 // Link the current screen's target to its display. Done on every switch, as the app may have
 // changed the screen format in between (e.g. from the console to graphics)
 static u64 gpuWaitTicks;    // Time spent blocked on the GPU or the display, see c3dglGetGpuWaitMs()
+static u64 waitTicksTotal;  // The same, never reset (c3dglGetWaitTicksTotal())
+
+// Time blocked on the GPU or the display, from `start` until now
+static void addWait(u64 start)
+{
+    u64 ticks = svcGetSystemTick() - start;
+    gpuWaitTicks += ticks;
+    waitTicksTotal += ticks;
+}
 
 static void linkTarget(void)
 {
@@ -119,7 +128,7 @@ static void linkTarget(void)
     PROF_ENTER();
     const u64 waitStart = svcGetSystemTick();
     C3D_RenderTargetSetOutput(curTarget(), screen, side, flags);
-    gpuWaitTicks += svcGetSystemTick() - waitStart;
+    addWait(waitStart);
     PROF_LEAVE(PB_LINK_TARGET, 0);
 }
 
@@ -150,7 +159,7 @@ static void ensureFrame(void)
 #else
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 #endif
-    gpuWaitTicks += svcGetSystemTick() - waitStart;
+    addWait(waitStart);
     C3D_FrameDrawOn(curTarget());     // Also resets the viewport, hence batchValid = false
     PROF_LEAVE(PB_FRAME_BEGIN, 0);
     PROF_ENTER2();

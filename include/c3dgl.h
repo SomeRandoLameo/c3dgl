@@ -111,6 +111,8 @@ void c3dglGetFrameStats(float *gpuMs, float *cpuMs, float *cmdBufUsage);
 // Milliseconds the CPU spent blocked since the last call; resets: waiting for the GPU to finish the previous frame
 // (C3D_FrameBegin) and for the VBlank before presenting (C3D_FrameSync). What is left of a window is CPU work.
 double c3dglGetGpuWaitMs(void);
+// The same waits in system ticks (SYSCLOCK_ARM11), summed since c3dglInit() and never reset
+unsigned long long c3dglGetWaitTicksTotal(void);
 
 // CPU time inside c3dgl by category (draw paths, state changes, flushes, uploads), averaged over `frames` frames and
 // printed. Resets the totals. Does nothing unless c3dgl was built with C3DGL_PROFILE.
