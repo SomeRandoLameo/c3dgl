@@ -17,6 +17,7 @@ static struct {
     C3D_AttrInfo standardAttrInfo, compactAttrInfo;
     C3D_BufInfo standardBufInfo;
     bool compactLayout;                 // the compact layout is set on the GPU state
+    int vertexReserve;                  // vertices of gl.vbo kept back from the draws (c3dglReserveVertices())
     bool compactBufBound;               // ...and its buffer configuration: a draw only moves buffer 0 (drawCompactCache())
     float compactBias;                  // depth bias last set as its fixed attribute
     u16 *quadIndices;                   // 0 1 2 0 2 3, 4 5 6 4 6 7, ... in linear memory, C3DGL_MAX_VERTICES of them

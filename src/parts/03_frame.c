@@ -889,9 +889,15 @@ static void prepareDraw(bool clipSpace, bool points)
     PROF_LEAVE(PB_PREPARE, 0);
 }
 
+// How many vertices of gl.vbo the frame's draws may fill: all but the reserve
+static int vertexLimit(void)
+{
+    return C3DGL_MAX_VERTICES - gl.vertexReserve;
+}
+
 static bool reserveVertices(int count)
 {
-    if (gl.vertexCount + count <= C3DGL_MAX_VERTICES) return true;
+    if (gl.vertexCount + count <= vertexLimit()) return true;
 
     WARN_ONCE("Vertex buffer full (%i vertices per frame), dropping geometry\n", C3DGL_MAX_VERTICES);
     return false;

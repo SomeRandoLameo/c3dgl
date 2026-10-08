@@ -321,6 +321,11 @@ void c3dglGetFrameStats(float *gpuMs, float *cpuMs, float *cmdBufUsage)
 // which C3D_FrameBegin stops and only C3D_FrameEnd runs again
 extern u8 __C3D_Context[];
 
+void c3dglReserveVertices(int count)
+{
+    gl.vertexReserve = (count < 0)? 0 : (count > C3DGL_MAX_VERTICES)? C3DGL_MAX_VERTICES : count;
+}
+
 void c3dglSubmit(void)
 {
     if (!gl.ready || !gl.frameActive || !gl.drawnThisFrame) return;

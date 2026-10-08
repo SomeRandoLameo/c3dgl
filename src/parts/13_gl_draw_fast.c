@@ -278,13 +278,13 @@ static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, in
             if (!cache->data) { free(cache); cache = NULL; }
         }
     }
-    if (!cache && n > C3DGL_MAX_VERTICES - gl.vertexCount)
+    if (!cache && n > vertexLimit() - gl.vertexCount)
     {
         // Preserve the generic path's complete-triangle prefix without
         // decoding every remaining vertex just to drop it. In large worlds
         // that fallback used more CPU time than drawing the terrain itself.
         reserveVertices(n);    // Report exhaustion once, as the generic path does
-        n = (C3DGL_MAX_VERTICES - gl.vertexCount) / 3 * 3;
+        n = (vertexLimit() > gl.vertexCount)? (vertexLimit() - gl.vertexCount) / 3 * 3 : 0;
         if (n == 0) return true;
     }
 
@@ -379,11 +379,11 @@ static bool arrayTriangleFastPath(GLenum mode, GLint first, GLsizei count)
 
     int n = count - (count % 3);
     if (n <= 0) return true;
-    if (n > C3DGL_MAX_VERTICES - gl.vertexCount)
+    if (n > vertexLimit() - gl.vertexCount)
     {
         // Same complete-triangle prefix as the generic path, without decoding what gets dropped
         reserveVertices(n);
-        n = (C3DGL_MAX_VERTICES - gl.vertexCount) / 3 * 3;
+        n = (vertexLimit() > gl.vertexCount)? (vertexLimit() - gl.vertexCount) / 3 * 3 : 0;
         if (n == 0) return true;
     }
 

@@ -120,6 +120,10 @@ unsigned long long c3dglGetWaitTicksTotal(void);
 // frame or before its first draw.
 void c3dglSubmit(void);
 
+// Keeps the last `count` vertices of the frame's vertex buffer back from the draws that follow (0: none), so that what
+// is drawn later in the frame (a HUD) still fits after a heavy scene. Geometry that does not fit is dropped, as before.
+void c3dglReserveVertices(int count);
+
 // One mesh for c3dglDrawMeshes(): a buffer of 16-byte vertices (short x, y, z, pad; short s, t; ubyte RGBA) and the
 // number of indices to draw from the bound element array buffer, at (x, y, z)
 typedef struct {
