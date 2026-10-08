@@ -17,6 +17,7 @@ enum {
     PB_LISTS,           // glCallList(s) itself, the draws inside are charged to their own buckets
     PB_APPLY_STATE,     // applyState: a draw state change, calls = number of batches started
     PB_APPLY_MATRIX,    // applyMatrixOnly: a new batch whose state differs only in the matrices
+    PB_MESHES,          // c3dglDrawMeshes outside the draws: checks and matrices; calls = meshes drawn directly
     PB_FLUSH,           // C3D_DrawArrays of a batch
     PB_FLUSH_CACHE,     // CPU cache flushes before the GPU reads the vertices
     PB_SWAP,            // C3D_FrameEnd
@@ -34,7 +35,7 @@ enum {
     PB_COUNT
 };
 static const char *const profNames[PB_COUNT] = {
-    "arr-fast", "arr-gen", "el-cache", "el-fast", "el-gen", "imm", "lists", "apply", "apply-mtx", "flush", "cacheflush", "swap",
+    "arr-fast", "arr-gen", "el-cache", "el-fast", "el-gen", "imm", "lists", "apply", "apply-mtx", "meshes", "flush", "cacheflush", "swap",
     "tex", "buffer", "clear", "prepare", "drawcache", "presentsync", "framebegin", "framesetup", "targetswitch", "linktarget", "drawon"
 };
 

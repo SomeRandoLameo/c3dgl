@@ -120,6 +120,23 @@ unsigned long long c3dglGetWaitTicksTotal(void);
 // frame or before its first draw.
 void c3dglSubmit(void);
 
+// One mesh for c3dglDrawMeshes(): a buffer of 16-byte vertices (short x, y, z, pad; short s, t; ubyte RGBA) and the
+// number of indices to draw from the bound element array buffer, at (x, y, z)
+typedef struct {
+    unsigned int buffer;        // GLuint
+    int count;                  // GLsizei
+    float x, y, z;
+} C3DGLmesh;
+
+// Draws `n` meshes as this would for each of them, with the element array buffer bound and the vertex, texcoord and
+// color arrays enabled (the modelview matrix and the array state are left as it leaves them):
+//   glPushMatrix(); glTranslatef(x, y, z); glScalef(scale, scale, scale); glBindBuffer(GL_ARRAY_BUFFER, buffer);
+//   glVertexPointer(3, GL_SHORT, 16, 0); glTexCoordPointer(2, GL_SHORT, 16, 8); glColorPointer(4, GL_UNSIGNED_BYTE, 16, 12);
+//   glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_SHORT, 0); glPopMatrix();
+// A mesh whose buffer already has its GPU cache for exactly this draw is drawn straight from it: the matrix is computed
+// with the same operations, the state is set once for all. Every other mesh takes the GL calls above.
+void c3dglDrawMeshes(const C3DGLmesh *meshes, int n, float scale);
+
 // CPU time inside c3dgl by category (draw paths, state changes, flushes, uploads), averaged over `frames` frames and
 // printed. Resets the totals. Does nothing unless c3dgl was built with C3DGL_PROFILE.
 void c3dglProfileDump(int frames);

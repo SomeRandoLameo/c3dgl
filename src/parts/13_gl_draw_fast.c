@@ -418,6 +418,104 @@ static bool arrayTriangleFastPath(GLenum mode, GLint first, GLsizei count)
     return true;
 }
 
+// The GL calls c3dglDrawMeshes() stands for, for one mesh
+static void drawMeshGL(const C3DGLmesh *m, GLfloat scale)
+{
+    glPushMatrix();
+    glTranslatef(m->x, m->y, m->z);
+    glScalef(scale, scale, scale);
+    glBindBuffer(GL_ARRAY_BUFFER, m->buffer);
+    glVertexPointer(3, GL_SHORT, 16, (const GLvoid *)0);
+    glTexCoordPointer(2, GL_SHORT, 16, (const GLvoid *)8);
+    glColorPointer(4, GL_UNSIGNED_BYTE, 16, (const GLvoid *)12);
+    glDrawElements(GL_TRIANGLES, m->count, GL_UNSIGNED_SHORT, (const GLvoid *)0);
+    glPopMatrix();
+}
+
+// The array state glVertexPointer/glTexCoordPointer/glColorPointer leave for a mesh in `buffer` (what its cache key holds)
+static void meshArrays(GLuint buffer, ClientArray out[3])
+{
+    static const GLint sizes[3] = { 3, 2, 4 };
+    static const GLenum types[3] = { GL_SHORT, GL_SHORT, GL_UNSIGNED_BYTE };
+    static const uintptr_t offsets[3] = { 0, 8, 12 };
+    memset(out, 0, 3*sizeof(ClientArray));      // (cache keys are compared with memcmp, padding included)
+    for (int i = 0; i < 3; i++)
+    {
+        out[i].enabled = true;
+        out[i].pointer = (const void *)offsets[i];
+        out[i].buffer = buffer;
+        out[i].size = sizes[i];
+        out[i].type = types[i];
+        out[i].stride = 16;
+    }
+}
+
+void c3dglDrawMeshes(const C3DGLmesh *meshes, int n, float scale)
+{
+    if (n <= 0) return;
+    // Straight from the caches only where glDrawElements would take the cache too and nothing but the matrix changes
+    // from mesh to mesh: no display list, modelview matrix mode, the fast path's state, the three arrays on, no stipple
+    // (its pattern coordinates follow the matrix too)
+    const Buffer *ib = (gl.elementArrayBuffer && gl.elementArrayBuffer < gl.bufferCount)? &gl.buffers[gl.elementArrayBuffer] : NULL;
+    bool direct = gl.ready && matrixFastPath && !gl.listCompiling && (gl.renderMode == GL_RENDER) && (gl.matrixMode == 0) &&
+                  (ib != NULL) && (ib->usage == GL_STATIC_DRAW) && !gl.polygonStipple &&
+                  gl.arrays[ARRAY_VERTEX].enabled && gl.arrays[ARRAY_TEXCOORD0].enabled && gl.arrays[ARRAY_COLOR].enabled &&
+                  fastPathStateOk();
+    bool prepared = false, drewDirect = false;
+    for (int i = 0; i < n; i++)
+    {
+        const C3DGLmesh *m = &meshes[i];
+        GpuBufferCache *cache = NULL;
+        if (direct && m->buffer && (m->buffer < gl.bufferCount))
+        {
+            cache = gl.buffers[m->buffer].gpuCache;
+            ClientArray arrays[3];
+            meshArrays(m->buffer, arrays);
+            if ((cache == NULL) || !cache->compact || (cache->count != m->count) || (cache->indexRevision != ib->revision) ||
+                (cache->indexOffset != 0) || (cache->shadeModel != gl.shadeModel) ||
+                (memcmp(&cache->depthBias, &gl.current.depthBias, sizeof(float)) != 0) ||
+                (memcmp(cache->arrays, arrays, sizeof(arrays)) != 0)) cache = NULL;
+        }
+        if (cache == NULL) { drawMeshGL(m, scale); continue; }
+
+        PROF_ENTER();
+        if (!prepared || gl.batch.matrixSerial != ~0u)
+        {
+            // The state of the meshes, once (and again after a mesh that went through GL); the matrix follows per mesh
+            prepareDraw(false, false);
+            prepared = true;
+        }
+        // The matrices exactly as glTranslatef, glScalef, projectionModelview() and applyMatrixState() compute them
+        Mat4 mv = gl.stack[0][gl.stackDepth[0]], t;
+        mat4Identity(&t);
+        t.m[12] = m->x; t.m[13] = m->y; t.m[14] = m->z;
+        mat4Mul(&mv, &mv, &t);
+        mat4Identity(&t);
+        t.m[0] = scale; t.m[5] = scale; t.m[10] = scale;
+        mat4Mul(&mv, &mv, &t);
+        Mat4 pmv, mvp;
+        mat4Mul(&pmv, &gl.stack[1][gl.stackDepth[1]], &mv);
+        mat4Mul(&mvp, &gl.post, &pmv);
+        C3D_Mtx mtx;
+        mat4ToC3D(&mvp, &mtx);
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, gl.uLocMvp, &mtx);
+        // The uploaded matrix belongs to no matrix serial: the next draw sets its own
+        gl.batch.matrixSerial = ~0u;
+        PROF_LEAVE(PB_MESHES, 0);
+        drawGpuCache(cache);
+        drewDirect = true;
+    }
+    if (drewDirect)
+    {
+        // The array state the GL calls would have left
+        const C3DGLmesh *last = &meshes[n - 1];
+        glBindBuffer(GL_ARRAY_BUFFER, last->buffer);
+        glVertexPointer(3, GL_SHORT, 16, (const GLvoid *)0);
+        glTexCoordPointer(2, GL_SHORT, 16, (const GLvoid *)8);
+        glColorPointer(4, GL_UNSIGNED_BYTE, 16, (const GLvoid *)12);
+    }
+}
+
 #ifdef C3DGL_PROFILE
 static void glDrawElementsBody(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices)
 #else
