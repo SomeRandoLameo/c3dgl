@@ -107,6 +107,8 @@ static C3D_RenderTarget *curTarget(void)
 
 // Link the current screen's target to its display. Done on every switch, as the app may have
 // changed the screen format in between (e.g. from the console to graphics)
+static u64 gpuWaitTicks;    // Time spent blocked on the GPU or the display, see c3dglGetGpuWaitMs()
+
 static void linkTarget(void)
 {
     gfxScreen_t screen = (gl.screen == C3DGL_SCREEN_BOTTOM)? GFX_BOTTOM : GFX_TOP;
@@ -115,11 +117,12 @@ static void linkTarget(void)
     // About 1.5 ms per call in the Normal benchmark, twice a frame, but it is time spent waiting for the display to
     // be done with the previous frame: not calling it only moves the wait to C3D_FrameBegin
     PROF_ENTER();
+    const u64 waitStart = svcGetSystemTick();
     C3D_RenderTargetSetOutput(curTarget(), screen, side, flags);
+    gpuWaitTicks += svcGetSystemTick() - waitStart;
     PROF_LEAVE(PB_LINK_TARGET, 0);
 }
 
-static u64 gpuWaitTicks;    // Time spent in C3D_FrameBegin, see c3dglGetGpuWaitMs()
 
 // C3D_FRAME_SYNCDRAW makes every frame start at a VBlank. That is only there so that a frame is not presented while the
 // previous one is still being switched in, which can only happen when a frame is shorter than a refresh. A frame that took
