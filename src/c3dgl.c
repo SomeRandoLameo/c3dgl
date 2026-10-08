@@ -5306,6 +5306,8 @@ void glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer)
     glVertexPointer(f->vertexSize, GL_FLOAT, stride, base + f->vertexOffset);
 }
 
+static bool arrayTriangleFastPath(GLenum mode, GLint first, GLsizei count);
+
 void glDrawArrays(GLenum mode, GLint first, GLsizei count)
 {
     if (count < 0) { setError(GL_INVALID_VALUE); return; }
@@ -5320,6 +5322,11 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
     }
     if (!arraysReady() || !beginPrimitive(mode)) return;
 
+    if (arrayTriangleFastPath(mode, first, count))
+    {
+        endPrimitive();
+        return;
+    }
     for (int i = 0; i < count; i++) submitArrayVertex(first + i);
     endPrimitive();
 }
@@ -5392,10 +5399,11 @@ static void drawGpuCache(GpuBufferCache *cache)
     gl.drawnThisFrame = true;
 }
 
-// Returns true if the call was submitted
-static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, int count)
+// What both direct-decode paths (indexed and array triangles) need from the current state: no lighting,
+// texgen, clip planes, polygon modes, second/third texture unit or per-vertex normal/edge/point size, and
+// vertex, texcoord 0 and color arrays.
+static bool fastPathStateOk(void)
 {
-    if ((mode != GL_TRIANGLES) || (type != GL_UNSIGNED_SHORT)) { fastPathReject("mode/type"); return false; }
     if (gl.renderMode != GL_RENDER) { fastPathReject("render mode"); return false; }
     if (gl.lightingEnabled) { fastPathReject("lighting"); return false; }
     if (gl.texGen[0].enabled || gl.texGen[1].enabled || gl.texGen[2].enabled) { fastPathReject("texgen"); return false; }
@@ -5406,6 +5414,14 @@ static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, in
     if (arrayActive(ARRAY_NORMAL) || arrayActive(ARRAY_EDGEFLAG) || arrayActive(ARRAY_POINTSIZE)) { fastPathReject("normal/edge/pointsize array"); return false; }
     if (!arrayActive(ARRAY_VERTEX) || !arrayActive(ARRAY_TEXCOORD0) || !arrayActive(ARRAY_COLOR)) { fastPathReject("missing array"); return false; }
     if (sizeof(GpuVertex) != GPU_VERTEX_SIZE) { fastPathReject("vertex layout"); return false; }
+    return true;
+}
+
+// Returns true if the call was submitted
+static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, int count)
+{
+    if ((mode != GL_TRIANGLES) || (type != GL_UNSIGNED_SHORT)) { fastPathReject("mode/type"); return false; }
+    if (!fastPathStateOk()) return false;
 
     const ClientArray *av = &gl.arrays[ARRAY_VERTEX];
     const ClientArray *at = &gl.arrays[ARRAY_TEXCOORD0];
@@ -5531,6 +5547,70 @@ static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, in
         GSPGPU_FlushDataCache(cache->data, cache->bytes);
         drawGpuCache(cache);
     } else gl.vertexCount += n;
+    return true;
+}
+
+// glDrawArrays(GL_TRIANGLES) for the layout the Tesselator uses (GUI, text, clouds, entities): GL_FLOAT position (3)
+// and texcoord (2), GL_UNSIGNED_BYTE color (4). Decoded straight into the GPU vertex buffer like the indexed path;
+// anything else takes the generic per-vertex loop. Returns true if the call was submitted.
+static bool arrayTriangleFastPath(GLenum mode, GLint first, GLsizei count)
+{
+    if (mode != GL_TRIANGLES) { fastPathReject("mode"); return false; }
+    if (first < 0) return false;
+    if (!fastPathStateOk()) return false;
+
+    const ClientArray *av = &gl.arrays[ARRAY_VERTEX];
+    const ClientArray *at = &gl.arrays[ARRAY_TEXCOORD0];
+    const ClientArray *ac = &gl.arrays[ARRAY_COLOR];
+    if ((av->type != GL_FLOAT) || (av->size != 3)) { fastPathReject("vertex array type"); return false; }
+    if ((at->type != GL_FLOAT) || (at->size != 2)) { fastPathReject("texcoord array type"); return false; }
+    if ((ac->type != GL_UNSIGNED_BYTE) || (ac->size != 4)) { fastPathReject("color array type"); return false; }
+
+    int n = count - (count % 3);
+    if (n <= 0) return true;
+    if (n > C3DGL_MAX_VERTICES - gl.vertexCount)
+    {
+        // Same complete-triangle prefix as the generic path, without decoding what gets dropped
+        reserveVertices(n);
+        n = (C3DGL_MAX_VERTICES - gl.vertexCount) / 3 * 3;
+        if (n == 0) return true;
+    }
+
+    const int last = first + n - 1;
+    if (!arrayInRange(av, last) || !arrayInRange(at, last) || !arrayInRange(ac, last)) return false;
+    const u8 *vbase = bufferRange(av->buffer, av->pointer, 0, 0);
+    const u8 *tbase = bufferRange(at->buffer, at->pointer, 0, 0);
+    const u8 *cbase = bufferRange(ac->buffer, ac->pointer, 0, 0);
+    if ((vbase == NULL) || (tbase == NULL) || (cbase == NULL)) return false;
+
+    const int vstride = av->stride? av->stride : 3*(int)sizeof(float);
+    const int tstride = at->stride? at->stride : 2*(int)sizeof(float);
+    const int cstride = ac->stride? ac->stride : 4;
+    const float depthBias = gl.current.depthBias;
+    const bool flat = (gl.shadeModel == GL_FLAT);
+
+    initByteColor();
+    u8 *out = gl.vbo + (size_t)gl.vertexCount*GPU_VERTEX_SIZE;
+    for (int i = 0; i < n; i += 3, out += 3*GPU_VERTEX_SIZE)
+    {
+        // GL_FLAT: the provoking vertex is the last one of the triangle
+        const u8 *flatColor = flat? cbase + (size_t)(first + i + 2)*cstride : NULL;
+        for (int k = 0; k < 3; k++)
+        {
+            const int v = first + i + k;
+            const u8 *pc = flat? flatColor : cbase + (size_t)v*cstride;
+            GpuVertex *g = (GpuVertex *)(out + (size_t)k*GPU_VERTEX_SIZE);
+            memcpy(g->pos, vbase + (size_t)v*vstride, 3*sizeof(float));
+            memcpy(g->tex, tbase + (size_t)v*tstride, 2*sizeof(float));
+            g->tex[2] = 1.0f;               // Size 2 texcoords leave q at 1
+            g->color[0] = byteColor[pc[0]];
+            g->color[1] = byteColor[pc[1]];
+            g->color[2] = byteColor[pc[2]];
+            g->color[3] = byteColor[pc[3]];
+            g->depthBias = depthBias;
+        }
+    }
+    gl.vertexCount += n;
     return true;
 }
 

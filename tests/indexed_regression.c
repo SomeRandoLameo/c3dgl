@@ -60,6 +60,38 @@ static void comparePaths(int used, int count, bool flat, bool vbo)
     check(gl.error == referenceError, "same GL error state");
 }
 
+// glDrawArrays(GL_TRIANGLES) with the Tesselator layout: float position and texcoord, byte color
+typedef struct { float pos[3], uv[2]; u8 color[4]; } PackedF;
+static PackedF inputF[64];
+
+static void setupF(int used, bool flat, bool vbo)
+{
+    setup(used, flat, vbo);
+    buffers[1] = (Buffer){ true, (u8*)inputF, sizeof(inputF), GL_STATIC_DRAW, 0, NULL };
+    gl.arrays[ARRAY_VERTEX] = (ClientArray){true, vbo ? 0 : inputF[0].pos, vbo ? 1 : 0, 3, GL_FLOAT, sizeof(PackedF)};
+    gl.arrays[ARRAY_TEXCOORD0] = (ClientArray){true, vbo ? (void*)12 : inputF[0].uv, vbo ? 1 : 0, 2, GL_FLOAT, sizeof(PackedF)};
+    gl.arrays[ARRAY_COLOR] = (ClientArray){true, vbo ? (void*)20 : inputF[0].color, vbo ? 1 : 0, 4, GL_UNSIGNED_BYTE, sizeof(PackedF)};
+}
+
+static void compareArrayPaths(int used, int first, int count, bool flat, bool vbo)
+{
+    setupF(used, flat, vbo);
+    Vertex current = gl.current;
+    for (int i = 0; i < count; i++) submitArrayVertex(first + i);
+    endPrimitive();
+    int referenceCount = gl.vertexCount;
+    memcpy(reference, output, sizeof(output));
+    GLenum referenceError = gl.error;
+
+    setupF(used, flat, vbo);
+    check(arrayTriangleFastPath(GL_TRIANGLES, first, count), "array path handled");
+    endPrimitive();
+    check(gl.vertexCount == referenceCount, "array path: same complete triangle count");
+    check(memcmp(reference, output, sizeof(output)) == 0, "array path: identical GPU vertex bytes including untouched tail");
+    check(memcmp(&current, &gl.current, sizeof(current)) == 0, "array path: current attributes unchanged");
+    check(gl.error == referenceError, "array path: same GL error state");
+}
+
 int main(void)
 {
     gfxInitDefault();
@@ -80,6 +112,35 @@ int main(void)
             for (int flat = 0; flat < 2; flat++)
                 for (int vbo = 0; vbo < 2; vbo++)
                     comparePaths(used, count, flat, vbo);
+
+    for (int i = 0; i < 64; i++) {
+        inputF[i].pos[0] = i * 1.5f - 40.0f;
+        inputF[i].pos[1] = 100.0f - i * 0.25f;
+        inputF[i].pos[2] = -(float)i;
+        inputF[i].uv[0] = i / 64.0f;
+        inputF[i].uv[1] = 1.0f - i / 64.0f;
+        for (int c = 0; c < 4; c++) inputF[i].color[c] = (u8)(i * 4 + c);
+    }
+    static const int firsts[] = { 0, 3, 7 };
+    for (int used = 0; used <= C3DGL_MAX_VERTICES; used++)
+        for (int f = 0; f < 3; f++)
+            for (int count = 0; count <= 57; count++)
+                for (int flat = 0; flat < 2; flat++)
+                    for (int vbo = 0; vbo < 2; vbo++)
+                        compareArrayPaths(used, firsts[f], count, flat, vbo);
+    // Reading past the end of a buffer object, a negative start and other modes are left to the generic path
+    setupF(0, false, true);
+    check(!arrayTriangleFastPath(GL_TRIANGLES, 60, 9), "array path: buffer overrun rejected");
+    setupF(0, false, false);
+    check(!arrayTriangleFastPath(GL_TRIANGLES, -3, 9), "array path: negative first rejected");
+    setupF(0, false, false);
+    check(!arrayTriangleFastPath(GL_TRIANGLE_STRIP, 0, 9), "array path: strip rejected");
+    setupF(0, false, false);
+    gl.arrays[ARRAY_VERTEX].type = GL_SHORT;
+    check(!arrayTriangleFastPath(GL_TRIANGLES, 0, 9), "array path: short positions rejected");
+    setupF(0, false, false);
+    gl.lightingEnabled = true;
+    check(!arrayTriangleFastPath(GL_TRIANGLES, 0, 9), "array path: lighting rejected");
 
     // All special features must still reject the fast path and retain their
     // original generic implementation, even when the frame buffer is full.
