@@ -114,6 +114,12 @@ double c3dglGetGpuWaitMs(void);
 // The same waits in system ticks (SYSCLOCK_ARM11), summed since c3dglInit() and never reset
 unsigned long long c3dglGetWaitTicksTotal(void);
 
+// Sends what the frame has drawn so far to the GPU (C3D_FrameSplit) instead of all of it at c3dglSwapBuffers(). The
+// GPU then renders that part while the CPU goes on with the rest: citro3d begins no frame before the GPU finished the
+// previous one, so whatever the GPU still has to do at the swap is time the next frame waits. Does nothing outside a
+// frame or before its first draw.
+void c3dglSubmit(void);
+
 // CPU time inside c3dgl by category (draw paths, state changes, flushes, uploads), averaged over `frames` frames and
 // printed. Resets the totals. Does nothing unless c3dgl was built with C3DGL_PROFILE.
 void c3dglProfileDump(int frames);

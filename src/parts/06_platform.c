@@ -315,6 +315,14 @@ void c3dglGetFrameStats(float *gpuMs, float *cpuMs, float *cmdBufUsage)
     if (cmdBufUsage) *cmdBufUsage = C3D_GetCmdBufUsage();
 }
 
+void c3dglSubmit(void)
+{
+    if (!gl.ready || !gl.frameActive || !gl.drawnThisFrame) return;
+    // As before a clear (see glClear()): the vertices and the split part of the command list flushed from the CPU cache
+    flushVertexCache();
+    C3D_FrameSplit(GX_CMDLIST_FLUSH);
+}
+
 unsigned long long c3dglGetWaitTicksTotal(void)
 {
     return waitTicksTotal;
