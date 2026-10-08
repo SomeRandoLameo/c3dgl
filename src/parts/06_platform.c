@@ -173,7 +173,7 @@ bool c3dglInit(void)
 
 void c3dglClose(void)
 {
-    if (gl.frameActive) { flushVertexCache(); C3D_FrameEnd(0); gl.frameActive = false; }
+    if (gl.frameActive) { flushVertexCache(); C3D_FrameEnd(GX_CMDLIST_FLUSH); gl.frameActive = false; }	// (see c3dglSwapBuffers())
 
     // Finish outstanding commands before releasing immutable GPU buffers.
     if (gl.ready) { C3D_FrameBegin(C3D_FRAME_SYNCDRAW); C3D_FrameEnd(0); gl.frameSerial++; }
@@ -322,6 +322,10 @@ extern u8 __C3D_Context[];
 void c3dglSubmit(void)
 {
     if (!gl.ready || !gl.frameActive || !gl.drawnThisFrame) return;
+    // Every split takes an entry of the queue until the next frame begins, and citro3d's queue has 32 (a full one is a
+    // svcBreak). Clears take two each, C3D_FrameEnd one plus one per display transfer: keep 8 for them
+    gxCmdQueue_s *queue = (gxCmdQueue_s *)__C3D_Context;
+    if ((queue->entries == NULL) || (queue->maxEntries == 0) || (queue->numEntries + 8 > queue->maxEntries)) return;
     // As before a clear (see glClear()): the vertices and the split part of the command list flushed from the CPU cache
     flushVertexCache();
     C3D_FrameSplit(GX_CMDLIST_FLUSH);
@@ -329,8 +333,7 @@ void c3dglSubmit(void)
     // the swap after all. Run it now. Commands queued earlier in the frame (clears) go first, later ones are submitted
     // as they come; C3D_FrameEnd queues the display transfers behind them and the next C3D_FrameBegin waits for all of
     // it as before. Mid-frame the queue's completion callback swaps nothing (no transfer has been asked for yet).
-    gxCmdQueue_s *queue = (gxCmdQueue_s *)__C3D_Context;
-    if ((queue->entries != NULL) && (queue->maxEntries > 0)) gxCmdQueueRun(queue);
+    gxCmdQueueRun(queue);
 }
 
 unsigned long long c3dglGetWaitTicksTotal(void)
@@ -360,8 +363,12 @@ void c3dglSwapBuffers(void)
     }
 #endif
     {
+        // GX_CMDLIST_FLUSH: GSP flushes the last part of the command list before running it. Without the flag
+        // C3D_FrameEnd queues that part first and flushes the whole linear heap afterwards, which is only in time while
+        // the GX queue is still stopped; c3dglSubmit() may have started it, and the GPU would then read stale commands
+        // and hang (real hardware only). Everything else the GPU reads is flushed where c3dgl writes it.
         PROF_ENTER();
-        C3D_FrameEnd(0);
+        C3D_FrameEnd(GX_CMDLIST_FLUSH);
         PROF_LEAVE(PB_SWAP, 0);
     }
     lastPresentMs = osGetTime();
