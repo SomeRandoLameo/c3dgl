@@ -315,12 +315,22 @@ void c3dglGetFrameStats(float *gpuMs, float *cpuMs, float *cmdBufUsage)
     if (cmdBufUsage) *cmdBufUsage = C3D_GetCmdBufUsage();
 }
 
+// citro3d's context. It begins with the GX command queue citro3d binds (C3Di_RenderQueueInit: GX_BindQueue(&ctx)),
+// which C3D_FrameBegin stops and only C3D_FrameEnd runs again
+extern u8 __C3D_Context[];
+
 void c3dglSubmit(void)
 {
     if (!gl.ready || !gl.frameActive || !gl.drawnThisFrame) return;
     // As before a clear (see glClear()): the vertices and the split part of the command list flushed from the CPU cache
     flushVertexCache();
     C3D_FrameSplit(GX_CMDLIST_FLUSH);
+    // A split only queues its commands: the queue stays stopped until C3D_FrameEnd, so the GPU would not start before
+    // the swap after all. Run it now. Commands queued earlier in the frame (clears) go first, later ones are submitted
+    // as they come; C3D_FrameEnd queues the display transfers behind them and the next C3D_FrameBegin waits for all of
+    // it as before. Mid-frame the queue's completion callback swaps nothing (no transfer has been asked for yet).
+    gxCmdQueue_s *queue = (gxCmdQueue_s *)__C3D_Context;
+    if ((queue->entries != NULL) && (queue->maxEntries > 0)) gxCmdQueueRun(queue);
 }
 
 unsigned long long c3dglGetWaitTicksTotal(void)
