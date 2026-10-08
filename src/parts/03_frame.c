@@ -623,6 +623,9 @@ static void applyState(const DrawState *s, const DrawState *prev)
     // n + 1 (unit 2 is unused then, see drawKey()), PICA unit 0 samples the pattern
     bool pixelChanged = CHANGED(pixelMode) || CHANGED(pixelTex);
     bool stippleChanged = CHANGED(stipple);
+    // The vertex shader computes the texcoords of units 1 and 2 only for draws that sample them (not used with stipple)
+    if ((prev == NULL) || stippleChanged || CHANGED(units[1].texture) || CHANGED(units[2].texture))
+        C3D_BoolUnifSet(GPU_VERTEX_SHADER, gl.uLocUnits12, (s->units[1].texture != 0) || (s->units[2].texture != 0));
     gl.texUnitShift = s->stipple? 1 : 0;
     if (s->stipple && (stippleChanged || CHANGED(stippleTex))) C3D_TexBind(0, (C3D_Tex *)s->stippleTex);
     for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)

@@ -11,7 +11,7 @@ static struct {
     bool stereo;                        // gfxSet3D(true), the right eye target exists
     DVLB_s *dvlb;
     shaderProgram_s program;
-    int uLocMvp, uLocTexMat[C3DGL_TEXTURE_UNITS], uLocStipple, uLocQBias;
+    int uLocMvp, uLocTexMat[C3DGL_TEXTURE_UNITS], uLocStipple, uLocQBias, uLocUnits12;
     // Vertex layouts: the standard one of gl.vbo and expanded caches, and the compact one that reads a buffer's own
     // 16-byte vertices (short position, short texcoord, ubyte color) from its cache (drawCompactCache())
     C3D_AttrInfo standardAttrInfo, compactAttrInfo;

@@ -14,6 +14,7 @@
 .fvec texmat1[3]
 .fvec texmat2[3]
 .bool stipple
+.bool units12                   ; texture units 1 or 2 in use (without stipple): only then are their texcoords computed
 .fvec qbias                     ; x: added to q of texcoord 0 (1 for the compact cache layout, see drawCompactCache)
 
 ; Constants
@@ -87,6 +88,7 @@
 	dp4 outtc0.z, texmat0[2], r2
 	mov outtc0.w, one           ; Unused, but real hardware hangs on output registers that are not fully written
 
+	ifu units12
 	; Unit 1
 	mov r2.xy, intc1.xy
 	mov r2.w,  intc1.z
@@ -104,6 +106,11 @@
 	dp4 r3.z, texmat2[2], r2
 	rcp r3.w, r3.z
 	mul outtc2, r3, r3.wwww
+	.else
+	; Neither unit samples: their outputs written (see above) without the work, most draws use unit 0 alone
+	mov outtc1, zero
+	mov outtc2, zero
+	.end
 	.end
 
 	mul outclr, inv255, inclr

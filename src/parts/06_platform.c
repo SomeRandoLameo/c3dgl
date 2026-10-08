@@ -39,6 +39,8 @@ bool c3dglInit(void)
     gl.uLocTexMat[2] = shaderInstanceGetUniformLocation(gl.program.vertexShader, "texmat2");
     gl.uLocStipple = shaderInstanceGetUniformLocation(gl.program.vertexShader, "stipple");
     gl.uLocQBias = shaderInstanceGetUniformLocation(gl.program.vertexShader, "qbias");
+    gl.uLocUnits12 = shaderInstanceGetUniformLocation(gl.program.vertexShader, "units12");
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER, gl.uLocUnits12, true);    // Until applyState() knows better
     C3D_FVUnifSet(GPU_VERTEX_SHADER, gl.uLocQBias, 0.0f, 0.0f, 0.0f, 0.0f);
 
     // Vertex layout: v0 = position (3 floats), v1 = texcoord s, t, q (3 floats), v2 = color (4 ubytes), v3 = depth bias (float)
