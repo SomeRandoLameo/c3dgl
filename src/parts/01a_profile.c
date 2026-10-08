@@ -24,11 +24,12 @@ enum {
     PB_CLEAR,           // glClear
     PB_PREPARE,         // prepareDraw: building the draw state key and comparing it with the batch's
     PB_DRAWCACHE,       // drawGpuCache: buffer binding and draw of a cached mesh
+    PB_PRESENT_SYNC,    // C3D_FrameSync before presenting: waiting for the VBlank
     PB_COUNT
 };
 static const char *const profNames[PB_COUNT] = {
     "arr-fast", "arr-gen", "el-cache", "el-fast", "el-gen", "imm", "lists", "apply", "flush", "cacheflush", "swap",
-    "tex", "buffer", "clear", "prepare", "drawcache"
+    "tex", "buffer", "clear", "prepare", "drawcache", "presentsync"
 };
 
 // Why the direct-decode paths gave up (fastPathReject), counted

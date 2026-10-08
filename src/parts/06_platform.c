@@ -302,7 +302,12 @@ void c3dglSwapBuffers(void)
     ensureFrame();      // Present even if nothing was drawn
     flushVertexCache();
 #if C3DGL_PRESENT_GAP_MS > 0
-    if (osGetTime() - lastPresentMs < C3DGL_PRESENT_GAP_MS) C3D_FrameSync();
+    if (osGetTime() - lastPresentMs < C3DGL_PRESENT_GAP_MS)
+    {
+        PROF_ENTER();
+        C3D_FrameSync();
+        PROF_LEAVE(PB_PRESENT_SYNC, 0);
+    }
 #endif
     {
         PROF_ENTER();

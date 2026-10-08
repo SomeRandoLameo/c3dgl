@@ -121,8 +121,12 @@ static u64 gpuWaitTicks;    // Time spent in C3D_FrameBegin, see c3dglGetGpuWait
 // longer needs no alignment, and waiting for the next VBlank anyway cost half a refresh (8 ms) per frame on average. So the
 // frame starts without the wait, and the wait is made before presenting, and only if the previous present was less than
 // C3DGL_PRESENT_GAP_MS ago. Define C3DGL_PRESENT_GAP_MS as 0 for the old behaviour.
+//
+// One refresh (16.7 ms) is the most that can be shown: 16 ms keeps the cap at 60 frames per second. The value was 25
+// before; a frame that took 22 to 25 ms then still waited for the VBlank and was held to 33 ms, which cost about 9 ms per
+// frame (30.9 against 38.9 frames per second in the Normal benchmark in Azahar).
 #ifndef C3DGL_PRESENT_GAP_MS
-#define C3DGL_PRESENT_GAP_MS 25
+#define C3DGL_PRESENT_GAP_MS 16
 #endif
 static u64 lastPresentMs;
 
