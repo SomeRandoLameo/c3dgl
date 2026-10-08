@@ -672,7 +672,11 @@ static void clearWithQuad(bool color, bool depth, bool stencil)
     emitTriangle(&v[0], &v[2], &v[3]);
 }
 
+#ifdef C3DGL_PROFILE
+static void glClearBody(GLbitfield mask)
+#else
 void glClear(GLbitfield mask)
+#endif
 {
     LIST_SAVE(CLEAR, "u", mask);
     if (mask & ~(GLbitfield)(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT | GL_ACCUM_BUFFER_BIT))
@@ -714,6 +718,15 @@ void glClear(GLbitfield mask)
     int bits = (color? C3D_CLEAR_COLOR : 0) | ((depth || stencil)? C3D_CLEAR_DEPTH : 0);
     C3D_RenderTargetClear(curTarget(), (C3D_ClearBits)bits, gl.clearColor, depthStencil);
 }
+
+#ifdef C3DGL_PROFILE
+void glClear(GLbitfield mask)
+{
+    PROF_ENTER();
+    glClearBody(mask);
+    PROF_LEAVE(PB_CLEAR, 0);
+}
+#endif
 
 void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha)
 {

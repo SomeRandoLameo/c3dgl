@@ -304,7 +304,11 @@ void c3dglSwapBuffers(void)
 #if C3DGL_PRESENT_GAP_MS > 0
     if (osGetTime() - lastPresentMs < C3DGL_PRESENT_GAP_MS) C3D_FrameSync();
 #endif
-    C3D_FrameEnd(0);
+    {
+        PROF_ENTER();
+        C3D_FrameEnd(0);
+        PROF_LEAVE(PB_SWAP, 0);
+    }
     lastPresentMs = osGetTime();
     gl.frameActive = false;
 }

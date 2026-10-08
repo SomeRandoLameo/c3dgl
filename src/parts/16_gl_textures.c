@@ -995,8 +995,13 @@ static void texImage(GLenum target, GLint level, GLint internalformat, GLsizei w
     finishTexImage(t, level);
 }
 
+#ifdef C3DGL_PROFILE
+static void glTexImage2DBody(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
+                          GLint border, GLenum format, GLenum type, const GLvoid *pixels)
+#else
 void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
                   GLint border, GLenum format, GLenum type, const GLvoid *pixels)
+#endif
 {
     if (gl.listCompiling && (target != GL_PROXY_TEXTURE_2D))     // Proxies are executed immediately
     {
@@ -1008,6 +1013,15 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei widt
     }
     texImage(target, level, internalformat, width, height, border, format, type, pixels, false);
 }
+
+#ifdef C3DGL_PROFILE
+void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,GLint border, GLenum format, GLenum type, const GLvoid *pixels)
+{
+    PROF_ENTER();
+    glTexImage2DBody(target, level, internalformat, width, height, border, format, type, pixels);
+    PROF_LEAVE(PB_TEXTURE, width*height);
+}
+#endif
 
 void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border,
                   GLenum format, GLenum type, const GLvoid *pixels)
@@ -1189,8 +1203,13 @@ static void texSubImage(GLenum target, GLint level, GLint xoffset, GLint yoffset
     flushTexture(t);
 }
 
+#ifdef C3DGL_PROFILE
+static void glTexSubImage2DBody(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
+                             GLenum format, GLenum type, const GLvoid *pixels)
+#else
 void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
                      GLenum format, GLenum type, const GLvoid *pixels)
+#endif
 {
     if (gl.listCompiling)
     {
@@ -1202,6 +1221,15 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
     if (target != GL_TEXTURE_2D) { setError(GL_INVALID_ENUM); return; }
     texSubImage(target, level, xoffset, yoffset, width, height, format, type, pixels);
 }
+
+#ifdef C3DGL_PROFILE
+void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,   GLenum format, GLenum type, const GLvoid *pixels)
+{
+    PROF_ENTER();
+    glTexSubImage2DBody(target, level, xoffset, yoffset, width, height, format, type, pixels);
+    PROF_LEAVE(PB_TEXTURE, width*height);
+}
+#endif
 
 void glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type,
                      const GLvoid *pixels)

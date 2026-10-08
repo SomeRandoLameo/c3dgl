@@ -270,11 +270,24 @@ void glEndList(void)
     gl.listWordCount = gl.listWordCapacity = 0;
 }
 
+#ifdef C3DGL_PROFILE
+static void glCallListBody(GLuint list)
+#else
 void glCallList(GLuint list)
+#endif
 {
     LIST_SAVE(CALL_LIST, "u", list);
     executeList(list);
 }
+
+#ifdef C3DGL_PROFILE
+void glCallList(GLuint list)
+{
+    PROF_ENTER();
+    glCallListBody(list);
+    PROF_LEAVE(PB_LISTS, 0);
+}
+#endif
 
 // Bytes per name of a glCallLists type, 0 if the type is invalid
 static int callListsSize(GLenum type)
@@ -307,7 +320,11 @@ static GLuint callListsName(GLenum type, const GLvoid *lists, int i)
     }
 }
 
+#ifdef C3DGL_PROFILE
+static void glCallListsBody(GLsizei n, GLenum type, const GLvoid *lists)
+#else
 void glCallLists(GLsizei n, GLenum type, const GLvoid *lists)
+#endif
 {
     int size = callListsSize(type);
     if (gl.listCompiling)
@@ -328,6 +345,15 @@ void glCallLists(GLsizei n, GLenum type, const GLvoid *lists)
     // The base is read per name: a called list may change it
     for (int i = 0; i < n; i++) executeList(gl.listBase + callListsName(type, lists, i));
 }
+
+#ifdef C3DGL_PROFILE
+void glCallLists(GLsizei n, GLenum type, const GLvoid *lists)
+{
+    PROF_ENTER();
+    glCallListsBody(n, type, lists);
+    PROF_LEAVE(PB_LISTS, 0);
+}
+#endif
 
 void glListBase(GLuint base)
 {

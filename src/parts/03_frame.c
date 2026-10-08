@@ -199,7 +199,11 @@ static void flush(void)
     int count = gl.vertexCount - gl.batchStart;
     if (count <= 0) return;
 
-    C3D_DrawArrays(GPU_TRIANGLES, gl.batchStart, count);
+    {
+        PROF_ENTER();
+        C3D_DrawArrays(GPU_TRIANGLES, gl.batchStart, count);
+        PROF_LEAVE(PB_FLUSH, count);
+    }
     if (gl.batch.units[1].texture || gl.batch.units[2].texture) gl.extraUsed = true;
     for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++) gl.textures[gl.batch.units[unit].texture].drawnFrame = gl.frameSerial;
 
@@ -210,7 +214,11 @@ static void flush(void)
 // Before the command list goes to the GPU (C3D_FrameSplit, C3D_FrameEnd): the GPU only reads the vertex buffer
 // from then on, so the vertices written since the last submission are flushed from the CPU cache in one go
 // (instead of a GSP call per batch)
+#ifdef C3DGL_PROFILE
+static void flushVertexCacheBody(void)
+#else
 static void flushVertexCache(void)
+#endif
 {
     flush();
     for (int i = 0; i < gl.pixelChunkCount; i++)
@@ -229,6 +237,15 @@ static void flushVertexCache(void)
     gl.cacheFlushed = gl.vertexCount;
     gl.extraUsed = false;
 }
+
+#ifdef C3DGL_PROFILE
+static void flushVertexCache(void)
+{
+    PROF_ENTER();
+    flushVertexCacheBody();
+    PROF_LEAVE(PB_FLUSH_CACHE, 0);
+}
+#endif
 
 // Logical (landscape, bottom-left origin) rectangle -> physical render target rectangle.
 // The target is 240xN (portrait); `post` maps logical x to physical -y and logical y to physical x.
@@ -713,7 +730,11 @@ static void useState(const DrawState *key)
     if (!gl.batchValid || (memcmp(key, &gl.batch, sizeof(DrawState)) != 0))
     {
         flush();
-        applyState(key, gl.batchValid? &gl.batch : NULL);
+        {
+            PROF_ENTER();
+            applyState(key, gl.batchValid? &gl.batch : NULL);
+            PROF_LEAVE(PB_APPLY_STATE, 0);
+        }
         memcpy(&gl.batch, key, sizeof(DrawState));
         gl.batchValid = true;
     }
@@ -783,9 +804,11 @@ static void drawKey(DrawState *out, bool clipSpace, bool points)
 // Call before emitting vertices: starts a new batch if the draw state changed
 static void prepareDraw(bool clipSpace, bool points)
 {
+    PROF_ENTER();
     DrawState key;
     drawKey(&key, clipSpace, points);
     useState(&key);
+    PROF_LEAVE(PB_PREPARE, 0);
 }
 
 static bool reserveVertices(int count)

@@ -112,6 +112,10 @@ void c3dglGetFrameStats(float *gpuMs, float *cpuMs, float *cmdBufUsage);
 // A large value means the GPU is the bottleneck, a value near 0 means the CPU is.
 double c3dglGetGpuWaitMs(void);
 
+// CPU time inside c3dgl by category (draw paths, state changes, flushes, uploads), averaged over `frames` frames and
+// printed. Resets the totals. Does nothing unless c3dgl was built with C3DGL_PROFILE.
+void c3dglProfileDump(int frames);
+
 #ifdef __cplusplus
 }
 #endif

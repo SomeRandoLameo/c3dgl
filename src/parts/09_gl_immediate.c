@@ -6,6 +6,7 @@
 void glBegin(GLenum mode)
 {
     LIST_SAVE(BEGIN, "u", mode);
+    PROF_IMM_ENTER();
     gl.inBegin = beginPrimitive(mode);
 }
 
@@ -14,12 +15,14 @@ void glEnd(void)
     LIST_SAVE(END, "");
     if (gl.inBegin) endPrimitive();
     gl.inBegin = false;
+    PROF_IMM_LEAVE();
 }
 
 void glVertex3f(GLfloat x, GLfloat y, GLfloat z)
 {
     LIST_SAVE(VERTEX, "fff", x, y, z);
     if (!gl.inBegin) return;
+    PROF_COUNT(PB_IMMEDIATE);
 
     Vertex v = gl.current;
     v.pos[0] = x;

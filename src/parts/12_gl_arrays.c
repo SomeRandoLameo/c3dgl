@@ -276,7 +276,11 @@ void glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer)
 
 static bool arrayTriangleFastPath(GLenum mode, GLint first, GLsizei count);
 
+#ifdef C3DGL_PROFILE
+static void glDrawArraysBody(GLenum mode, GLint first, GLsizei count)
+#else
 void glDrawArrays(GLenum mode, GLint first, GLsizei count)
+#endif
 {
     if (count < 0) { setError(GL_INVALID_VALUE); return; }
     if (gl.listCompiling)
@@ -298,3 +302,13 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
     for (int i = 0; i < count; i++) submitArrayVertex(first + i);
     endPrimitive();
 }
+
+#ifdef C3DGL_PROFILE
+void glDrawArrays(GLenum mode, GLint first, GLsizei count)
+{
+    PROF_ENTER();
+    PROF_PATH(PB_ARR_GENERIC);
+    glDrawArraysBody(mode, first, count);
+    PROF_LEAVE(profPath, count);
+}
+#endif

@@ -60,6 +60,7 @@
 // The implementation is one translation unit (everything is static, the regression tests include this file), split
 // into parts for readability. Order matters: C needs a definition before its use.
 #include "parts/01_types.c"   // Defines and types: tuning constants, Vertex, textures, buffers, display lists
+#include "parts/01a_profile.c" // Optional CPU profiler (C3DGL_PROFILE)
 #include "parts/02_state.c"   // Global state (the gl struct), matrix helpers, GL -> PICA enum mapping
 #include "parts/03_frame.c"   // Frame and batch management: render state application, draw submission, GPU mesh cache
 #include "parts/04_primitives.c"   // Primitive assembly: triangles, lines, points, user clip planes, feedback/selection output

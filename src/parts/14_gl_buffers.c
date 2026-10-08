@@ -98,7 +98,11 @@ static bool bufferUsageValid(GLenum usage)
     return (usage >= GL_STREAM_DRAW) && (usage <= GL_DYNAMIC_COPY) && (usage != 0x88E3) && (usage != 0x88E7);
 }
 
+#ifdef C3DGL_PROFILE
+static void glBufferDataBody(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage)
+#else
 void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage)
+#endif
 {
     GLuint *binding = bufferBinding(target);
     if (binding == NULL) return;
@@ -122,7 +126,20 @@ void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usa
     b->usage = usage;
 }
 
+#ifdef C3DGL_PROFILE
+void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage)
+{
+    PROF_ENTER();
+    glBufferDataBody(target, size, data, usage);
+    PROF_LEAVE(PB_BUFFER, 0);
+}
+#endif
+
+#ifdef C3DGL_PROFILE
+static void glBufferSubDataBody(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid *data)
+#else
 void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid *data)
+#endif
 {
     GLuint *binding = bufferBinding(target);
     if (binding == NULL) return;
@@ -136,6 +153,15 @@ void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvo
         memcpy(b->data + offset, data, (size_t)size);
     }
 }
+
+#ifdef C3DGL_PROFILE
+void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid *data)
+{
+    PROF_ENTER();
+    glBufferSubDataBody(target, offset, size, data);
+    PROF_LEAVE(PB_BUFFER, 0);
+}
+#endif
 
 void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params)
 {
