@@ -108,8 +108,8 @@ void c3dglSwapBuffers(void);
 // its command list (ms) and command buffer use (0..1). Only meaningful on real hardware.
 void c3dglGetFrameStats(float *gpuMs, float *cpuMs, float *cmdBufUsage);
 
-// Milliseconds spent waiting for the GPU (C3D_FrameBegin with SYNCDRAW) since the last call; resets.
-// A large value means the GPU is the bottleneck, a value near 0 means the CPU is.
+// Milliseconds the CPU spent blocked since the last call; resets: waiting for the GPU to finish the previous frame
+// (C3D_FrameBegin) and for the VBlank before presenting (C3D_FrameSync). What is left of a window is CPU work.
 double c3dglGetGpuWaitMs(void);
 
 // CPU time inside c3dgl by category (draw paths, state changes, flushes, uploads), averaged over `frames` frames and

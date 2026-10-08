@@ -313,7 +313,9 @@ void c3dglSwapBuffers(void)
     if (osGetTime() - lastPresentMs < C3DGL_PRESENT_GAP_MS)
     {
         PROF_ENTER();
+        const u64 syncStart = svcGetSystemTick();
         C3D_FrameSync();
+        gpuWaitTicks += svcGetSystemTick() - syncStart;    // idle time, not CPU load (see c3dglGetGpuWaitMs)
         PROF_LEAVE(PB_PRESENT_SYNC, 0);
     }
 #endif

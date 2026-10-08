@@ -250,6 +250,35 @@ static void flushTexture(Texture *t)
     GSPGPU_FlushDataCache(t->tex.data, C3D_TexCalcTotalSize(t->tex.size, t->levels - 1));
 }
 
+// After the texels of a rectangle of level 0 changed (glTexSubImage2D): the CPU cache is flushed for the tiles the
+// rectangle touches instead of the whole texture, which is 100 KB and more for an atlas that is updated every tick for a
+// 16x16 piece. Textures with padding, mip levels or a mip chain to rebuild take the full path.
+static void flushTextureRect(Texture *t, int level, int x0, int y0, int w, int h)
+{
+    const TexLevel *lv = &t->level[level];
+    int texWidth = t->tex.width >> level, texHeight = t->tex.height >> level;
+    if ((level != 0) || (t->levels != 1) || t->generateMipmap || (lv->width != texWidth) || (lv->height != texHeight) ||
+        (t->target != GL_TEXTURE_2D) || (w <= 0) || (h <= 0))
+    {
+        flushTexture(t);
+        return;
+    }
+    int bpp = t->format.bpp;
+    int tx0 = x0 & ~7, tx1 = (x0 + w - 1) & ~7, ty0 = y0 & ~7, ty1 = (y0 + h - 1) & ~7;
+    u32 lo = tiledOffset(texWidth, texHeight, tx0, ty0, bpp), hi = lo;
+    const int cx[2] = { tx0, tx1 }, cy[2] = { ty0, ty1 };
+    for (int i = 0; i < 4; i++)
+    {
+        u32 o = tiledOffset(texWidth, texHeight, cx[i & 1], cy[i >> 1], bpp);
+        if (o < lo) lo = o;
+        if (o > hi) hi = o;
+    }
+    const u32 tileBytes = 64*bpp;     // (the corner pixels are in the first and last tile, at any offset within it)
+    lo = lo/tileBytes*tileBytes;
+    hi = hi/tileBytes*tileBytes + tileBytes;
+    GSPGPU_FlushDataCache((u8 *)t->tex.data + lo, hi - lo);
+}
+
 // GL_GENERATE_MIPMAP: all levels from level 0 with a 2x2 box filter (on the CPU). Levels below 8x8 are only
 // marked as defined, PICA cannot sample them
 static void generateMipmaps(Texture *t)
@@ -1200,7 +1229,7 @@ static void texSubImage(GLenum target, GLint level, GLint xoffset, GLint yoffset
     copyOnWrite(t);
     if (level < t->levels) loadTexels(t, level, xoffset, yoffset, width, height, format, type, pixels, &gl.unpack, lv->base);
     if ((level == 0) && t->generateMipmap) generateMipmaps(t);
-    flushTexture(t);
+    flushTextureRect(t, level, xoffset, yoffset, width, height);
 }
 
 #ifdef C3DGL_PROFILE
