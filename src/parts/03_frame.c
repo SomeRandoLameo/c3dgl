@@ -509,6 +509,8 @@ static bool stippleAlphaTest(const DrawState *s, GPU_TESTFUNC *func, int *ref)
 // from it is set: citro3d re-sends every group that is set, changed or not
 #define CHANGED(field) ((prev == NULL) || (memcmp(&s->field, &prev->field, sizeof(s->field)) != 0))
 
+static void applyMatrixState(const DrawState *s, const DrawState *prev, bool stippleChanged);
+
 static void applyState(const DrawState *s, const DrawState *prev)
 {
     int x, y, w, h;
@@ -673,6 +675,13 @@ static void applyState(const DrawState *s, const DrawState *prev)
         setupTexEnv(env, unit, &u->env, t->format.format, t->base == GL_INTENSITY);
     }
 
+    applyMatrixState(s, prev, stippleChanged);
+}
+
+// The part of the GPU state that follows the modelview and projection matrices: the MVP uniform and the stipple
+// texcoord rows. (The fog table follows the projection as well, see updateFogLut().)
+static void applyMatrixState(const DrawState *s, const DrawState *prev, bool stippleChanged)
+{
     if (CHANGED(clipSpace) || CHANGED(matrixSerial))
     {
         Mat4 mvp = gl.post;
@@ -738,12 +747,40 @@ static GLuint textureSlot(GLenum target, GLuint id)
     return id? id : (target == GL_TEXTURE_1D)? DEFAULT_TEXTURE_1D : DEFAULT_TEXTURE_2D;
 }
 
+// C3DGL_MATRIX_FAST_PATH=0 turns it off for comparisons; the regression test switches it at run time
+#ifndef C3DGL_MATRIX_FAST_PATH
+#define C3DGL_MATRIX_FAST_PATH 1
+#endif
+static bool matrixFastPath = C3DGL_MATRIX_FAST_PATH;
+
 // Start a new batch if key differs from the applied state. memcmp: keys are built with zeroed padding
 static void useState(const DrawState *key)
 {
     ensureFrame();
 
-    if (!gl.batchValid || (memcmp(key, &gl.batch, sizeof(DrawState)) != 0))
+    if (gl.batchValid)
+    {
+        // Chunk meshes, entities and the like are drawn one after another with a matrix of their own and nothing else
+        // changed: applyState() would compare every group only to find the matrices different, so they are set
+        // directly. One comparison tells both: the key against the batch state with the key's matrix serial
+        const u32 applied = gl.batch.matrixSerial;
+        const bool otherMatrix = matrixFastPath && (key->matrixSerial != applied);
+        gl.batch.matrixSerial = otherMatrix? key->matrixSerial : applied;
+        const bool same = memcmp(key, &gl.batch, sizeof(DrawState)) == 0;
+        gl.batch.matrixSerial = applied;
+        if (same && !otherMatrix) return;
+        if (same)
+        {
+            flush();
+            PROF_ENTER();
+            if (key->fog) updateFogLut(key);        // (follows the projection)
+            applyMatrixState(key, &gl.batch, false);
+            gl.batch.matrixSerial = key->matrixSerial;
+            PROF_LEAVE(PB_APPLY_MATRIX, 0);
+            return;
+        }
+    }
+
     {
         flush();
         {

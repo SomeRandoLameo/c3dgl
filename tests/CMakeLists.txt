@@ -11,3 +11,10 @@ target_link_libraries(c3dgl_gpu_cache_regression PRIVATE c3dgl_shaders citro3d m
 target_compile_options(c3dgl_gpu_cache_regression PRIVATE -O2 -Wall -Wextra)
 ctr_generate_smdh(c3dgl_gpu_cache_regression.smdh NAME "GPU cache regression" DESCRIPTION "Static VBO compatibility and lifetime" AUTHOR "mc3ds")
 ctr_create_3dsx(c3dgl_gpu_cache_regression SMDH c3dgl_gpu_cache_regression.smdh)
+
+add_executable(c3dgl_matrix_fast_path_regression matrix_fast_path_regression.c)
+target_include_directories(c3dgl_matrix_fast_path_regression PRIVATE ../include)
+target_link_libraries(c3dgl_matrix_fast_path_regression PRIVATE c3dgl_shaders citro3d m)
+target_compile_options(c3dgl_matrix_fast_path_regression PRIVATE -O2 -Wall -Wextra)
+ctr_generate_smdh(c3dgl_matrix_fast_path_regression.smdh NAME "Matrix fast path regression" DESCRIPTION "Matrix-only batches skip applyState" AUTHOR "mc3ds")
+ctr_create_3dsx(c3dgl_matrix_fast_path_regression SMDH c3dgl_matrix_fast_path_regression.smdh)
