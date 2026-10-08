@@ -46,6 +46,8 @@
 //
 // Mipmaps work down to 8x8; smaller levels are accepted but PICA cannot sample them. Points are always square (no GL_POINT_SMOOTH).
 //
+// Stereoscopic 3D: c3dglSetStereo() + c3dglSetEye(), see below.
+//
 // Screens: rendering goes to the top screen (400x240) by default. c3dglSetScreen() switches to the
 // bottom screen (320x240) and back, also within a frame; both are presented by c3dglSwapBuffers().
 // The bottom screen is only touched once something is drawn on it, until then it can be used for
@@ -64,6 +66,11 @@ typedef enum {
     C3DGL_SCREEN_BOTTOM,
 } C3DGLscreen;
 
+typedef enum {
+    C3DGL_EYE_LEFT = 0,
+    C3DGL_EYE_RIGHT,
+} C3DGLeye;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -78,6 +85,19 @@ void c3dglClose(void);
 void c3dglSetScreen(C3DGLscreen screen);
 C3DGLscreen c3dglGetScreen(void);
 int c3dglGetScreenWidth(C3DGLscreen screen);   // 400 or 320; the height is always C3DGL_SCREEN_HEIGHT
+
+// Stereoscopic 3D on the top screen. While it is on, the top screen has a render target per eye: select one with
+// c3dglSetEye() and draw the scene once per eye (both start with the same GL state; the right eye is not cleared
+// for you). Both eyes have to be drawn every frame, otherwise the 3D display shows an old picture for one eye.
+// The bottom screen is not affected. Without stereo c3dglSetEye() is ignored and the left (only) target is used.
+// Call c3dglSetStereo() between frames (after c3dglSwapBuffers, before the first draw); it returns false if the
+// right eye render target could not be allocated (VRAM) and stereo stays off.
+// Turn it off while the 3D slider is at 0: a stereo frame costs about twice the render time and VRAM.
+bool c3dglSetStereo(bool enable);
+bool c3dglGetStereo(void);
+void c3dglSetEye(C3DGLeye eye);
+C3DGLeye c3dglGetEye(void);
+float c3dglGet3DSlider(void);   // Position of the 3D slider, 0..1
 
 // Submit everything drawn since the last call and present it on the screens drawn on in this frame.
 // The next frame starts lazily with the next gl* call that draws or clears;

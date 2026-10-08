@@ -90,6 +90,8 @@
      GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
 
 #define C3DGL_SCREEN_COUNT      2
+#define C3DGL_TARGET_COUNT      3       // top left eye, bottom, top right eye (index C3DGL_TARGET_RIGHT, only with stereo)
+#define C3DGL_TARGET_RIGHT      2
 
 #define LOG(...) printf("C3DGL: " __VA_ARGS__)
 #define WARN_ONCE(...) do { static bool warned = false; if (!warned) { warned = true; LOG(__VA_ARGS__); } } while (0)
@@ -483,8 +485,10 @@ typedef enum {
 //----------------------------------------------------------------------------------
 static struct {
     bool ready;
-    C3D_RenderTarget *targets[C3DGL_SCREEN_COUNT];
+    C3D_RenderTarget *targets[C3DGL_TARGET_COUNT];
     C3DGLscreen screen;                 // Screen drawn on, see c3dglSetScreen()
+    C3DGLeye eye;                       // Eye of the top screen drawn on while stereo is on, see c3dglSetEye()
+    bool stereo;                        // gfxSet3D(true), the right eye target exists
     DVLB_s *dvlb;
     shaderProgram_s program;
     int uLocMvp, uLocTexMat[C3DGL_TEXTURE_UNITS], uLocStipple;
@@ -671,7 +675,7 @@ static struct {
     int nameDepth;
 
     // Accumulation buffer (GL), see glAccum()
-    u32 *accum[C3DGL_SCREEN_COUNT];     // Per screen, NULL until used
+    u32 *accum[C3DGL_TARGET_COUNT];     // Per screen, NULL until used
     float clearAccum[4];                // glClearAccum
 } gl;
 
@@ -1064,12 +1068,25 @@ static u32 screenTransferFlags(gfxScreen_t screen)
     return DISPLAY_TRANSFER_FLAGS | GX_TRANSFER_OUT_FORMAT(out);
 }
 
+// Render target of the current screen, for the top one the current eye's while stereo is on
+static int curTargetIndex(void)
+{
+    if ((gl.screen == C3DGL_SCREEN_TOP) && gl.stereo && (gl.eye == C3DGL_EYE_RIGHT)) return C3DGL_TARGET_RIGHT;
+    return (int)gl.screen;
+}
+
+static C3D_RenderTarget *curTarget(void)
+{
+    return gl.targets[curTargetIndex()];
+}
+
 // Link the current screen's target to its display. Done on every switch, as the app may have
 // changed the screen format in between (e.g. from the console to graphics)
 static void linkTarget(void)
 {
     gfxScreen_t screen = (gl.screen == C3DGL_SCREEN_BOTTOM)? GFX_BOTTOM : GFX_TOP;
-    C3D_RenderTargetSetOutput(gl.targets[gl.screen], screen, GFX_LEFT, screenTransferFlags(screen));
+    gfx3dSide_t side = (curTargetIndex() == C3DGL_TARGET_RIGHT)? GFX_RIGHT : GFX_LEFT;
+    C3D_RenderTargetSetOutput(curTarget(), screen, side, screenTransferFlags(screen));
 }
 
 static u64 gpuWaitTicks;    // Time spent in C3D_FrameBegin, see c3dglGetGpuWaitMs()
@@ -1096,7 +1113,7 @@ static void ensureFrame(void)
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 #endif
     gpuWaitTicks += svcGetSystemTick() - waitStart;
-    C3D_FrameDrawOn(gl.targets[gl.screen]);     // Also resets the viewport, hence batchValid = false
+    C3D_FrameDrawOn(curTarget());     // Also resets the viewport, hence batchValid = false
 
     gl.frameActive = true;
     gl.drawnThisFrame = false;
@@ -1633,18 +1650,18 @@ static void applyState(const DrawState *s, const DrawState *prev)
 static bool reclaimGpuCaches(void)
 {
     if (!gl.ready || !gl.gpuCacheBytes) return false;
-    bool used[C3DGL_SCREEN_COUNT];
+    bool used[C3DGL_TARGET_COUNT];
     bool active = gl.frameActive;
     if (active) {
-        for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) used[i] = gl.targets[i]->used;
+        for (int i = 0; i < C3DGL_TARGET_COUNT; i++) used[i] = (gl.targets[i] != NULL) && gl.targets[i]->used;
         flushVertexCache();
         C3D_FrameEnd(GX_CMDLIST_FLUSH);
     }
     C3D_FrameBegin(0); // Wait for all references to immutable cache storage.
     gl.frameSerial++;
     if (active) {
-        C3D_FrameDrawOn(gl.targets[gl.screen]);
-        for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) gl.targets[i]->used = used[i];
+        C3D_FrameDrawOn(curTarget());
+        for (int i = 0; i < C3DGL_TARGET_COUNT; i++) if (gl.targets[i] != NULL) gl.targets[i]->used = used[i];
     } else C3D_FrameEnd(0);
     gl.batchValid = false;
     collectGpuCaches();
@@ -3138,16 +3155,34 @@ void c3dglClose(void)
     for (int i = 0; i < gl.listCount; i++) free(gl.lists[i].words);
     free(gl.lists);
     free(gl.listWords);
-    for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) free(gl.accum[i]);
+    for (int i = 0; i < C3DGL_TARGET_COUNT; i++) free(gl.accum[i]);
 
     if (gl.dvlb != NULL) { shaderProgramFree(&gl.program); DVLB_Free(gl.dvlb); }
     if (gl.dummyTexture.data != NULL) C3D_TexDelete(&gl.dummyTexture);
     if (gl.vbo != NULL) linearFree(gl.vbo);
     if (gl.vboExtra != NULL) linearFree(gl.vboExtra);
-    for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) if (gl.targets[i] != NULL) C3D_RenderTargetDelete(gl.targets[i]);
+    for (int i = 0; i < C3DGL_TARGET_COUNT; i++) if (gl.targets[i] != NULL) C3D_RenderTargetDelete(gl.targets[i]);
+    if (gl.stereo) gfxSet3D(false);
     C3D_Fini();
 
     memset(&gl, 0, sizeof(gl));
+}
+
+// Make the current screen/eye the render target: viewport and scissor box of its size, like a freshly bound framebuffer
+static void switchTarget(void)
+{
+    linkTarget();
+
+    gl.state.viewport[0] = gl.state.viewport[1] = 0;
+    gl.state.viewport[2] = screenWidth(gl.screen);
+    gl.state.viewport[3] = C3DGL_SCREEN_HEIGHT;
+    memcpy(gl.state.scissorBox, gl.state.viewport, sizeof(gl.state.viewport));
+
+    if (gl.frameActive)
+    {
+        C3D_FrameDrawOn(curTarget());
+        gl.batchValid = false;
+    }
 }
 
 void c3dglSetScreen(C3DGLscreen screen)
@@ -3157,19 +3192,58 @@ void c3dglSetScreen(C3DGLscreen screen)
     if (gl.frameActive) flush();    // Pending vertices belong to the previous screen
 
     gl.screen = screen;
-    linkTarget();
+    switchTarget();
+}
 
-    // Viewport and scissor box of the new screen size, like a freshly bound framebuffer
-    gl.state.viewport[0] = gl.state.viewport[1] = 0;
-    gl.state.viewport[2] = screenWidth(screen);
-    gl.state.viewport[3] = C3DGL_SCREEN_HEIGHT;
-    memcpy(gl.state.scissorBox, gl.state.viewport, sizeof(gl.state.viewport));
+bool c3dglSetStereo(bool enable)
+{
+    if (!gl.ready) return false;
+    if (enable == gl.stereo) return true;
+    if (gl.frameActive) { LOG("c3dglSetStereo: call between frames\n"); return gl.stereo; }
 
-    if (gl.frameActive)
+    if (enable)
     {
-        C3D_FrameDrawOn(gl.targets[screen]);
-        gl.batchValid = false;
+        if (gl.targets[C3DGL_TARGET_RIGHT] == NULL)
+        {
+            gl.targets[C3DGL_TARGET_RIGHT] = C3D_RenderTargetCreate(C3DGL_SCREEN_HEIGHT, C3DGL_TOP_SCREEN_WIDTH, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
+            if (gl.targets[C3DGL_TARGET_RIGHT] == NULL) { LOG("Failed to create the right eye render target\n"); return false; }
+        }
+        gfxSet3D(true);
+        gl.stereo = true;
     }
+    else
+    {
+        gfxSet3D(false);
+        gl.stereo = false;
+        gl.eye = C3DGL_EYE_LEFT;
+        switchTarget();
+    }
+    return true;
+}
+
+bool c3dglGetStereo(void)
+{
+    return gl.stereo;
+}
+
+void c3dglSetEye(C3DGLeye eye)
+{
+    if ((eye != C3DGL_EYE_LEFT) && (eye != C3DGL_EYE_RIGHT)) return;
+    if (!gl.stereo) eye = C3DGL_EYE_LEFT;
+
+    if (gl.frameActive) flush();
+    gl.eye = eye;
+    if (gl.screen == C3DGL_SCREEN_TOP) switchTarget();
+}
+
+C3DGLeye c3dglGetEye(void)
+{
+    return gl.eye;
+}
+
+float c3dglGet3DSlider(void)
+{
+    return osGet3DSliderState();
 }
 
 C3DGLscreen c3dglGetScreen(void)
@@ -3920,7 +3994,7 @@ void glClear(GLbitfield mask)
     // D24S8: stencil in the top byte, depth reversed (see depthFunc())
     u32 depthStencil = ((u32)gl.clearStencil << 24) | (u32)((1.0f - gl.clearDepth)*0xFFFFFF);
     int bits = (color? C3D_CLEAR_COLOR : 0) | ((depth || stencil)? C3D_CLEAR_DEPTH : 0);
-    C3D_RenderTargetClear(gl.targets[gl.screen], (C3D_ClearBits)bits, gl.clearColor, depthStencil);
+    C3D_RenderTargetClear(curTarget(), (C3D_ClearBits)bits, gl.clearColor, depthStencil);
 }
 
 void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha)
@@ -8305,22 +8379,22 @@ void glPopClientAttrib(void)
 
 // citro3d only starts the GX queue in C3D_FrameEnd, so to get at the framebuffer a frame in progress is ended without
 // presenting it (no target marked as used), which runs the draws so far, and begun again afterwards
-static bool suspendFrame(bool used[C3DGL_SCREEN_COUNT])
+static bool suspendFrame(bool used[C3DGL_TARGET_COUNT])
 {
     if (!gl.frameActive) return false;
     flushVertexCache();
-    for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) { used[i] = gl.targets[i]->used; gl.targets[i]->used = false; }
+    for (int i = 0; i < C3DGL_TARGET_COUNT; i++) { used[i] = (gl.targets[i] != NULL) && gl.targets[i]->used; if (gl.targets[i] != NULL) gl.targets[i]->used = false; }
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
     return true;
 }
 
-static void resumeFrame(bool suspended, const bool used[C3DGL_SCREEN_COUNT])
+static void resumeFrame(bool suspended, const bool used[C3DGL_TARGET_COUNT])
 {
     if (!suspended) return;
     C3D_FrameBegin(0);          // Waits for the GPU
     gl.frameSerial++;
-    C3D_FrameDrawOn(gl.targets[gl.screen]);
-    for (int i = 0; i < C3DGL_SCREEN_COUNT; i++) gl.targets[i]->used = used[i];
+    C3D_FrameDrawOn(curTarget());
+    for (int i = 0; i < C3DGL_TARGET_COUNT; i++) if (gl.targets[i] != NULL) gl.targets[i]->used = used[i];
     gl.batchValid = false;
 }
 
@@ -8335,7 +8409,7 @@ static u8 *readLines(bool depthStencil, int line0, int lines)
     if (out == NULL) { LOG("Out of memory for reading pixels\n"); setError(GL_OUT_OF_MEMORY); return NULL; }
     GSPGPU_FlushDataCache(out, size);       // No dirty cache lines may be written back over the transfer
 
-    const C3D_FrameBuf *fb = &gl.targets[gl.screen]->frameBuf;
+    const C3D_FrameBuf *fb = &curTarget()->frameBuf;
     u8 *in = (u8 *)(depthStencil? fb->depthBuf : fb->colorBuf) + (size_t)line0*READ_LINE_BYTES;
     u32 dim = GX_BUFFER_DIM(C3DGL_SCREEN_HEIGHT, lines);
     C3D_SyncDisplayTransfer((u32 *)in, dim, (u32 *)out, dim, DISPLAY_TRANSFER_FLAGS | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8));
@@ -8345,7 +8419,7 @@ static u8 *readLines(bool depthStencil, int line0, int lines)
 
 static u8 *readFramebuffer(bool depthStencil, int line0, int lines)
 {
-    bool used[C3DGL_SCREEN_COUNT], suspended = suspendFrame(used);
+    bool used[C3DGL_TARGET_COUNT], suspended = suspendFrame(used);
     u8 *out = readLines(depthStencil, line0, lines);
     resumeFrame(suspended, used);
     return out;
@@ -8355,7 +8429,7 @@ static u8 *readFramebuffer(bool depthStencil, int line0, int lines)
 static void writeDepthStencilLines(u8 *lineData, int line0, int lines)
 {
     GSPGPU_FlushDataCache(lineData, (size_t)lines*READ_LINE_BYTES);
-    u8 *out = (u8 *)gl.targets[gl.screen]->frameBuf.depthBuf + (size_t)line0*READ_LINE_BYTES;
+    u8 *out = (u8 *)curTarget()->frameBuf.depthBuf + (size_t)line0*READ_LINE_BYTES;
     u32 dim = GX_BUFFER_DIM(C3DGL_SCREEN_HEIGHT, lines);
     C3D_SyncDisplayTransfer((u32 *)lineData, dim, (u32 *)out, dim,
                            GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_RAW_COPY(0) |
@@ -8912,7 +8986,7 @@ static void copyColorRect(int x, int y, int w, int h)
 
     flushVertexCache();
     if (gl.drawnThisFrame) C3D_FrameSplit(GX_CMDLIST_FLUSH);     // Flushed, see glClear()
-    u8 *in = (u8 *)gl.targets[gl.screen]->frameBuf.colorBuf + (size_t)line0*READ_LINE_BYTES;
+    u8 *in = (u8 *)curTarget()->frameBuf.colorBuf + (size_t)line0*READ_LINE_BYTES;
     GX_TextureCopy((u32 *)in, GX_BUFFER_DIM(lineBytes >> 4, 0), (u32 *)tex->data,
                    GX_BUFFER_DIM(lineBytes >> 4, (texWidth*8*4 - lineBytes) >> 4), (u32)(lines/8*lineBytes),
                    GX_TRANSFER_RAW_COPY(1));
@@ -9003,7 +9077,7 @@ static void drawDepthStencil(const u32 *values, int w, int h, bool stencil)
     if ((x0 >= x1) || (y0 >= y1)) return;
 
     int line0 = x0 & ~7, lines = ((x1 + 7) & ~7) - line0;
-    bool used[C3DGL_SCREEN_COUNT], suspended = suspendFrame(used);
+    bool used[C3DGL_TARGET_COUNT], suspended = suspendFrame(used);
     u8 *fb = readLines(true, line0, lines);
     if (fb == NULL) { resumeFrame(suspended, used); return; }
 
@@ -9272,7 +9346,7 @@ void glReadBuffer(GLenum mode)
 // DSP instructions (saturating halfword adds, 32x16-bit multiplies); [-32768, 32767], -32768 is about -1 too
 static u32 *accumBuffer(void)
 {
-    u32 **acc = &gl.accum[gl.screen];
+    u32 **acc = &gl.accum[curTargetIndex()];
     if (*acc == NULL)
     {
         *acc = calloc((size_t)screenWidth(gl.screen)*C3DGL_SCREEN_HEIGHT*2, sizeof(u32));
