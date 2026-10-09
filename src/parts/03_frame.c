@@ -478,7 +478,7 @@ static void updateFogLut(const DrawState *s)
 {
     const float *m = gl.stack[1][gl.stackDepth[1]].m;
     float a = m[10], b = m[14], c = m[11], d = m[15];
-    float in[10] = { a, b, c, d, s->depthNear, s->depthFar, (float)s->fogMode, s->fogDensity, s->fogStart, s->fogEnd };
+    float in[11] = { a, b, c, d, s->depthNear, s->depthFar, (float)s->fogMode, s->fogDensity, s->fogStart, s->fogEnd, s->wDepth? 1.0f : 0.0f };
     if (gl.fogLutValid && (memcmp(in, gl.fogLutInputs, sizeof(in)) == 0)) return;
     memcpy(gl.fogLutInputs, in, sizeof(in));
     gl.fogLutValid = true;
@@ -487,9 +487,18 @@ static void updateFogLut(const DrawState *s)
     float data[256], range = s->depthFar - s->depthNear;
     for (int i = 0; i <= 128; i++)
     {
+        float zEye;
+        if (s->wDepth)
+        {
+            // W buffering (depth range 0 to 1): the depth is the fraction of the way from the near to the far plane
+            zEye = s->wNear + (i/128.0f)*(s->wFar - s->wNear);
+        }
+        else
+        {
         float zNdc = (range != 0.0f)? 2.0f*(i/128.0f - s->depthNear)/range - 1.0f : 0.0f;
         float den = c*zNdc - a;
-        float zEye = (fabsf(den) > 1e-12f)? (b - d*zNdc)/den : 1e30f;
+        zEye = (fabsf(den) > 1e-12f)? (b - d*zNdc)/den : 1e30f;
+        }
         float f = fogFactor(s, fabsf(zEye));
         if (i < 128) data[i] = f;
         if (i > 0) data[127 + i] = f - data[i - 1];
@@ -557,7 +566,13 @@ static void applyState(const DrawState *s, const DrawState *prev)
     }
 
     // Stored depth = 1 - window depth (see depthFunc()), window depth = n + (f - n)*(z_pica + 1) with z_pica in [-1, 0]
-    if (CHANGED(depthNear) || CHANGED(depthFar)) C3D_DepthMap(true, -(s->depthFar - s->depthNear), 1.0f - s->depthFar);
+    if (CHANGED(depthNear) || CHANGED(depthFar) || CHANGED(wDepth) || CHANGED(wNear) || CHANGED(wFar))
+    {
+        // W buffering: stored depth = -z_clip / near (z_clip = near*(d - far)/(far - near) for the distance d), so near
+        // stores 1 and far 0, the same as the z buffer's; it only exists for the depth range 0 to 1
+        if (s->wDepth) C3D_DepthMap(false, -1.0f/s->wNear, 0.0f);
+        else C3D_DepthMap(true, -(s->depthFar - s->depthNear), 1.0f - s->depthFar);
+    }
 
     if (CHANGED(colorMask) || CHANGED(depthTest) || CHANGED(depthMask) || CHANGED(depthFunc))
     {
@@ -778,6 +793,13 @@ static GLuint textureSlot(GLenum target, GLuint id)
 #endif
 static bool matrixFastPath = C3DGL_MATRIX_FAST_PATH;
 
+// Perspective draws store the eye distance as depth (W buffering), so that the fog table, which is indexed by depth, is
+// spread evenly over the distance. C3DGL_W_DEPTH=0 keeps z/w for comparisons
+#ifndef C3DGL_W_DEPTH
+#define C3DGL_W_DEPTH 1
+#endif
+static bool wDepthEnabled = C3DGL_W_DEPTH;
+
 // Start a new batch if key differs from the applied state. memcmp: keys are built with zeroed padding
 static void useState(const DrawState *key)
 {
@@ -857,6 +879,22 @@ static void drawKey(DrawState *out, bool clipSpace, bool points)
     {
         if (key.units[2].texture) WARN_ONCE("Polygon stipple needs texture unit 2, which is in use: drawn without stipple\n");
         else if ((key.stippleTex = stippleTexture()) != NULL) key.stipple = true;
+    }
+
+    // Perspective draws (a frustum: w = -z_eye) in the full depth range store the eye distance, see DrawState::wDepth
+    key.wDepth = false;
+    key.wNear = key.wFar = 0.0f;
+    if (!clipSpace && wDepthEnabled && (key.depthNear == 0.0f) && (key.depthFar == 1.0f))
+    {
+        const float *p = gl.stack[1][gl.stackDepth[1]].m;
+        const float a = p[10], b = p[14];
+        if ((p[11] == -1.0f) && (p[15] == 0.0f) && (a < -1.0f) && (b < 0.0f))
+        {
+            key.wNear = b/(a - 1.0f);
+            key.wFar = b/(a + 1.0f);
+            key.wDepth = (key.wNear > 0.0f) && (key.wFar > key.wNear);
+            if (!key.wDepth) key.wNear = key.wFar = 0.0f;
+        }
     }
 
     key.fog = gl.fog;

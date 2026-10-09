@@ -189,6 +189,10 @@ typedef struct {
     bool depthTest, depthMask;
     GLenum depthFunc;
     float depthNear, depthFar;  // glDepthRange
+    // Perspective draws store depth linear in the eye distance (W buffering) instead of z/w: the fog table is indexed by
+    // depth, and z/w leaves almost all of the range to the first few blocks. wNear, wFar: the projection's planes
+    bool wDepth;
+    float wNear, wFar;
     bool alphaTest;
     GLenum alphaFunc;
     u8 alphaRef;                // 0..255
