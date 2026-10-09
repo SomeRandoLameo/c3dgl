@@ -144,7 +144,7 @@ static struct {
     GLenum fogMode;
     float fogDensity, fogStart, fogEnd, fogColor[4], fogIndex;
     C3D_FogLut fogLut;
-    float fogLutInputs[10];
+    float fogLutInputs[11];
     bool fogLutValid;
 
     // User clip planes (glClipPlane), see clipPolygon()
