@@ -1,8 +1,11 @@
 ; Native renderer: GPU clip-space position (already tilted) and float RGBA.
+
 .out outpos position
 .out outclr color
+
 .alias inpos v0
 .alias inclr v1
+
 .proc main
     mov outpos, inpos
     mov outclr, inclr

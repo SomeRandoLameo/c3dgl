@@ -15,13 +15,17 @@ typedef struct {
     float position[4]; /* OpenGL clip space x,y,z,w; library applies screen tilt. */
     float color[4];    /* RGBA, 0..1 */
 } C3DGLnativeVertex;
+
 typedef struct {
     uint64_t cpu_ticks, gpu_ticks, wait_ticks;
     uint32_t command_bytes, draws;
 } C3DGLnativeStats;
+
 bool c3dglInit(void);
+
 void c3dglClose(void);
 void c3dglSwapBuffers(void);
+
 int c3dglNativeUpload(const C3DGLnativeVertex *vertices, size_t count);
 int c3dglNativeBegin(uint32_t clear_rgba, bool sync_vblank);
 int c3dglNativeDraw(size_t first, size_t count);

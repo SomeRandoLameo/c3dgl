@@ -5,14 +5,21 @@ pub const FINISH_WORDS: usize = 10;
 pub const DRAW_WORDS: usize = 22;
 
 fn write(c: &mut Commands<'_>, reg: u16, mask: u8, values: &[u32], inc: bool) -> Result<(), ()> {
-    if c.write(reg, mask, inc, values) { Ok(()) } else { Err(()) }
+    if c.write(reg, mask, inc, values) { 
+        Ok(()) 
+    } else { 
+        Err(()) 
+    }
 }
+
 fn one(c: &mut Commands<'_>, reg: u16, value: u32) -> Result<(), ()> {
     write(c, reg, 15, &[value], false)
 }
+
 fn seq(c: &mut Commands<'_>, reg: u16, values: &[u32]) -> Result<(), ()> {
     write(c, reg, 15, values, true)
 }
+
 fn masked(c: &mut Commands<'_>, reg: u16, mask: u8, value: u32) -> Result<(), ()> {
     write(c, reg, mask, &[value], false)
 }
@@ -21,8 +28,16 @@ pub fn pica_float(value: f32, mantissa_bits: u32) -> u32 {
     let bits = value.to_bits();
     let sign = bits >> 31;
     let exponent = ((bits >> 23) & 255) as i32 - 127 + 63;
-    if exponent < 0 { return sign << (mantissa_bits + 7); }
-    let mantissa = if exponent > 127 { 0 } else { (bits & 0x7fffff) >> (23 - mantissa_bits) };
+    if exponent < 0 { 
+        return sign << (mantissa_bits + 7); 
+    }
+    
+    let mantissa = if exponent > 127 { 
+        0 
+    } else { 
+        (bits & 0x7fffff) >> (23 - mantissa_bits) 
+    };
+    
     (sign << (mantissa_bits + 7)) | ((exponent.min(127) as u32) << mantissa_bits) | mantissa
 }
 
@@ -108,7 +123,10 @@ pub fn begin(c: &mut Commands<'_>) -> Result<(), ()> {
 
 pub fn draw(c: &mut Commands<'_>, first: u32, count: u32) -> Result<(), ()> {
     // Reserve the whole draw and the eventual finish before touching the buffer.
-    if c.words.len() - c.used < DRAW_WORDS + FINISH_WORDS { return Err(()); }
+    if c.words.len() - c.used < DRAW_WORDS + FINISH_WORDS { 
+        return Err(()); 
+    }
+    
     masked(c, r::PRIMITIVE_CONFIG, 2, 0)?;
     one(c, r::RESTART_PRIMITIVE, 1)?;
     one(c, r::INDEXBUFFER_CONFIG, 0x80000000)?;
@@ -123,18 +141,26 @@ pub fn draw(c: &mut Commands<'_>, first: u32, count: u32) -> Result<(), ()> {
 }
 
 pub fn finish(c: &mut Commands<'_>) -> Result<(), ()> {
-    if c.words.len() - c.used < FINISH_WORDS { return Err(()); }
+    if c.words.len() - c.used < FINISH_WORDS { 
+        return Err(()); 
+    }
+    
     one(c, r::FRAMEBUFFER_FLUSH, 1)?;
     one(c, r::FRAMEBUFFER_INVALIDATE, 1)?;
     one(c, r::EARLYDEPTH_CLEAR, 1)?;
     one(c, r::FINALIZE, 0x12345678)?;
-    if c.used % 4 != 0 { one(c, r::FINALIZE, 0x12345678)?; }
+    
+    if c.used % 4 != 0 { 
+        one(c, r::FINALIZE, 0x12345678)?; 
+    }
+    
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    
     #[test]
     fn draw_overflow_leaves_commands_unchanged() {
         let mut words = [7; 36];
@@ -147,6 +173,7 @@ mod tests {
         finish(&mut c).unwrap();
         assert_eq!(c.used % 4, 0);
     }
+    
     #[test]
     fn init_and_frame_have_aligned_finalizers() {
         let mut words = [0; 1024];
@@ -156,6 +183,7 @@ mod tests {
         assert!(c.used < 1024);
         assert_eq!(c.as_slice()[c.used - 1] & 0x3ff, r::FINALIZE as u32);
     }
+    
     #[test]
     fn float_formats_match_ctru_layout() {
         assert_eq!(pica_float(1.0, 16), 0x3f0000);
