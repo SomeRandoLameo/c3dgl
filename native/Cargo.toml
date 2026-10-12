@@ -1,0 +1,20 @@
+[package]
+name = "c3dgl-native"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+host-tests = []
+
+[lib]
+name = "c3dgl"
+crate-type = ["staticlib", "rlib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

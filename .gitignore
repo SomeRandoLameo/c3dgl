@@ -53,3 +53,6 @@ Thumbs.db
 .claude/settings.local.json
 CLAUDE.local.md
 .freebuff/project-id
+
+# Rust native rewrite
+native/target/
