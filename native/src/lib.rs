@@ -3,14 +3,15 @@
 extern crate alloc;
 #[cfg(any(target_os = "horizon", test))]
 mod gpu;
+#[cfg(any(target_os = "horizon", test))]
+mod matrix;
 mod platform;
 #[cfg(any(target_os = "horizon", test))]
 mod registers;
 #[cfg(any(target_os = "horizon", test))]
-mod shader;
-
-#[cfg(any(target_os = "horizon", test))]
 mod renderer;
+#[cfg(any(target_os = "horizon", test))]
+mod shader;
 
 /// PICA command encoding is independent of GPU services and memory allocation.
 /// The caller owns the storage; no allocation and no partial writes on overflow.

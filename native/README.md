@@ -7,7 +7,9 @@ calls are confined to `platform/libctru.c` and its Rust declarations.
 
 The current scope is top-screen colored triangles with persistent vertex data,
 RGBA8/D24S8 targets, GPU clear, asynchronous command submission, display transfer,
-VBlank presentation, readback and shutdown. This is **not yet the full OpenGL
+VBlank presentation, readback and shutdown. The first GL checkpoint adds modelview/projection matrix
+stacks and GPU transformation (see `include/GL/gl.h` for the implemented subset).
+This is **not yet the full OpenGL
 port**. Existing setup names `c3dglInit`, `c3dglClose`, `c3dglSwapBuffers` are
 exported; use `c3dgl_native.h` for the currently implemented drawing API. Do not
 link the native and C renderer into the same program.
@@ -31,7 +33,9 @@ consumer builds and an executable symbol audit. Native CMake is configured with
 Run `build-native/c3dgl_native_triangle.3dsx` in Azahar. It automatically checks
 240 frames with alternating clears, colored pixels, API errors, eight init/close
 cycles and restoration of free linear/VRAM space. It then measures 1, 64 and 512
-draws per frame, each with 30 warmups and 120 measured frames. START exits.
+draws per frame with static matrices and with a new modelview matrix before each
+draw, each with 30 warmups and 120 measured frames. Even the one-draw case changes
+its matrix between frames. START exits.
 The C++ executable performs the identical checks.
 
 For repeatable emulator acceptance, with the emulator's actual SDMC directory:
@@ -43,7 +47,7 @@ python3 native/scripts/emulator_check.py \
   --output build-native/emulator-results --runs 3
 ```
 
-The runner requires all checks to pass, identical full GPU images versus the C
+The runner requires all checks to pass, identical full GPU images for both workloads versus the C
 reference, and the slowest native CPU result to beat the fastest C result for
 every tested workload. Guest CPU work excludes explicitly tracked GPU/VBlank
 waiting. Total frame time uses identical 60 Hz synchronization. Emulator GPU
@@ -64,7 +68,7 @@ C usage after `gfxInitDefault()`:
 ```
 #include <c3dgl_native.h>
 if (!c3dglInit()) { /* handle failure */ }
-/* vertices: float4 OpenGL clip-space positions and float4 RGBA */
+/* vertices: float4 object-space positions and float4 RGBA */
 if (c3dglNativeUpload(vertices, vertex_count) != 0) { /* handle failure */ }
 while (aptMainLoop()) {
     if (c3dglNativeBegin(0x183050ff, true) != 0) break;
@@ -87,7 +91,20 @@ required PICA array sequence. Cache maintenance covers uploaded vertex ranges
 and the submitted command bytes, not the whole linear heap. Shutdown drains GPU
 work before freeing buffers. All five GPU allocations unwind on failure.
 
-The next steps are the actual OpenGL groups in `docs/native-rewrite.md` and the
+Include `<GL/gl.h>` from the native target to use `glMatrixMode`,
+`glLoadIdentity`, `glLoadMatrixf`, `glMultMatrixf`, `glPushMatrix`, `glPopMatrix`,
+`glTranslatef`, `glRotatef`, `glScalef`, `glOrtho`, `glFrustum`, and `glGetError`.
+Modelview has 32 stack entries, projection has 2. GL_TEXTURE, double/fixed-point
+entry points, queries, viewport and GL clear are not implemented yet. The native
+header deliberately declares only implemented symbols. Draw and frame operations
+still use the native API at this checkpoint.
+
+Vertices now stay in object space. The shader performs projection × modelview,
+screen tilt and depth conversion. Matrix uniforms upload only when changed or
+when GPU state is restored; steady frames allocate nothing. The command buffer
+is 128 KiB to fit 512 draws with a matrix change before every draw.
+
+The next steps are the remaining OpenGL groups in `docs/native-rewrite.md` and the
 later independent system/service backend. The ordinary `alloc` allocator is
 separate from GPU-visible linear/VRAM storage. Rust std is enabled only for host
 tests, never for the 3DS archive.

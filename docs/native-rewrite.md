@@ -68,3 +68,18 @@ Azahar does not model physical GPU execution duration: its GPU timings in this
 test are effectively constant. CPU improvements in the guest are emulator
 results, not proof of physical ARM11 or PICA throughput. On hardware, require
 repeated workload comparisons and no material GPU/total latency regression too.
+
+## Incremental GL checkpoints
+
+1. Matrix pipeline: modelview/projection stacks and native shader MVP transform.
+   Compare the unchanged persistent-triangle workload and a matrix change before
+   every draw at 1/64/512 draws. Retain prior native CPU times alongside the C
+   comparison; report increases explicitly. See `native-results/matrix-step/`.
+2. GL frame state: clear, viewport and queries, with matched state-change workloads.
+3. Arrays, indices and VBOs: compare persistent indexed meshes and buffer updates.
+4. Depth/culling and a rotating colored cube through the implemented GL subset.
+5. Immediate mode, then textures/blending and later compatibility groups.
+
+Each checkpoint keeps the emulator image, resource recovery and CPU gates; the
+next group is added only after the current comparison has passed. This sequence
+does not declare full GL header compatibility.

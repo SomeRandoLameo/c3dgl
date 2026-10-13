@@ -1,6 +1,7 @@
 /* GPU acceptance test and benchmark. Runs automatically; START exits. */
 #include <3ds.h>
 #include "c3dgl_native.h"
+#include <GL/gl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,10 +48,21 @@ static int pixel(int x, int y, int red, int green, int blue, int tolerance) {
     return 1;
 }
 
+static bool matrix_workload;
+static unsigned matrix_phase;
+
+static void transform(unsigned draw) {
+    const float m[]={.5f,0,0,0, 0,.5f,0,0, 0,0,1,0, (draw&1)? .125f:-.125f,0,0,1};
+    glLoadMatrixf(m);
+}
+
 static int frame(unsigned clear, unsigned draws, bool sync) {
     if (!check(c3dglNativeBegin(clear,sync), "begin")) return 0;
 
-    for (unsigned j = 0; j < draws; j++) if (!check(c3dglNativeDraw(0,3), "draw")) return 0;
+    for (unsigned j = 0; j < draws; j++) {
+        if (matrix_workload) transform(j+matrix_phase);
+        if (!check(c3dglNativeDraw(0,3), "draw")) return 0;
+    }
 
     return check(c3dglNativePresent(), "present");
 }
@@ -67,11 +79,11 @@ static void validate(unsigned clear, bool triangle) {
 }
 
 
-static void save_image(void) {
+static void save_image(bool transformed) {
 #ifdef __cplusplus
-    FILE *image=fopen("sdmc:/c3dgl-native-cpp.ppm","wb");
+    FILE *image=fopen(transformed?"sdmc:/c3dgl-native-cpp-matrix.ppm":"sdmc:/c3dgl-native-cpp.ppm","wb");
 #else
-    FILE *image=fopen("sdmc:/c3dgl-native.ppm","wb");
+    FILE *image=fopen(transformed?"sdmc:/c3dgl-native-matrix.ppm":"sdmc:/c3dgl-native.ppm","wb");
 #endif
     if (!image) return;
     fprintf(image,"P6\n400 240\n255\n");
@@ -133,13 +145,16 @@ int main(void) {
         printf("PASS 240 frames, 8 init/close\n");
 
         const unsigned loads[] = {1, 64, 512};
-        for (unsigned load = 0; load < 3 && !failures; load++) {
-            unsigned draws = loads[load];
+        for (unsigned load = 0; load < 6 && !failures; load++) {
+            unsigned draws = loads[load%3];
+            matrix_workload=load>=3;
+            glLoadIdentity();
 
             u64 cpu = 0, gpu = 0, total = 0;
             unsigned samples=0;
 
             for (unsigned i = 0; i < 150 && aptMainLoop(); i++) {
+                matrix_phase=i;
                 u64 start = svcGetSystemTick();
 
                 if (!frame(0x183050ff, draws, true)) break;
@@ -156,8 +171,8 @@ int main(void) {
             if (samples!=120) { printf("FAIL incomplete benchmark: %u/120\n",samples); failures++; break; }
 
             printf(
-                "draws=%u CPU %.4f GPU %.4f\n",
-                draws,
+                "workload=%s draws=%u CPU %.4f GPU %.4f\n",
+                matrix_workload?"matrix":"static", draws,
                 (double)cpu * 1000 / SYSCLOCK_ARM11 / 120,
                 (double)gpu * 1000 / SYSCLOCK_ARM11 / 120
             );
@@ -168,10 +183,15 @@ int main(void) {
             );
         }
 
+        if (glGetError()!=GL_NO_ERROR) { printf("FAIL matrix GL error\n"); failures++; }
+        check(c3dglNativeReadback(pixels,sizeof(pixels)),"matrix readback");
+        save_image(true);
+        matrix_workload=false;
+        glLoadIdentity();
         /* Leave the verified triangle displayed after benchmarks. */
         frame(0x183050ff, 1, true);
         validate(0x183050ff, true);
-        save_image();
+        save_image(false);
 
         c3dglClose();
     }

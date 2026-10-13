@@ -1,13 +1,14 @@
-; Native renderer: GPU clip-space position (already tilted) and float RGBA.
-
+; Object-space position; c0..c3 hold rows of the tilted GL MVP matrix.
 .out outpos position
 .out outclr color
-
 .alias inpos v0
 .alias inclr v1
-
+.alias matrix c0-c3
 .proc main
-    mov outpos, inpos
+    dp4 outpos.x, matrix[0], inpos
+    dp4 outpos.y, matrix[1], inpos
+    dp4 outpos.z, matrix[2], inpos
+    dp4 outpos.w, matrix[3], inpos
     mov outclr, inclr
     end
 .end

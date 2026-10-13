@@ -12,7 +12,7 @@ extern "C" {
  * Return codes: 0 success; -1 unavailable; -2 invalid call; -3 platform failure;
  * -4 command overflow (previous valid draws still present). */
 typedef struct {
-    float position[4]; /* OpenGL clip space x,y,z,w; library applies screen tilt. */
+    float position[4]; /* Object space x,y,z,w; identity GL matrices by default. */
     float color[4];    /* RGBA, 0..1 */
 } C3DGLnativeVertex;
 

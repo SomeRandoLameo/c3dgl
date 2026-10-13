@@ -1,7 +1,8 @@
 //! Single application-thread renderer. All service calls go through platform.
-use crate::{gpu, platform::gpu as p, Commands};
+use crate::{gpu, matrix::Matrices, platform::gpu as p, Commands};
 use core::{ptr, slice};
-const COMMAND_WORDS: usize = 16384;
+// 512 draws with a matrix upload each need 21,504 words plus frame commands.
+const COMMAND_WORDS: usize = 32768;
 const STATE_WORDS: usize = 1024;
 const MAX_VERTICES: usize = 4096;
 const TARGET_BYTES: usize = 240 * 400 * 4;
@@ -61,6 +62,7 @@ impl Drop for Buffer {
 }
 
 struct Renderer {
+    matrices: Matrices,
     commands: Buffer,
     state: Buffer,
     vertices: Buffer,
@@ -79,6 +81,12 @@ struct Renderer {
 }
 
 static mut CONTEXT: Option<Renderer> = None;
+
+pub unsafe fn with_matrices(f: impl FnOnce(&mut Matrices)) {
+    if let Some(r) = (&mut *ptr::addr_of_mut!(CONTEXT)).as_mut() {
+        f(&mut r.matrices);
+    }
+}
 
 impl Renderer {
     unsafe fn create() -> Option<Self> {
@@ -103,6 +111,7 @@ impl Renderer {
         let state_words = encoded.used;
 
         Some(Self {
+            matrices: Matrices::new(),
             commands,
             state,
             vertices,
@@ -140,6 +149,7 @@ impl Renderer {
         p::c3dglPlatformWait();
 
         self.generation = generation;
+        self.matrices.dirty = true;
 
         true
     }
@@ -192,8 +202,8 @@ pub unsafe extern "C" fn c3dglClose() {
     }
 }
 
-/// Upload persistent geometry between frames. Positions use OpenGL clip space;
-/// rotation and depth remapping happen once on upload, without matrix uniforms.
+/// Upload persistent object-space geometry between frames;
+/// the default matrices are identity; screen/depth mapping happens in the shader.
 #[no_mangle]
 pub unsafe extern "C" fn c3dglNativeUpload(vertices: *const Vertex, count: usize) -> i32 {
     let Some(r) = (&mut *ptr::addr_of_mut!(CONTEXT)).as_mut() else {
@@ -217,13 +227,7 @@ pub unsafe extern "C" fn c3dglNativeUpload(vertices: *const Vertex, count: usize
     }
 
     let output = slice::from_raw_parts_mut(r.vertices.pointer.cast::<Vertex>(), count);
-    for (src, dst) in input.iter().zip(output) {
-        let [x, y, z, w] = src.position;
-        *dst = Vertex {
-            position: [y, -x, (z - w) * 0.5, w],
-            color: src.color,
-        };
-    }
+    output.copy_from_slice(input);
 
     let result = p::c3dglPlatformFlush(r.vertices.pointer, (count * 32) as u32);
     if result < 0 {
@@ -297,7 +301,18 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
         return -2;
     }
 
+    let update = if r.matrices.dirty {
+        Some(r.matrices.combined())
+    } else {
+        None
+    };
     let mut commands = r.commands();
+    if let Some(matrix) = update {
+        if gpu::matrix(&mut commands, &matrix).is_err() {
+            r.error = -4;
+            return -4;
+        }
+    }
 
     if gpu::draw(&mut commands, first as u32, count as u32).is_err() {
         r.error = -4;
@@ -306,6 +321,7 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
 
     r.used = commands.used;
     r.draws += 1;
+    r.matrices.dirty = false;
 
     0
 }
@@ -386,6 +402,7 @@ mod lifecycle_tests {
         alloc::{alloc, dealloc, Layout},
         sync::Mutex,
     };
+
     #[derive(Default)]
     struct Mock {
         allocations: usize,
@@ -397,6 +414,7 @@ mod lifecycle_tests {
         waits: usize,
         tick: u64,
     }
+
     static MOCK: Mutex<Mock> = Mutex::new(Mock {
         allocations: 0,
         fail_at: 0,
@@ -407,54 +425,67 @@ mod lifecycle_tests {
         waits: 0,
         tick: 0,
     });
+
     unsafe fn allocate(size: usize) -> *mut u8 {
         let mut m = MOCK.lock().unwrap();
         m.allocations += 1;
+
         if m.allocations == m.fail_at {
             return ptr::null_mut();
         }
+
         let pointer = alloc(Layout::from_size_align(size, 128).unwrap());
         if !pointer.is_null() {
             m.live.push((pointer as usize, size));
         }
+
         pointer
     }
+
     unsafe fn free(pointer: *mut u8) {
         let mut m = MOCK.lock().unwrap();
         let index = m.live.iter().position(|a| a.0 == pointer as usize).unwrap();
         let (_, size) = m.live.remove(index);
         dealloc(pointer, Layout::from_size_align(size, 128).unwrap());
     }
+
     #[no_mangle]
     unsafe extern "C" fn c3dglPlatformLinearAllocate(size: usize) -> *mut u8 {
         allocate(size)
     }
+
     #[no_mangle]
     unsafe extern "C" fn c3dglPlatformLinearFree(p: *mut u8) {
         free(p);
     }
+
     #[no_mangle]
     unsafe extern "C" fn c3dglPlatformVramAllocate(size: usize) -> *mut u8 {
         allocate(size)
     }
+
     #[no_mangle]
     unsafe extern "C" fn c3dglPlatformVramFree(p: *mut u8) {
         free(p);
     }
+
     #[no_mangle]
     extern "C" fn c3dglPlatformPhysical(_: *const u8) -> u32 {
         0x20000000
     }
+
     #[no_mangle]
     extern "C" fn c3dglPlatformTick() -> u64 {
         let mut m = MOCK.lock().unwrap();
         m.tick += 1;
         m.tick
     }
+
     #[no_mangle]
     extern "C" fn c3dglPlatformFlush(_: *const u8, _: u32) -> i32 {
         0
     }
+
     #[no_mangle]
     extern "C" fn c3dglPlatformAcquire() -> i32 {
         let mut m = MOCK.lock().unwrap();
@@ -465,31 +496,38 @@ mod lifecycle_tests {
             0
         }
     }
+
     #[no_mangle]
     extern "C" fn c3dglPlatformRelease() {
         let mut m = MOCK.lock().unwrap();
         m.acquired = false;
         m.waits += 1;
     }
+
     #[no_mangle]
     extern "C" fn c3dglPlatformWait() -> u64 {
         MOCK.lock().unwrap().waits += 1;
         5
     }
+
     #[no_mangle]
     extern "C" fn c3dglPlatformGeneration() -> u32 {
         MOCK.lock().unwrap().generation
     }
+
     #[no_mangle]
     extern "C" fn c3dglPlatformVblank() {}
+
     #[no_mangle]
     extern "C" fn c3dglPlatformClear(_: *mut u8, _: *mut u8, _: u32, _: u32) -> i32 {
         0
     }
+
     #[no_mangle]
     extern "C" fn c3dglPlatformReadback(_: *mut u8, _: u32) -> i32 {
         0
     }
+
     #[no_mangle]
     unsafe extern "C" fn c3dglPlatformSubmit(commands: *mut u8, bytes: u32, _: *mut u8) -> i32 {
         assert_eq!(commands as usize % 128, 0);
@@ -499,6 +537,7 @@ mod lifecycle_tests {
         MOCK.lock().unwrap().submits += 1;
         0
     }
+
     #[test]
     fn allocation_rollback_lifecycle_and_overflow() {
         unsafe {
@@ -521,6 +560,55 @@ mod lifecycle_tests {
                 assert!(c3dglInit());
                 assert!(c3dglInit());
                 assert_eq!(c3dglNativeDraw(0, 3), -2);
+                use crate::matrix::*;
+                glMatrixMode(0xffff);
+                glPopMatrix();
+                assert_eq!(glGetError(), 0x0500);
+                assert_eq!(glGetError(), 0);
+                glPopMatrix();
+                assert_eq!(glGetError(), 0x0504);
+                glPushMatrix();
+                glTranslatef(1., 2., 3.);
+                glScalef(2., 3., 4.);
+                with_matrices(|m| {
+                    let a = m.combined();
+                    assert_eq!(a[12], 1.);
+                    assert_eq!(a[5], 3.);
+                });
+                glPopMatrix();
+                with_matrices(|m| assert_eq!(m.combined(), IDENTITY));
+                glMatrixMode(0x1701);
+                glPushMatrix();
+                glPushMatrix();
+                assert_eq!(glGetError(), 0x0503);
+                glFrustum(-1., 1., -1., 1., 1., 9.);
+                glMatrixMode(0x1700);
+                glTranslatef(0., 0., -2.);
+                with_matrices(|m| {
+                    let a = m.combined();
+                    assert_eq!(a[15], 2.);
+                    assert_eq!(a[0], 1.);
+                });
+                glLoadIdentity();
+                glRotatef(90., 0., 0., 2.);
+                with_matrices(|m| {
+                    let a = m.combined();
+                    assert!(a[0].abs() < 1e-6);
+                    assert!((a[1] - 1.).abs() < 1e-6);
+                });
+                glLoadIdentity();
+                glMatrixMode(0x1701);
+                glPopMatrix();
+                glOrtho(-2., 2., -4., 4., -1., 1.);
+                with_matrices(|m| {
+                    let a = m.combined();
+                    assert_eq!(a[0], 0.5);
+                    assert_eq!(a[5], 0.25);
+                });
+                glLoadIdentity();
+                glMatrixMode(0x1700);
+                glFrustum(-1., 1., -1., 1., 0., 9.);
+                assert_eq!(glGetError(), 0x0501);
                 let vertices = [Vertex {
                     position: [0.0, 0.0, 0.0, 1.0],
                     color: [1.0; 4],
@@ -530,7 +618,17 @@ mod lifecycle_tests {
                 assert_eq!(c3dglNativeUpload(vertices.as_ptr(), 3), -2);
                 assert_eq!(c3dglNativeBegin(0xff, false), -2);
                 assert_eq!(c3dglNativeDraw(0, 4), -2);
-                let mut draws = 0;
+                assert_eq!(c3dglNativeDraw(0, 3), 0);
+                let first_used = (&*ptr::addr_of!(CONTEXT)).as_ref().unwrap().used;
+                glLoadIdentity();
+                assert_eq!(c3dglNativeDraw(0, 3), 0);
+                let second_used = (&*ptr::addr_of!(CONTEXT)).as_ref().unwrap().used;
+                assert_eq!(second_used - first_used, gpu::DRAW_WORDS);
+                glTranslatef(0.125, 0., 0.);
+                assert_eq!(c3dglNativeDraw(0, 3), 0);
+                let third_used = (&*ptr::addr_of!(CONTEXT)).as_ref().unwrap().used;
+                assert_eq!(third_used - second_used, gpu::DRAW_WORDS + 20);
+                let mut draws = 3;
                 while c3dglNativeDraw(0, 3) == 0 {
                     draws += 1;
                 }

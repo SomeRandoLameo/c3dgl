@@ -103,7 +103,7 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
     }
     one(c, r::LIGHTING_ENABLE0, 0)?;
     one(c, r::LIGHTING_ENABLE1, 1)?;
-    // Disable geometry shader and upload the three-instruction vertex program.
+    // Disable geometry shader and upload the built-in matrix vertex program.
     masked(c, r::GEOSTAGE_CONFIG, 3, 0)?;
     masked(c, r::GEOSTAGE_CONFIG2, 3, 0)?;
     masked(c, r::VSH_COM_MODE, 1, 0)?;
@@ -141,6 +141,30 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
     buffers[2] = 0x20200000;
     seq(c, r::ATTRIBBUFFER0_OFFSET, &buffers)?;
     finish(c)
+}
+
+/// Float32 uniform vectors are sent w,z,y,x; rows implement PICA screen/depth mapping.
+pub fn matrix(c: &mut Commands<'_>, m: &[f32; 16]) -> Result<(), ()> {
+    if c.words.len() - c.used < 20 + DRAW_WORDS + FINISH_WORDS {
+        return Err(());
+    }
+
+    let mut data = [0; 16];
+    for row in 0..4 {
+        for col in 0..4 {
+            let value = match row {
+                0 => m[col * 4 + 1],
+                1 => -m[col * 4],
+                2 => (m[col * 4 + 2] - m[col * 4 + 3]) * 0.5,
+                _ => m[col * 4 + 3],
+            };
+
+            data[row * 4 + 3 - col] = value.to_bits();
+        }
+    }
+
+    one(c, r::VSH_FLOATUNIFORM_CONFIG, 0x80000000)?;
+    write(c, r::VSH_FLOATUNIFORM_DATA, 15, &data, false)
 }
 
 pub fn begin(c: &mut Commands<'_>) -> Result<(), ()> {
@@ -186,6 +210,25 @@ pub fn finish(c: &mut Commands<'_>) -> Result<(), ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matrix_uniform_layout_and_overflow() {
+        let mut words = [0; 64];
+        let mut c = Commands::new(&mut words);
+        matrix(&mut c, &crate::matrix::IDENTITY).unwrap();
+        let encoded = c.as_slice();
+        assert_eq!(encoded.len(), 20);
+        assert_eq!(encoded[0], 0x80000000);
+        assert_eq!(encoded[1] & 0x3ff, r::VSH_FLOATUNIFORM_CONFIG as u32);
+        assert_eq!(
+            encoded[2..8],
+            [0, 0x00ff02c1, 0, 1f32.to_bits(), 0, (-0f32).to_bits()]
+        );
+        assert_eq!(encoded[11], (-0.5f32).to_bits());
+        let before = encoded.to_vec();
+        assert!(matrix(&mut c, &crate::matrix::IDENTITY).is_err());
+        assert_eq!(c.as_slice(), before);
+    }
 
     #[test]
     fn draw_overflow_leaves_commands_unchanged() {

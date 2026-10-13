@@ -30,7 +30,9 @@ with tempfile.TemporaryDirectory(prefix='c3dgl-shader-') as directory:
     descriptors = [words[program+words[program+4]//4+i*2] for i in range(words[program+5])]
     generated = ('// Generated from shaders/triangle.v.pica with devkitPro picasso.\n'
                  f'pub const ENTRY: u32 = {words[entry+2]};\n'
+                 f'#[rustfmt::skip]\n'
                  f'pub const CODE: &[u32] = &{code};\n'
+                 f'#[rustfmt::skip]\n'
                  f'pub const DESCRIPTORS: &[u32] = &{descriptors};\n')
     source = root/'src/shader.rs'
     if args.check:
