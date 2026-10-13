@@ -22,6 +22,7 @@ struct Object {
 struct Key {
     vertex: Array,
     color: Option<Array>,
+    current_color: [u32; 4],
     first: usize,
     count: usize,
     kind: u32,
@@ -150,6 +151,7 @@ impl Arrays {
         count: usize,
         kind: u32,
         indices: usize,
+        current_color: [f32; 4],
     ) -> Result<(u32, Option<u32>), u32> {
         if !self.enabled[0] {
             return Err(0x0502);
@@ -158,6 +160,12 @@ impl Arrays {
         let key = Key {
             vertex: self.vertex,
             color: self.enabled[1].then_some(self.color),
+            current_color: if self.enabled[1] {
+                [0; 4]
+            } else {
+                current_color.map(f32::to_bits)
+            },
+
             first,
             count,
             kind,
@@ -220,7 +228,7 @@ impl Arrays {
                 color: if let Some(a) = key.color {
                     self.value(a, if kind == 0 { first + i } else { i }, true)?
                 } else {
-                    [1.; 4]
+                    current_color
                 },
             });
         }

@@ -63,6 +63,8 @@ impl Drop for Buffer {
 
 pub(crate) struct Renderer {
     pub(crate) arrays: crate::arrays::Arrays,
+    pub(crate) immediate: crate::immediate::Immediate,
+    transient: alloc::vec::Vec<Buffer>,
     frame: FrameState,
     work_wait_ticks: u64,
     work_gpu_ticks: u64,
@@ -89,12 +91,20 @@ static mut CONTEXT: Option<Renderer> = None;
 
 pub unsafe fn with_matrices(f: impl FnOnce(&mut Matrices)) {
     if let Some(r) = (&mut *ptr::addr_of_mut!(CONTEXT)).as_mut() {
+        if r.immediate.active {
+            r.matrices.fail(0x0502);
+            return;
+        }
         f(&mut r.matrices);
     }
 }
 
 pub unsafe fn with_frame(f: impl FnOnce(&mut FrameState, &mut Matrices)) {
     if let Some(r) = (&mut *ptr::addr_of_mut!(CONTEXT)).as_mut() {
+        if r.immediate.active {
+            r.matrices.fail(0x0502);
+            return;
+        }
         f(&mut r.frame, &mut r.matrices);
     }
 }
@@ -109,6 +119,10 @@ pub unsafe fn clear_gl(mask: u32) {
     let Some(r) = (&mut *ptr::addr_of_mut!(CONTEXT)).as_mut() else {
         return;
     };
+    if r.immediate.active {
+        r.matrices.fail(0x0502);
+        return;
+    }
     let mask = if r.frame.raster.depth_mask {
         mask
     } else {
@@ -184,6 +198,8 @@ impl Renderer {
 
         Some(Self {
             arrays: crate::arrays::Arrays::new(),
+            immediate: crate::immediate::Immediate::new(),
+            transient: alloc::vec::Vec::new(),
             frame: FrameState::new(),
             work_wait_ticks: 0,
             work_gpu_ticks: 0,
@@ -336,6 +352,7 @@ unsafe fn begin_frame(r: &mut Renderer, sync: bool, clear: Option<u32>) -> i32 {
 
     r.stats.gpu_ticks = p::c3dglPlatformWait();
     r.arrays.collected();
+    r.transient.clear();
 
     if sync {
         p::c3dglPlatformVblank();
@@ -923,6 +940,38 @@ mod lifecycle_tests {
                 assert_eq!(c3dglNativeBegin(0xff, false), 0);
                 assert_eq!(c3dglNativeDraw(0, 3), 0);
                 assert_eq!(c3dglNativePresent(), 0);
+                {
+                    use crate::immediate::*;
+                    glVertex3f(0., 0., 0.);
+                    assert_eq!(glGetError(), 0x0502);
+                    glBegin(4);
+                    glBegin(4);
+                    assert_eq!(glGetError(), 0x0502);
+                    crate::matrix::glLoadIdentity();
+                    assert_eq!(glGetError(), 0x0502);
+                    glColor4ub(255, 0, 0, 255);
+                    glVertex2f(-1., -1.);
+                    glColor3f(0., 1., 0.);
+                    glVertex3f(1., -1., 0.);
+                    glColor4f(0., 0., 1., 1.);
+                    glVertex4f(0., 1., 0., 1.);
+                    glEnd();
+                    assert_eq!(glGetError(), 0);
+                    with_immediate(|r| {
+                        assert_eq!(r.transient.len(), 1);
+                        let v = slice::from_raw_parts(r.transient[0].pointer.cast::<Vertex>(), 3);
+                        assert_eq!(v[0].color, [1., 0., 0., 1.]);
+                        assert_eq!(v[1].position, [1., -1., 0., 1.]);
+                        assert_eq!(v[2].color, [0., 0., 1., 1.]);
+                    });
+                    assert_eq!(c3dglNativePresent(), 0);
+                    with_immediate(|r| assert_eq!(r.transient.len(), 1));
+                    assert_eq!(c3dglNativeBegin(0xff, false), 0);
+                    with_immediate(|r| assert!(r.transient.is_empty()));
+                    assert_eq!(c3dglNativePresent(), 0);
+                    glEnd();
+                    assert_eq!(glGetError(), 0x0502);
+                }
                 let before = MOCK.lock().unwrap().submits;
                 MOCK.lock().unwrap().generation += 1;
                 assert_eq!(c3dglNativeBegin(0xff, false), 0);
@@ -938,10 +987,55 @@ mod lifecycle_tests {
     }
 }
 
-pub(crate) unsafe fn with_renderer(f: impl FnOnce(&mut Renderer)) {
+pub(crate) unsafe fn with_immediate(f: impl FnOnce(&mut Renderer)) {
     if let Some(r) = (&mut *ptr::addr_of_mut!(CONTEXT)).as_mut() {
         f(r);
     }
+}
+
+pub(crate) unsafe fn with_renderer(f: impl FnOnce(&mut Renderer)) {
+    with_immediate(|r| {
+        if r.immediate.active {
+            r.matrices.fail(0x0502);
+        } else {
+            f(r);
+        }
+    });
+}
+
+pub(crate) unsafe fn end_immediate() {
+    with_immediate(|r| {
+        let result = (|| -> Result<(), u32> {
+            let vertices = r.immediate.end()?;
+            if vertices.is_empty() {
+                return Ok(());
+            }
+            if !r.active && begin_frame(r, true, None) != 0 {
+                return Err(0x0502);
+            }
+            if !r.frame.drawable || !r.frame.raster.drawable() {
+                return Ok(());
+            }
+            r.transient.try_reserve(1).map_err(|_| 0x0505u32)?;
+            let bytes = vertices.len() * core::mem::size_of::<Vertex>();
+            let storage = Buffer::new(bytes, false).ok_or(0x0505u32)?;
+            ptr::copy_nonoverlapping(vertices.as_ptr().cast::<u8>(), storage.pointer, bytes);
+            if p::c3dglPlatformFlush(storage.pointer, bytes as u32) < 0 {
+                return Err(0x0502);
+            }
+            update_draw_state(r).map_err(|_| 0x0505u32)?;
+            let mut c = r.commands();
+            gpu::geometry(&mut c, storage.physical(), 0, vertices.len() as u32, None)
+                .map_err(|_| 0x0505u32)?;
+            r.used = c.used;
+            r.transient.push(storage);
+            r.draws += 1;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            r.matrices.fail(e);
+        }
+    });
 }
 
 pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, indices: usize) {
@@ -972,7 +1066,9 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                 return Ok(());
             }
 
-            let (address, index) = r.arrays.prepare(first as usize, count, kind, indices)?;
+            let (address, index) =
+                r.arrays
+                    .prepare(first as usize, count, kind, indices, r.immediate.color)?;
             update_draw_state(r).map_err(|_| 0x0505u32)?;
             let mut c = r.commands();
             gpu::geometry(&mut c, address, 0, count as u32, index).map_err(|_| 0x0505u32)?;

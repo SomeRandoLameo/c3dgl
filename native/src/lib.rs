@@ -8,6 +8,8 @@ mod frame;
 #[cfg(any(target_os = "horizon", test))]
 mod gpu;
 #[cfg(any(target_os = "horizon", test))]
+mod immediate;
+#[cfg(any(target_os = "horizon", test))]
 mod matrix;
 mod platform;
 #[cfg(any(target_os = "horizon", test))]

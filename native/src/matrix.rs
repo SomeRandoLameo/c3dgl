@@ -88,7 +88,8 @@ impl Matrices {
 #[no_mangle]
 pub unsafe extern "C" fn glGetError() -> u32 {
     let mut result = 0;
-    with_matrices(|m| {
+    crate::renderer::with_immediate(|r| {
+        let m = &mut r.matrices;
         result = m.error;
         m.error = 0;
     });

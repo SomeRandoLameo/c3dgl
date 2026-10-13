@@ -220,3 +220,16 @@ The compact SHORT input is necessary: C FLOAT arrays do not use this cache.
 The C generic primitive path supplies the one FRONT_AND_BACK correctness cell,
 because its indexed path fails to reject both faces; measured draws all remain
 indexed. Run three repetitions for C, C++, rust3ds and the C reference.
+
+Immediate mode supports `glBegin(GL_TRIANGLES)` / `glEnd`, `glVertex2f/3f/4f`,
+`glColor3f/4f` and `glColor4ub`, with at most 4096 vertices per begin/end pair.
+Incomplete trailing triangles are ignored. Colors persist between begin/end pairs
+and supply the default color when the color array is disabled; VBO cache keys
+include that current color. Matrix, raster and array state changes during a pair
+report `GL_INVALID_OPERATION`. Each completed batch uses its own GPU allocation,
+retained until the next completed frame wait.
+
+`c3dgl_native_immediate.3dsx` is a rotating RGB triangle consumer of this API.
+Host tests verify assembly, errors, per-vertex colors and submitted storage lifetime;
+the complete build check covers its 3DS compilation and linking. Immediate mode
+has not yet been checked in the emulator.

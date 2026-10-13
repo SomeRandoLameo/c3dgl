@@ -100,4 +100,4 @@ It includes the real rust3ds consumer in every GPU/performance comparison and
 reports incremental CPU costs for both consumers. The arrays/indices/VBO checkpoint is now verified in
 `native-results/arrays-step/full/`. Its report also records increased CPU costs
 relative to the frame-state checkpoint, while all C-reference performance gates
-pass. Depth/culling and the rotating colored cube are implemented. Build and host checks pass; emulator evidence is retained in `native-results/depth-step/`. Immediate mode is the next implementation group.
+pass. Depth/culling and the rotating colored cube are implemented. Build and host checks pass; emulator evidence is retained in `native-results/depth-step/`. Immediate triangle mode is now implemented with a dedicated rotating RGB demo. Its 16 host tests and complete C/C++/rust3ds build check pass; emulator validation for this new group is pending.

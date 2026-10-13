@@ -6,6 +6,7 @@
 extern "C" {
 #endif
 typedef unsigned char GLboolean;
+typedef unsigned char GLubyte;
 typedef unsigned int GLuint;
 typedef void GLvoid;
 typedef ptrdiff_t GLsizeiptr;
@@ -102,6 +103,15 @@ void glGetIntegerv(GLenum pname,GLint *out);
 #define GL_STACK_OVERFLOW 0x0503
 #define GL_STACK_UNDERFLOW 0x0504
 GLenum glGetError(void);
+/* Immediate mode currently supports GL_TRIANGLES, up to 4096 vertices. */
+void glBegin(GLenum mode);
+void glEnd(void);
+void glVertex2f(GLfloat x, GLfloat y);
+void glVertex3f(GLfloat x, GLfloat y, GLfloat z);
+void glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+void glColor3f(GLfloat r, GLfloat g, GLfloat b);
+void glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
+void glColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a);
 void glMatrixMode(GLenum mode);
 void glLoadIdentity(void);
 void glLoadMatrixf(const GLfloat *m);
