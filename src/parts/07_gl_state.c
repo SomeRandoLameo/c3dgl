@@ -699,7 +699,11 @@ void glClear(GLbitfield mask)
                 (!color || (gl.state.colorMask == GPU_WRITE_COLOR)) &&
                 (!stencil || (gl.state.stencilWriteMask == 0xFF)) &&
                 ((depth == stencil) || (depth && !gl.stencilUsed));
-    if (!fill)
+    // Mid-frame clears must stay in the GPU command list. A memory fill needs
+    // a split plus a GX queue entry; item icons can issue dozens of depth
+    // clears in one inventory frame and exhaust citro3d's 32-entry queue.
+    // Drawing the clear quad preserves ordering without adding GX commands.
+    if (!fill || gl.drawnThisFrame)
     {
         clearWithQuad(color, depth, stencil);
         return;
