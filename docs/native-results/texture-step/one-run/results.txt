@@ -1,0 +1,20 @@
+PASS clear (5,5): actual 20,31,51 expected 20,31,51
+PASS UV and repeat (50,60): actual 30,80,230 expected 30,80,230
+PASS row orientation (50,170): actual 240,200,40 expected 240,200,40
+PASS queued draw retains pre-update image (40,40): actual 30,80,230 expected 30,80,230
+PASS updated image alpha over VBO (170,80): actual 130,210,45 expected 130,210,45
+PASS alpha over background (340,100): actual 25,56,141 expected 25,56,141
+PASS clear (5,5): actual 20,31,51 expected 20,31,51
+PASS update visible next frame (40,40): actual 20,220,50 expected 20,220,50
+PASS clear (5,5): actual 20,31,51 expected 20,31,51
+PASS linear filtering changes GPU image
+PASS clear (5,5): actual 20,31,51 expected 20,31,51
+PASS clamp to edge (50,170): actual 30,200,230 expected 30,200,230
+PASS clear (5,5): actual 20,31,51 expected 20,31,51
+PASS mirrored repeat (50,170): actual 30,80,230 expected 30,80,230
+PASS clear (5,5): actual 20,31,51 expected 20,31,51
+PASS reverse subtract (170,80): actual 220,0,0 expected 220,0,0
+PASS clear (5,5): actual 20,31,51 expected 20,31,51
+PASS minimum equation (170,80): actual 20,200,40 expected 20,200,40
+FAIL GPU memory recovery linear=31941632/31941632 VRAM=6291456/0
+FAILED: 19 checks, 1 failures, 7 frames, GL error=0

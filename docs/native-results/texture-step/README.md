@@ -21,8 +21,11 @@ combiners, blending and command overflow without partial writes.
 The public native upload ABI remains 32 bytes per vertex; internal resident
 vertices are now 48 bytes with UVs. Subimage writes copy and flush the full image
 into a new allocation to preserve queued draws. No memory/CPU throughput improvement
-is claimed. No emulator or hardware execution was performed for this checkpoint;
-GPU pixel correctness, hardware resource recovery and performance gates are pending.
+is claimed. One short native C Azahar run is now recorded in `one-run/`: 18 render/image
+checks pass, with zero GL errors. Its VRAM baseline assertion had a harness
+initialization error; original failed output is preserved and explained there.
+No second run was performed. Independent consumer comparisons, hardware execution
+and repeated performance gates remain pending.
 
 Register layouts were checked against the upstream devkitPro
 [texture encoder](https://github.com/devkitPro/citro3d/blob/master/source/texture.c),

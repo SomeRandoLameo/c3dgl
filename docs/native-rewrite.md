@@ -110,3 +110,10 @@ VBOs and immediate coordinates. The new C, C++ and rust3ds texture consumers bui
 and pass dependency audits; 19 host tests pass. See `native-results/texture-step/`
 for scope and build evidence. Mipmaps, additional formats, texture matrices and
 emulator image/performance validation for this checkpoint remain pending.
+
+A single native C texture/blend Azahar smoke run is recorded in
+`native-results/texture-step/one-run/`: all 18 rendering/image checks pass, GL error
+is zero. Its extra memory assertion used an uninitialized VRAM baseline; the
+original failed assertion is retained and the corrected harness was rebuilt
+without a second emulator launch. This does not complete repeated performance
+or independent C++/Rust consumer gates.

@@ -281,5 +281,12 @@ B switches wrapping; periodic subimage updates occur between the two draws.
 The Cargo consumer also builds `textured.3dsx` from `rust3ds/src/bin/textured.rs`.
 All three consumers compile/link in `native/scripts/check.sh`; 19 host tests cover
 packet encoding, uploads, error rollback, UV cache invalidation and GPU image
-lifetime. Emulator image comparisons and performance for this checkpoint remain
-pending; the preceding emulator reports describe earlier renderer revisions.
+lifetime. One short native C Azahar smoke run now passes 18 image/render checks with zero
+GL errors; its resource assertion had an uninitialized VRAM baseline, fixed in
+the harness and documented with the unchanged raw result in
+`docs/native-results/texture-step/one-run/`. No second run was made. Independent
+consumer image comparisons and performance remain pending.
+
+`c3dgl_native_texture_smoke.3dsx` runs seven deterministic frames and writes
+`sdmc:/c3dgl-texture-smoke-results.txt` plus GPU PPM readbacks, covering texture
+updates, filter/wrap changes, blending and renderer cleanup without interactive input.
