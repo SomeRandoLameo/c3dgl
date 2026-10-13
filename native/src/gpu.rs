@@ -2,7 +2,8 @@
 use crate::{registers as r, shader, Commands};
 
 pub const FINISH_WORDS: usize = 10;
-pub const DRAW_WORDS: usize = 22;
+// Includes the geometry base packet used by renderer draws.
+pub const DRAW_WORDS: usize = 24;
 
 fn write(c: &mut Commands<'_>, reg: u16, mask: u8, values: &[u32], inc: bool) -> Result<(), ()> {
     if c.write(reg, mask, inc, values) {
@@ -195,23 +196,63 @@ pub fn begin(c: &mut Commands<'_>) -> Result<(), ()> {
     one(c, r::FRAMEBUFFER_INVALIDATE, 1)
 }
 
+#[cfg(test)]
 pub fn draw(c: &mut Commands<'_>, first: u32, count: u32) -> Result<(), ()> {
     // Reserve the whole draw and the eventual finish before touching the buffer.
     if c.words.len() - c.used < DRAW_WORDS + FINISH_WORDS {
         return Err(());
     }
 
-    masked(c, r::PRIMITIVE_CONFIG, 2, 0)?;
+    draw_index(c, first, count, None)
+}
+
+fn draw_index(c: &mut Commands<'_>, first: u32, count: u32, index: Option<u32>) -> Result<(), ()> {
+    masked(
+        c,
+        r::PRIMITIVE_CONFIG,
+        2,
+        if index.is_some() { 0x300 } else { 0 },
+    )?;
     one(c, r::RESTART_PRIMITIVE, 1)?;
-    one(c, r::INDEXBUFFER_CONFIG, 0x80000000)?;
+    one(c, r::INDEXBUFFER_CONFIG, index.unwrap_or(0x80000000))?;
     one(c, r::NUMVERTICES, count)?;
     one(c, r::VERTEX_OFFSET, first)?;
-    masked(c, r::GEOSTAGE_CONFIG2, 1, 1)?;
+
+    if index.is_some() {
+        masked(c, r::GEOSTAGE_CONFIG, 2, 0x100)?;
+        masked(c, r::GEOSTAGE_CONFIG2, 2, 0x100)?;
+    } else {
+        masked(c, r::GEOSTAGE_CONFIG2, 1, 1)?;
+    }
+
     masked(c, r::START_DRAW_FUNC0, 1, 0)?;
-    one(c, r::DRAWARRAYS, 1)?;
+    one(
+        c,
+        if index.is_some() {
+            0x022f
+        } else {
+            r::DRAWARRAYS
+        },
+        1,
+    )?;
+
     masked(c, r::START_DRAW_FUNC0, 1, 1)?;
-    masked(c, r::GEOSTAGE_CONFIG2, 1, 0)?;
-    one(c, r::VTX_FUNC, 1)
+
+    if index.is_some() {
+        masked(c, r::GEOSTAGE_CONFIG, 2, 0)?;
+        masked(c, r::GEOSTAGE_CONFIG2, 2, 0)?;
+    } else {
+        masked(c, r::GEOSTAGE_CONFIG2, 1, 0)?;
+    }
+
+    one(c, r::VTX_FUNC, 1)?;
+
+    if index.is_some() {
+        masked(c, r::PRIMITIVE_CONFIG, 8, 0)?;
+        masked(c, r::PRIMITIVE_CONFIG, 8, 0)?;
+    }
+
+    Ok(())
 }
 
 pub fn finish(c: &mut Commands<'_>) -> Result<(), ()> {
@@ -234,6 +275,42 @@ pub fn finish(c: &mut Commands<'_>) -> Result<(), ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn depth_cull_packet_and_overflow() {
+        let mut state = crate::raster::Raster::new();
+        state.depth = true;
+        state.cull = true;
+        state.range = [0.2, 0.8];
+        let mut words = [0; 80];
+        let mut c = Commands::new(&mut words);
+        raster(&mut c, state).unwrap();
+        assert_eq!(c.used, RASTER_WORDS);
+        assert_eq!(c.as_slice()[0], 2);
+        assert_eq!(c.as_slice()[2], 0x1f61);
+        assert_eq!(c.as_slice()[4], 0x02000000);
+        assert_eq!(c.as_slice()[6], pica_float(-(0.8f32 - 0.2), 16));
+        assert_eq!(c.as_slice()[8], pica_float(1. - 0.8, 16));
+        let mut too_small = [7; 51];
+        let mut c = Commands::new(&mut too_small);
+        assert!(raster(&mut c, state).is_err());
+        assert!(c.as_slice().is_empty());
+        assert_eq!(too_small, [7; 51]);
+    }
+
+    #[test]
+    fn indexed_geometry_packet_and_transactional_overflow() {
+        let mut words = [0; 44];
+        let mut c = Commands::new(&mut words);
+        geometry(&mut c, 0x20000000, 0, 6, Some(0x80000080)).unwrap();
+        assert_eq!(c.used, DRAW_WORDS + 8);
+        assert_eq!(c.as_slice()[0], 0x04000000);
+        assert_eq!(c.as_slice()[6], 0x80000080);
+        assert_eq!(c.as_slice()[19] & 0x3ff, 0x022f);
+        let before = c.as_slice().to_vec();
+        assert!(geometry(&mut c, 0x20001000, 0, 3, None).is_err());
+        assert_eq!(c.as_slice(), before);
+    }
 
     #[test]
     fn landscape_subviewport_layout() {
@@ -296,4 +373,42 @@ mod tests {
         assert_eq!(pica_float(120.0, 16), 0x45e000);
         assert_eq!(pica_float(1.0, 23), 0x1f800000);
     }
+}
+
+pub fn geometry(
+    c: &mut Commands<'_>,
+    address: u32,
+    first: u32,
+    count: u32,
+    index: Option<u32>,
+) -> Result<(), ()> {
+    let words = DRAW_WORDS + if index.is_some() { 8 } else { 0 };
+    if c.words.len() - c.used < words + FINISH_WORDS {
+        return Err(());
+    }
+    one(c, r::ATTRIBBUFFERS_LOC, address >> 3)?;
+    draw_index(c, first, count, index)
+}
+
+pub const RASTER_WORDS: usize = 10;
+pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster) -> Result<(), ()> {
+    if c.words.len() - c.used < RASTER_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
+        return Err(());
+    }
+    one(c, r::FACECULLING_CONFIG, s.cull_word())?;
+    one(c, r::DEPTH_COLOR_MASK, s.depth_word())?;
+    masked(
+        c,
+        r::GAS_DELTAZ_DEPTH,
+        8,
+        ((0xaf02 >> (s.comparison() * 2)) & 3) << 24,
+    )?;
+    seq(
+        c,
+        r::DEPTHMAP_SCALE,
+        &[
+            pica_float(-(s.range[1] - s.range[0]), 16),
+            pica_float(1. - s.range[1], 16),
+        ],
+    )
 }

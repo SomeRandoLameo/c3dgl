@@ -24,7 +24,7 @@ add_custom_command(OUTPUT "${C3DGL_ARCHIVE}"
         -Zbuild-std=core,alloc --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     DEPENDS Cargo.toml build.rs rust-toolchain.toml src/lib.rs src/platform.rs src/gpu.rs
-        src/renderer.rs src/matrix.rs src/frame.rs src/registers.rs src/shader.rs
+        src/renderer.rs src/arrays.rs src/matrix.rs src/frame.rs src/raster.rs src/registers.rs src/shader.rs
     VERBATIM)
 add_custom_target(c3dgl_native_build ALL DEPENDS "${C3DGL_ARCHIVE}")
 add_library(c3dgl_native_rust STATIC IMPORTED GLOBAL)
@@ -49,6 +49,10 @@ if(C3DGL_NATIVE_BUILD_TRIANGLE)
     target_link_libraries(c3dgl_native_triangle PRIVATE c3dgl::native)
     target_compile_options(c3dgl_native_triangle PRIVATE -O2 -Wall -Wextra -Werror)
     ctr_create_3dsx(c3dgl_native_triangle)
+    add_executable(c3dgl_native_cube examples/cube.c)
+    target_link_libraries(c3dgl_native_cube PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_cube PRIVATE -O2 -Wall -Wextra -Werror)
+    ctr_create_3dsx(c3dgl_native_cube)
 endif()
 option(C3DGL_NATIVE_BUILD_CPP_TEST "Build the same GPU test as a C++ consumer" ${C3DGL_NATIVE_TOP_LEVEL})
 if(C3DGL_NATIVE_BUILD_CPP_TEST)

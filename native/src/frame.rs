@@ -8,6 +8,7 @@ pub const COLOR: u32 = 0x4000;
 pub const DEPTH: u32 = 0x0100;
 
 pub struct FrameState {
+    pub raster: crate::raster::Raster,
     pub viewport: [i32; 4],
     pub viewport_dirty: bool,
     pub drawable: bool,
@@ -18,6 +19,7 @@ pub struct FrameState {
 impl FrameState {
     pub fn new() -> Self {
         Self {
+            raster: crate::raster::Raster::new(),
             viewport: [0, 0, 400, 240],
             viewport_dirty: false,
             drawable: true,
@@ -80,6 +82,9 @@ pub unsafe extern "C" fn glClear(mask: u32) {
 }
 
 fn query(s: &FrameState, m: &Matrices, pname: u32) -> Option<([f64; 16], usize)> {
+    if let Some(v) = s.raster.query(pname) {
+        return Some(v);
+    }
     let mut v = [0.; 16];
     let len = match pname {
         0x0ba2 => {
@@ -147,7 +152,7 @@ pub unsafe extern "C" fn glGetIntegerv(pname: u32, out: *mut i32) {
         match query(s, m, pname) {
             Some((v, n)) => {
                 for (i, value) in v[..n].iter().enumerate() {
-                    let integer = if pname == 0x0c22 || pname == 0x0b73 {
+                    let integer = if pname == 0x0c22 || pname == 0x0b73 || pname == 0x0b70 {
                         (*value * 2147483647.) as i32
                     } else {
                         (*value + if *value >= 0. { 0.5 } else { -0.5 }) as i32
@@ -186,4 +191,23 @@ mod tests {
         assert_eq!(byte(-1.), 0);
         assert_eq!(byte(2.), 255);
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glGetBooleanv(pname: u32, out: *mut u8) {
+    with_frame(|s, m| {
+        if out.is_null() {
+            m.fail(0x0501);
+            return;
+        }
+
+        match query(s, m, pname) {
+            Some((v, n)) => {
+                for (i, value) in v[..n].iter().enumerate() {
+                    out.add(i).write((*value != 0.) as u8);
+                }
+            }
+            None => m.fail(0x0500),
+        }
+    });
 }

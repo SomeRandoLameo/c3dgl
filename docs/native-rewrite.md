@@ -79,6 +79,9 @@ repeated workload comparisons and no material GPU/total latency regression too.
    comparison; report increases explicitly. See `native-results/matrix-step/`.
 2. GL frame state: clear, viewport and queries, with matched state-change workloads.
 3. Arrays, indices and VBOs: compare persistent indexed meshes and buffer updates.
+   The complete Azahar gate is recorded in `native-results/arrays-step/full/`: three
+   runs each of C, C++, rust3ds and C reference, matched full GPU images, resource
+   recovery and CPU comparisons for static/matrix/viewport/indexed/update workloads.
 4. Depth/culling and a rotating colored cube through the implemented GL subset.
 5. Immediate mode, then textures/blending and later compatibility groups.
 
@@ -94,6 +97,7 @@ C/C++ static library retains its standalone no_std runtime configuration.
 
 The GL clear/viewport checkpoint is recorded in `native-results/frame-step/`.
 It includes the real rust3ds consumer in every GPU/performance comparison and
-reports incremental CPU costs for both consumers. The next implementation group
-is vertex arrays, indices and VBOs, with persistent indexed mesh and update
-workloads before the depth/culling cube.
+reports incremental CPU costs for both consumers. The arrays/indices/VBO checkpoint is now verified in
+`native-results/arrays-step/full/`. Its report also records increased CPU costs
+relative to the frame-state checkpoint, while all C-reference performance gates
+pass. Depth/culling and the rotating colored cube are implemented. Build and host checks pass; emulator evidence is retained in `native-results/depth-step/`. Immediate mode is the next implementation group.

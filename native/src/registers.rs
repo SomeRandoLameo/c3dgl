@@ -32,6 +32,7 @@ pub const BLEND_FUNC: u16 = 0x0101;
 pub const LOGIC_OP: u16 = 0x0102;
 pub const BLEND_COLOR: u16 = 0x0103;
 pub const FRAGOP_ALPHA_TEST: u16 = 0x0104;
+pub const DEPTH_COLOR_MASK: u16 = 0x0107;
 pub const FRAMEBUFFER_INVALIDATE: u16 = 0x0110;
 pub const FRAMEBUFFER_FLUSH: u16 = 0x0111;
 pub const COLORBUFFER_READ: u16 = 0x0112;

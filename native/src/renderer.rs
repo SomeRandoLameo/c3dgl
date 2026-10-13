@@ -24,13 +24,13 @@ pub struct Stats {
     pub draws: u32,
 }
 
-struct Buffer {
-    pointer: *mut u8,
+pub(crate) struct Buffer {
+    pub(crate) pointer: *mut u8,
     vram: bool,
 }
 
 impl Buffer {
-    unsafe fn new(size: usize, vram: bool) -> Option<Self> {
+    pub(crate) unsafe fn new(size: usize, vram: bool) -> Option<Self> {
         let pointer = if vram {
             p::c3dglPlatformVramAllocate(size)
         } else {
@@ -44,7 +44,7 @@ impl Buffer {
         }
     }
 
-    unsafe fn physical(&self) -> u32 {
+    pub(crate) unsafe fn physical(&self) -> u32 {
         p::c3dglPlatformPhysical(self.pointer)
     }
 }
@@ -61,12 +61,13 @@ impl Drop for Buffer {
     }
 }
 
-struct Renderer {
+pub(crate) struct Renderer {
+    pub(crate) arrays: crate::arrays::Arrays,
     frame: FrameState,
     work_wait_ticks: u64,
     work_gpu_ticks: u64,
     submitted_bytes: u32,
-    matrices: Matrices,
+    pub(crate) matrices: Matrices,
     commands: Buffer,
     state: Buffer,
     vertices: Buffer,
@@ -108,6 +109,14 @@ pub unsafe fn clear_gl(mask: u32) {
     let Some(r) = (&mut *ptr::addr_of_mut!(CONTEXT)).as_mut() else {
         return;
     };
+    let mask = if r.frame.raster.depth_mask {
+        mask
+    } else {
+        mask & !crate::frame::DEPTH
+    };
+    if mask == 0 {
+        return;
+    }
     if !r.active {
         if begin_frame(r, true, None) != 0 {
             r.matrices.fail(0x0502);
@@ -174,6 +183,7 @@ impl Renderer {
         let state_words = encoded.used;
 
         Some(Self {
+            arrays: crate::arrays::Arrays::new(),
             frame: FrameState::new(),
             work_wait_ticks: 0,
             work_gpu_ticks: 0,
@@ -218,6 +228,7 @@ impl Renderer {
         self.generation = generation;
         self.matrices.dirty = true;
         self.frame.viewport_dirty = true;
+        self.frame.raster.dirty = true;
 
         true
     }
@@ -324,6 +335,7 @@ unsafe fn begin_frame(r: &mut Renderer, sync: bool, clear: Option<u32>) -> i32 {
     let wait = p::c3dglPlatformTick();
 
     r.stats.gpu_ticks = p::c3dglPlatformWait();
+    r.arrays.collected();
 
     if sync {
         p::c3dglPlatformVblank();
@@ -377,17 +389,21 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
         return -2;
     }
 
-    if !r.frame.drawable {
+    if !r.frame.drawable || !r.frame.raster.drawable() {
         r.draws += 1;
         return 0;
     }
 
-    if (r.frame.viewport_dirty || r.matrices.dirty) && update_draw_state(r).is_err() {
+    if (r.frame.viewport_dirty || r.matrices.dirty || r.frame.raster.dirty)
+        && update_draw_state(r).is_err()
+    {
         r.error = -4;
         return -4;
     }
+
+    let address = r.vertices.physical();
     let mut commands = r.commands();
-    if gpu::draw(&mut commands, first as u32, count as u32).is_err() {
+    if gpu::geometry(&mut commands, address, first as u32, count as u32, None).is_err() {
         r.error = -4;
         return -4;
     }
@@ -413,14 +429,18 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
         None
     };
 
+    let raster = r.frame.raster.dirty.then_some(r.frame.raster);
+    let needed = viewport.map_or(0, |_| 8)
+        + update.map_or(0, |_| 20)
+        + raster.map_or(0, |_| gpu::RASTER_WORDS);
     let mut commands = r.commands();
-    // Single-state writers already reserve draw + finish. Reserve both only
-    // when both updates are needed, keeping the unchanged-state draw path cheap.
-    if viewport.is_some()
-        && update.is_some()
-        && commands.words.len() - commands.used < gpu::DRAW_WORDS + gpu::FINISH_WORDS + 28
+    if needed != 0
+        && commands.words.len() - commands.used < needed + gpu::DRAW_WORDS + 8 + gpu::FINISH_WORDS
     {
         return Err(());
+    }
+    if let Some(s) = raster {
+        gpu::raster(&mut commands, s)?;
     }
 
     if let Some(v) = viewport {
@@ -438,6 +458,7 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
     r.used = commands.used;
     r.matrices.dirty = false;
     r.frame.viewport_dirty = false;
+    r.frame.raster.dirty = false;
     Ok(())
 }
 
@@ -691,6 +712,46 @@ mod lifecycle_tests {
                 assert!(c3dglInit());
                 assert_eq!(c3dglNativeDraw(0, 3), -2);
                 use crate::matrix::*;
+                use crate::{frame::*, raster::*};
+                assert_eq!(glIsEnabled(0x0b71), 0);
+                assert_eq!(glIsEnabled(0x0b44), 0);
+                let mut boolean = 0;
+                glGetBooleanv(0x0b72, &mut boolean);
+                assert_eq!(boolean, 1);
+                let mut range = [-1.; 2];
+                glGetFloatv(0x0b70, range.as_mut_ptr());
+                assert_eq!(range, [0., 1.]);
+                glEnable(0xffff);
+                glDepthRange(f64::NAN, 0.);
+                assert_eq!(glGetError(), 0x0500);
+                assert_eq!(glGetError(), 0);
+                glDepthFunc(0xffff);
+                assert_eq!(glGetError(), 0x0500);
+                glCullFace(0xffff);
+                assert_eq!(glGetError(), 0x0500);
+                glFrontFace(0xffff);
+                assert_eq!(glGetError(), 0x0500);
+                glDepthRange(f64::INFINITY, 0.);
+                assert_eq!(glGetError(), 0x0501);
+                glDepthRange(-2., 3.);
+                glGetFloatv(0x0b70, range.as_mut_ptr());
+                assert_eq!(range, [0., 1.]);
+                glEnable(0x0b71);
+                with_frame(|s, _| {
+                    assert!(s.raster.dirty);
+                    s.raster.dirty = false;
+                });
+                glEnable(0x0b71);
+                with_frame(|s, _| assert!(!s.raster.dirty));
+                glDisable(0x0b71);
+                glDepthMask(0);
+                let clears = MOCK.lock().unwrap().clear_calls.len();
+                glClear(DEPTH);
+                assert_eq!(MOCK.lock().unwrap().clear_calls.len(), clears);
+                assert!(!(&*ptr::addr_of!(CONTEXT)).as_ref().unwrap().active);
+                glDepthMask(2);
+                glGetBooleanv(0x0b72, &mut boolean);
+                assert_eq!(boolean, 1);
                 glMatrixMode(0xffff);
                 glPopMatrix();
                 assert_eq!(glGetError(), 0x0500);
@@ -744,7 +805,6 @@ mod lifecycle_tests {
                     color: [1.0; 4],
                 }; 3];
                 assert_eq!(c3dglNativeUpload(vertices.as_ptr(), 3), 0);
-                use crate::frame::*;
                 glViewport(0, 0, -1, 240);
                 assert_eq!(glGetError(), 0x0501);
                 let mut vp = [0; 4];
@@ -802,6 +862,63 @@ mod lifecycle_tests {
                 assert_eq!(stats.draws, draws);
                 assert!(stats.command_bytes <= COMMAND_WORDS as u32 * 4);
                 assert_eq!(c3dglNativePresent(), -2);
+                // Client memory is copied per draw; VBOs survive frames and updates.
+                use crate::arrays::*;
+                glVertexPointer(4, 0x1406, 32, vertices.as_ptr().cast());
+                glColorPointer(4, 0x1406, 32, vertices.as_ptr().cast::<u8>().add(16).cast());
+                glEnableClientState(0x8074);
+                glEnableClientState(0x8076);
+                let live = MOCK.lock().unwrap().live.len();
+                {
+                    let mut mock = MOCK.lock().unwrap();
+                    mock.fail_at = mock.allocations + 1;
+                }
+                glDrawArrays(4, 0, 3);
+                assert_eq!(glGetError(), 0x0505);
+                assert_eq!(MOCK.lock().unwrap().live.len(), live);
+                MOCK.lock().unwrap().fail_at = 0;
+                glDrawArrays(4, 0, 3);
+                assert_eq!(glGetError(), 0);
+                let indices = [2u8, 0, 1];
+                glDrawElements(4, 3, 0x1401, indices.as_ptr().cast());
+                assert_eq!(glGetError(), 0);
+                assert_eq!(c3dglNativePresent(), 0);
+                let mut names = [0; 3];
+                glGenBuffers(3, names.as_mut_ptr());
+                glBindBuffer(0x8892, names[0]);
+                glBufferData(0x8892, 96, vertices.as_ptr().cast(), 0x88e4);
+                glVertexPointer(4, 0x1406, 32, ptr::null());
+                glColorPointer(4, 0x1406, 32, 16usize as *const _);
+                glBindBuffer(0x8893, names[1]);
+                glBufferData(0x8893, 3, indices.as_ptr().cast(), 0x88e4);
+                assert_eq!(c3dglNativeBegin(0xff, false), 0);
+                let live = MOCK.lock().unwrap().live.len();
+                glColorPointer(4, 0x1406, 32, 96usize as *const _);
+                glDrawElements(4, 3, 0x1401, ptr::null());
+                assert_eq!(glGetError(), 0x0502);
+                assert_eq!(MOCK.lock().unwrap().live.len(), live);
+                glColorPointer(4, 0x1406, 32, 16usize as *const _);
+                glDrawElements(4, 3, 0x1401, ptr::null());
+                let allocations = MOCK.lock().unwrap().allocations;
+                glDrawElements(4, 3, 0x1401, ptr::null());
+                assert_eq!(MOCK.lock().unwrap().allocations, allocations);
+                assert_eq!(c3dglNativePresent(), 0);
+                glDrawElements(4, 3, 0x1401, ptr::null());
+                assert_eq!(MOCK.lock().unwrap().allocations, allocations);
+                // An unrelated object does not evict the cached mesh.
+                glBindBuffer(0x8892, names[2]);
+                glBufferData(0x8892, 4, ptr::null(), 0x88e8);
+                glDrawElements(4, 3, 0x1401, ptr::null());
+                assert_eq!(MOCK.lock().unwrap().allocations, allocations);
+                glBindBuffer(0x8892, names[0]);
+                glBufferSubData(0x8892, 96, 4, vertices.as_ptr().cast());
+                assert_eq!(glGetError(), 0x0501);
+                glBufferSubData(0x8892, 0, 16, vertices.as_ptr().cast());
+                glDrawElements(4, 3, 0x1401, ptr::null());
+                assert_eq!(MOCK.lock().unwrap().allocations, allocations + 1);
+                assert_eq!(glGetError(), 0);
+                glDeleteBuffers(3, names.as_ptr());
+                assert_eq!(c3dglNativePresent(), 0);
                 // A rejected draw does not poison the next frame.
                 assert_eq!(c3dglNativeBegin(0xff, false), 0);
                 assert_eq!(c3dglNativeDraw(0, 3), 0);
@@ -810,6 +927,7 @@ mod lifecycle_tests {
                 MOCK.lock().unwrap().generation += 1;
                 assert_eq!(c3dglNativeBegin(0xff, false), 0);
                 assert_eq!(MOCK.lock().unwrap().submits, before + 1);
+                with_frame(|s, _| assert!(s.raster.dirty));
                 c3dglClose();
                 c3dglClose();
                 let m = MOCK.lock().unwrap();
@@ -818,4 +936,54 @@ mod lifecycle_tests {
             }
         }
     }
+}
+
+pub(crate) unsafe fn with_renderer(f: impl FnOnce(&mut Renderer)) {
+    if let Some(r) = (&mut *ptr::addr_of_mut!(CONTEXT)).as_mut() {
+        f(r);
+    }
+}
+
+pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, indices: usize) {
+    with_renderer(|r| {
+        let result = (|| -> Result<(), u32> {
+            if mode != 4 {
+                return Err(0x0500);
+            }
+
+            if first < 0 || count < 0 {
+                return Err(0x0501);
+            }
+
+            if kind != 0 && !matches!(kind, 0x1401 | 0x1403) {
+                return Err(0x0500);
+            }
+
+            let count = count as usize / 3 * 3;
+            if count == 0 {
+                return Ok(());
+            }
+
+            if !r.active && begin_frame(r, true, None) != 0 {
+                return Err(0x0502);
+            }
+
+            if !r.frame.drawable || !r.frame.raster.drawable() {
+                return Ok(());
+            }
+
+            let (address, index) = r.arrays.prepare(first as usize, count, kind, indices)?;
+            update_draw_state(r).map_err(|_| 0x0505u32)?;
+            let mut c = r.commands();
+            gpu::geometry(&mut c, address, 0, count as u32, index).map_err(|_| 0x0505u32)?;
+            r.used = c.used;
+            r.draws += 1;
+
+            Ok(())
+        })();
+
+        if let Err(e) = result {
+            r.matrices.fail(e);
+        }
+    });
 }

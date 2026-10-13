@@ -2,12 +2,16 @@
 
 extern crate alloc;
 #[cfg(any(target_os = "horizon", test))]
+mod arrays;
+#[cfg(any(target_os = "horizon", test))]
 mod frame;
 #[cfg(any(target_os = "horizon", test))]
 mod gpu;
 #[cfg(any(target_os = "horizon", test))]
 mod matrix;
 mod platform;
+#[cfg(any(target_os = "horizon", test))]
+mod raster;
 #[cfg(any(target_os = "horizon", test))]
 mod registers;
 #[cfg(any(target_os = "horizon", test))]
@@ -136,9 +140,12 @@ mod tests {
 /// `rust3ds` builds use the application's std allocator and panic runtime.
 #[cfg(target_os = "horizon")]
 pub mod raw {
+    pub use crate::arrays::*;
     pub use crate::frame::{
-        glClear, glClearColor, glClearDepth, glClearDepthf, glGetFloatv, glGetIntegerv, glViewport,
+        glClear, glClearColor, glClearDepth, glClearDepthf, glGetBooleanv, glGetFloatv,
+        glGetIntegerv, glViewport,
     };
+    pub use crate::raster::*;
 
     pub use crate::matrix::*;
     pub use crate::renderer::{

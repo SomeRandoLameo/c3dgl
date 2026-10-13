@@ -57,3 +57,10 @@ execution; physical-3DS validation remains separate.
 
 Official tooling: [ctru-rs](https://github.com/rust3ds/ctru-rs),
 [cargo-3ds](https://github.com/rust3ds/cargo-3ds).
+
+The consumer also runs the array/VBO checkpoint: client-array and u8/u16 index
+readback comparisons, persistent indexed VBO draws, in-frame SubData changes,
+BufferData replacement and deletion, and GPU memory recovery after shutdown.
+The five benchmark workloads are static, matrix, viewport, indexed and update;
+all run at 1/64/512 draws. Use `emulator_check.py --vbo-state --rust3ds-rom ...`
+for the complete C/C++/rust3ds/reference image and performance gate.
