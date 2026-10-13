@@ -114,32 +114,32 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
     one(c, r::VSH_OPDESCS_CONFIG, 0)?;
     write(c, r::VSH_OPDESCS_DATA, 15, shader::DESCRIPTORS, false)?;
     one(c, r::VSH_ENTRYPOINT, 0x7fff0000 | shader::ENTRY)?;
-    one(c, r::VSH_OUTMAP_MASK, 3)?;
-    one(c, r::VSH_OUTMAP_TOTAL1, 1)?;
-    one(c, r::VSH_OUTMAP_TOTAL2, 1)?;
+    one(c, r::VSH_OUTMAP_MASK, 7)?;
+    one(c, r::VSH_OUTMAP_TOTAL1, 2)?;
+    one(c, r::VSH_OUTMAP_TOTAL2, 2)?;
     masked(c, r::PRIMITIVE_CONFIG, 1, 1)?;
     seq(
         c,
         r::SH_OUTMAP_TOTAL,
         &[
-            2, 0x03020100, 0x0b0a0908, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f,
+            3, 0x03020100, 0x0b0a0908, 0x1f1f0d0c, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f,
         ],
     )?;
-    one(c, r::SH_OUTATTR_MODE, 0)?;
-    one(c, r::SH_OUTATTR_CLOCK, 3)?;
+    one(c, r::SH_OUTATTR_MODE, 1)?;
+    one(c, r::SH_OUTATTR_CLOCK, 3 | (1 << 8))?;
     masked(c, r::GEOSTAGE_CONFIG, 10, 0)?;
     one(c, r::GSH_MISC0, 0)?;
     one(c, r::GSH_MISC1, 0)?;
     one(c, r::GSH_INPUTBUFFER_CONFIG, 0xa0000000)?;
-    // v0/v1: float4 position, float4 color, 32-byte stride.
-    seq(c, r::ATTRIBBUFFERS_FORMAT_LOW, &[0xff, 0x1ffc0000])?;
-    masked(c, r::VSH_INPUTBUFFER_CONFIG, 11, 0xa0000001)?;
-    one(c, r::VSH_NUM_ATTR, 1)?;
-    seq(c, r::VSH_ATTRIBUTES_PERMUTATION_LOW, &[0x10, 0])?;
+    // v0/v1/v2: float4 position/color/UV, 48-byte internal stride.
+    seq(c, r::ATTRIBBUFFERS_FORMAT_LOW, &[0xfff, 0x2ff80000])?;
+    masked(c, r::VSH_INPUTBUFFER_CONFIG, 11, 0xa0000002)?;
+    one(c, r::VSH_NUM_ATTR, 2)?;
+    seq(c, r::VSH_ATTRIBUTES_PERMUTATION_LOW, &[0x210, 0])?;
     one(c, r::ATTRIBBUFFERS_LOC, vertices >> 3)?;
     let mut buffers = [0; 36];
-    buffers[1] = 0x10;
-    buffers[2] = 0x20200000;
+    buffers[1] = 0x210;
+    buffers[2] = 0x30300000;
     seq(c, r::ATTRIBBUFFER0_OFFSET, &buffers)?;
     finish(c)
 }
@@ -277,6 +277,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn texture_binding_modulation_incompleteness_and_overflow() {
+        let mut words = [0; 128];
+        let mut c = Commands::new(&mut words);
+        let mut t = crate::texture::Packet {
+            enabled: true,
+            complete: true,
+            address: 0x20001000,
+            dimensions: 0x00100008,
+            parameters: 0x2206,
+            replace: false,
+        };
+        texture(&mut c, t).unwrap();
+        assert_eq!(c.used, TEXTURE_WORDS);
+        assert_eq!(c.as_slice()[0], 0x1001);
+        assert_eq!(c.as_slice()[2], 0x10000);
+        assert_eq!(c.as_slice()[5], 0x000f0081 | (4 << 20) | (1 << 31));
+        assert_eq!(c.as_slice()[6], t.dimensions);
+        assert_eq!(c.as_slice()[9], t.address >> 3);
+        assert_eq!(c.as_slice()[12], 0x00300030);
+        assert_eq!(c.as_slice()[15], 0x00010001);
+        t.complete = false;
+        let start = c.used;
+        texture(&mut c, t).unwrap();
+        assert_eq!(c.as_slice()[start], 0x1000);
+        assert_eq!(c.as_slice()[start + 12], 0x00e000e0);
+        t.enabled = false;
+        let start = c.used;
+        texture(&mut c, t).unwrap();
+        assert_eq!(c.as_slice()[start + 12], 0);
+        assert_eq!(c.as_slice()[start + 15], 0);
+        let mut too_small = [7; TEXTURE_WORDS + DRAW_WORDS + 8 + FINISH_WORDS - 1];
+        let mut c = Commands::new(&mut too_small);
+        assert!(texture(&mut c, t).is_err());
+        assert_eq!(c.used, 0);
+        assert!(too_small.iter().all(|v| *v == 7));
+    }
+
+    #[test]
     fn depth_cull_packet_and_overflow() {
         let mut state = crate::raster::Raster::new();
         state.depth = true;
@@ -286,11 +324,11 @@ mod tests {
         let mut c = Commands::new(&mut words);
         raster(&mut c, state).unwrap();
         assert_eq!(c.used, RASTER_WORDS);
-        assert_eq!(c.as_slice()[0], 2);
-        assert_eq!(c.as_slice()[2], 0x1f61);
-        assert_eq!(c.as_slice()[4], 0x02000000);
-        assert_eq!(c.as_slice()[6], pica_float(-(0.8f32 - 0.2), 16));
-        assert_eq!(c.as_slice()[8], pica_float(1. - 0.8, 16));
+        assert_eq!(c.as_slice()[4], 2);
+        assert_eq!(c.as_slice()[6], 0x1f61);
+        assert_eq!(c.as_slice()[8], 0x02000000);
+        assert_eq!(c.as_slice()[10], pica_float(-(0.8f32 - 0.2), 16));
+        assert_eq!(c.as_slice()[12], pica_float(1. - 0.8, 16));
         let mut too_small = [7; 51];
         let mut c = Commands::new(&mut too_small);
         assert!(raster(&mut c, state).is_err());
@@ -390,11 +428,13 @@ pub fn geometry(
     draw_index(c, first, count, index)
 }
 
-pub const RASTER_WORDS: usize = 10;
+pub const RASTER_WORDS: usize = 14;
 pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster) -> Result<(), ()> {
     if c.words.len() - c.used < RASTER_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
         return Err(());
     }
+    one(c, r::BLEND_FUNC, s.blend.word())?;
+    one(c, r::BLEND_COLOR, s.blend.color_word())?;
     one(c, r::FACECULLING_CONFIG, s.cull_word())?;
     one(c, r::DEPTH_COLOR_MASK, s.depth_word())?;
     masked(
@@ -411,4 +451,43 @@ pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster) -> Result<(
             pica_float(1. - s.range[1], 16),
         ],
     )
+}
+
+pub const TEXTURE_WORDS: usize = 18;
+pub(crate) fn texture(c: &mut Commands<'_>, t: crate::texture::Packet) -> Result<(), ()> {
+    if c.words.len() - c.used < TEXTURE_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
+        return Err(());
+    }
+    let active = t.enabled && t.complete;
+    masked(c, r::TEXUNIT_CONFIG, 11, (1 << 12) | active as u32)?;
+    // Every changed binding/image invalidates texture cache, without evicting VBOs.
+    masked(c, r::TEXUNIT_CONFIG, 4, 1 << 16)?;
+    seq(
+        c,
+        0x0081,
+        &[0, t.dimensions, t.parameters, 0, t.address >> 3],
+    )?;
+    one(c, 0x008e, 0)?; // Resident uploads are converted to RGBA8.
+    let source = if !t.enabled {
+        0
+    } else if t.complete {
+        if t.replace {
+            0x00030003
+        } else {
+            0x00300030
+        }
+    } else {
+        if t.replace {
+            0x000e000e
+        } else {
+            0x00e000e0
+        }
+    };
+    let combine = if t.enabled && !t.replace {
+        0x00010001
+    } else {
+        0
+    };
+    // Incomplete level-zero textures (including default mip filters) sample black, alpha one.
+    seq(c, r::TEXENV0_SOURCE, &[source, 0, combine, 0xff000000, 0])
 }

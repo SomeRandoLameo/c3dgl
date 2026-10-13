@@ -1,4 +1,4 @@
-# Native Rust triangle renderer
+# Native Rust renderer
 
 `no_std` + `alloc` Rust static library with a C ABI. The renderer generates its
 own PICA200 commands, uploads its own vertex shader and renders into VRAM.
@@ -8,7 +8,8 @@ calls are confined to `platform/libctru.c` and its Rust declarations.
 The current scope is top-screen colored triangles with persistent vertex data,
 RGBA8/D24S8 targets, GPU clear, asynchronous command submission, display transfer,
 VBlank presentation, readback and shutdown. The GL subset adds modelview/projection matrix
-stacks, GPU transformation, clear state, viewport and implemented state queries
+stacks, GPU transformation, arrays/VBOs, depth/culling, immediate triangles,
+level-zero textures, blending, clear state, viewport and implemented state queries
 (see `include/GL/gl.h` for the implemented subset).
 This is **not yet the full OpenGL
 port**. Existing setup names `c3dglInit`, `c3dglClose`, `c3dglSwapBuffers` are
@@ -233,3 +234,52 @@ retained until the next completed frame wait.
 Host tests verify assembly, errors, per-vertex colors and submitted storage lifetime;
 the complete build check covers its 3DS compilation and linking. Immediate mode
 has not yet been checked in the emulator.
+
+
+## Textures and blending
+
+One `GL_TEXTURE_2D` unit (`GL_TEXTURE0`) supports up to 64 texture objects, including
+an instantiated default object if used. `glGenTextures`, `glBindTexture`,
+`glDeleteTextures`, `glIsTexture`, `glTexImage2D`, `glTexSubImage2D`,
+`glTexParameteri`, `glGetTexParameteriv`, `glTexEnvi` and `glPixelStorei` are available.
+Uploads support `GL_RGB` / `GL_RGBA` with `GL_UNSIGNED_BYTE`, level 0 and border 0.
+Nonempty dimensions must be powers of two in 8..1024. Unpack alignment is 1/2/4/8.
+Pixels are converted into resident RGBA8 with PICA byte order and tiled row layout.
+Missing image data is initialized deterministically. Zero dimensions remove the image.
+
+Select `GL_NEAREST` or `GL_LINEAR` for `GL_TEXTURE_MIN_FILTER`; the GL default is
+`GL_NEAREST_MIPMAP_LINEAR`, which leaves the texture incomplete because mip levels
+are not implemented yet. Incomplete enabled textures sample black with alpha one.
+Magnification supports nearest/linear; S/T wrap supports repeat, mirrored repeat
+and clamp to edge. Texture environment supports the default `GL_MODULATE` and
+`GL_REPLACE` via `glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, mode)`.
+
+`glTexCoord2f` supplies current UV coordinates for immediate vertices and arrays
+without an enabled coordinate array. `glTexCoordPointer(2, GL_FLOAT|GL_SHORT, ...)`
+and `GL_TEXTURE_COORD_ARRAY` support client memory and VBO offsets. Converted meshes
+now store float4 position, color and coordinates (48 bytes per GPU vertex), while
+the public `c3dglNativeUpload` ABI remains 32 bytes per input vertex. Coordinate
+buffer updates invalidate only meshes referencing that buffer. Texture uploads
+and parameter changes leave geometry caches intact.
+
+Texture image updates allocate a new GPU image and copy unchanged texels for
+subimage writes. Old images used by queued draws survive updates/deletion until
+a completed frame wait. Repeated unchanged draws reuse the image allocation;
+changed texture state invalidates the texture cache. This first implementation
+copies and flushes the whole affected texture image during an update.
+
+`GL_BLEND`, `glBlendFunc` / `glBlendFuncSeparate`, `glBlendEquation` /
+`glBlendEquationSeparate` and `glBlendColor` support RGB/alpha factors, constant
+color/alpha, add/subtract/reverse-subtract/min/max equations. Disabling blend
+restores source-copy behavior. Supported blend/texture state queries are declared
+in the native GL header. Texture/blend state changes inside `glBegin`/`glEnd`
+report `GL_INVALID_OPERATION`.
+
+Run `build-native/c3dgl_native_textured.3dsx` (or `_cpp.3dsx`) for a resident indexed
+checkerboard with a textured alpha-blended immediate overlay. A switches filtering,
+B switches wrapping; periodic subimage updates occur between the two draws.
+The Cargo consumer also builds `textured.3dsx` from `rust3ds/src/bin/textured.rs`.
+All three consumers compile/link in `native/scripts/check.sh`; 19 host tests cover
+packet encoding, uploads, error rollback, UV cache invalidation and GPU image
+lifetime. Emulator image comparisons and performance for this checkpoint remain
+pending; the preceding emulator reports describe earlier renderer revisions.

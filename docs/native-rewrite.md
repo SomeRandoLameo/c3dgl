@@ -83,10 +83,12 @@ repeated workload comparisons and no material GPU/total latency regression too.
    runs each of C, C++, rust3ds and C reference, matched full GPU images, resource
    recovery and CPU comparisons for static/matrix/viewport/indexed/update workloads.
 4. Depth/culling and a rotating colored cube through the implemented GL subset.
-5. Immediate mode, then textures/blending and later compatibility groups.
+5. Immediate triangle mode, then level-zero textures/blending and later compatibility groups.
 
-Each checkpoint keeps the emulator image, resource recovery and CPU gates; the
-next group is added only after the current comparison has passed. This sequence
+Each checkpoint retains emulator image, resource recovery and CPU gates as separate
+acceptance evidence. Development continued after host/build checks at the user's
+request to stop lengthy emulator repetitions. Pending emulator gates remain explicit;
+compilation and host tests do not establish GPU images or performance. This sequence
 does not declare full GL header compatibility.
 
 The first Rust application compatibility gate is recorded in
@@ -101,3 +103,10 @@ reports incremental CPU costs for both consumers. The arrays/indices/VBO checkpo
 `native-results/arrays-step/full/`. Its report also records increased CPU costs
 relative to the frame-state checkpoint, while all C-reference performance gates
 pass. Depth/culling and the rotating colored cube are implemented. Build and host checks pass; emulator evidence is retained in `native-results/depth-step/`. Immediate triangle mode is now implemented with a dedicated rotating RGB demo. Its 16 host tests and complete C/C++/rust3ds build check pass; emulator validation for this new group is pending.
+
+
+Level-zero RGB/RGBA textures and RGB/alpha blending are implemented, with UV arrays,
+VBOs and immediate coordinates. The new C, C++ and rust3ds texture consumers build
+and pass dependency audits; 19 host tests pass. See `native-results/texture-step/`
+for scope and build evidence. Mipmaps, additional formats, texture matrices and
+emulator image/performance validation for this checkpoint remain pending.

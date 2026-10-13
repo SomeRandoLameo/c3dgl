@@ -5,6 +5,7 @@ use crate::renderer::with_frame;
 pub(crate) struct Raster {
     pub dirty: bool,
     pub depth: bool,
+    pub blend: crate::blend::Blend,
     pub depth_mask: bool,
     pub function: u32,
     pub range: [f32; 2],
@@ -18,6 +19,7 @@ impl Raster {
         Self {
             dirty: false,
             depth: false,
+            blend: crate::blend::Blend::new(),
             depth_mask: true,
             function: 0x0201,
             range: [0., 1.],
@@ -70,6 +72,9 @@ impl Raster {
     }
 
     pub fn query(&self, pname: u32) -> Option<([f64; 16], usize)> {
+        if let Some(v) = self.blend.query(pname) {
+            return Some(v);
+        }
         let mut values = [0.; 16];
         values[0] = match pname {
             0x0b71 => self.depth as u8 as f64,
@@ -90,11 +95,21 @@ impl Raster {
 }
 
 unsafe fn enable(cap: u32, on: bool) {
+    if cap == 0x0de1 {
+        with_frame(|s, _| {
+            if s.textures.enabled != on {
+                s.textures.enabled = on;
+                s.textures.dirty = true;
+            }
+        });
+        return;
+    }
     with_frame(|s, m| {
         let r = &mut s.raster;
         let value = match cap {
             0x0b71 => &mut r.depth,
             0x0b44 => &mut r.cull,
+            0x0be2 => &mut r.blend.enabled,
             _ => {
                 m.fail(0x0500);
                 return;
@@ -125,6 +140,8 @@ pub unsafe extern "C" fn glIsEnabled(cap: u32) -> u8 {
         result = match cap {
             0x0b71 => s.raster.depth as u8,
             0x0b44 => s.raster.cull as u8,
+            0x0be2 => s.raster.blend.enabled as u8,
+            0x0de1 => s.textures.enabled as u8,
             _ => {
                 m.fail(0x0500);
                 0

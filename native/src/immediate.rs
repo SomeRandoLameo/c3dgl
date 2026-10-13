@@ -1,11 +1,12 @@
 //! Immediate triangle assembly; GPU copies live until the submitted frame completes.
-use crate::renderer::{with_immediate, Vertex};
+use crate::renderer::{with_immediate, GpuVertex};
 use alloc::vec::Vec;
 
 pub(crate) struct Immediate {
     pub active: bool,
     pub color: [f32; 4],
-    vertices: Vec<Vertex>,
+    pub texcoord: [f32; 4],
+    vertices: Vec<GpuVertex>,
 }
 
 impl Immediate {
@@ -13,6 +14,7 @@ impl Immediate {
         Self {
             active: false,
             color: [1.; 4],
+            texcoord: [0., 0., 0., 1.],
             vertices: Vec::new(),
         }
     }
@@ -44,15 +46,16 @@ impl Immediate {
             return Err(0x0505);
         }
 
-        self.vertices.push(Vertex {
+        self.vertices.push(GpuVertex {
             position,
             color: self.color,
+            texcoord: self.texcoord,
         });
 
         Ok(())
     }
 
-    pub fn end(&mut self) -> Result<Vec<Vertex>, u32> {
+    pub fn end(&mut self) -> Result<Vec<GpuVertex>, u32> {
         if !self.active {
             return Err(0x0502);
         }
@@ -145,4 +148,9 @@ mod tests {
         }
         assert_eq!(s.vertex([0.; 4]), Err(0x0505));
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glTexCoord2f(s: f32, t: f32) {
+    with_immediate(|r| r.immediate.texcoord = [s, t, 0., 1.]);
 }

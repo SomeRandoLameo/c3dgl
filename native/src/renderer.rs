@@ -14,6 +14,16 @@ pub struct Vertex {
     pub color: [f32; 4],
 }
 
+// Internal GPU layout; the public native upload ABI remains float4 position/color.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct GpuVertex {
+    pub position: [f32; 4],
+    pub color: [f32; 4],
+    pub texcoord: [f32; 4],
+}
+const VERTEX_BYTES: usize = core::mem::size_of::<GpuVertex>();
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct Stats {
@@ -179,7 +189,7 @@ impl Renderer {
         // Fallible allocation and RAII rollback for every intermediate failure.
         let commands = Buffer::new(COMMAND_WORDS * 4, false)?;
         let state = Buffer::new(STATE_WORDS * 4, false)?;
-        let vertices = Buffer::new(MAX_VERTICES * 32, false)?;
+        let vertices = Buffer::new(MAX_VERTICES * VERTEX_BYTES, false)?;
         let color = Buffer::new(TARGET_BYTES, true)?;
         let depth = Buffer::new(TARGET_BYTES, true)?;
 
@@ -245,6 +255,7 @@ impl Renderer {
         self.matrices.dirty = true;
         self.frame.viewport_dirty = true;
         self.frame.raster.dirty = true;
+        self.frame.textures.dirty = true;
 
         true
     }
@@ -321,10 +332,16 @@ pub unsafe extern "C" fn c3dglNativeUpload(vertices: *const Vertex, count: usize
         return -2;
     }
 
-    let output = slice::from_raw_parts_mut(r.vertices.pointer.cast::<Vertex>(), count);
-    output.copy_from_slice(input);
+    let output = slice::from_raw_parts_mut(r.vertices.pointer.cast::<GpuVertex>(), count);
+    for (out, v) in output.iter_mut().zip(input) {
+        *out = GpuVertex {
+            position: v.position,
+            color: v.color,
+            texcoord: [0., 0., 0., 1.],
+        };
+    }
 
-    let result = p::c3dglPlatformFlush(r.vertices.pointer, (count * 32) as u32);
+    let result = p::c3dglPlatformFlush(r.vertices.pointer, (count * VERTEX_BYTES) as u32);
     if result < 0 {
         r.vertex_count = 0;
         return result;
@@ -352,6 +369,7 @@ unsafe fn begin_frame(r: &mut Renderer, sync: bool, clear: Option<u32>) -> i32 {
 
     r.stats.gpu_ticks = p::c3dglPlatformWait();
     r.arrays.collected();
+    r.frame.textures.collected();
     r.transient.clear();
 
     if sync {
@@ -411,7 +429,10 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
         return 0;
     }
 
-    if (r.frame.viewport_dirty || r.matrices.dirty || r.frame.raster.dirty)
+    if (r.frame.viewport_dirty
+        || r.matrices.dirty
+        || r.frame.raster.dirty
+        || r.frame.textures.dirty)
         && update_draw_state(r).is_err()
     {
         r.error = -4;
@@ -426,6 +447,7 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
     }
 
     r.used = commands.used;
+    r.frame.textures.sampled();
     r.draws += 1;
 
     0
@@ -447,9 +469,11 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
     };
 
     let raster = r.frame.raster.dirty.then_some(r.frame.raster);
+    let texture = r.frame.textures.dirty.then(|| r.frame.textures.packet());
     let needed = viewport.map_or(0, |_| 8)
         + update.map_or(0, |_| 20)
-        + raster.map_or(0, |_| gpu::RASTER_WORDS);
+        + raster.map_or(0, |_| gpu::RASTER_WORDS)
+        + texture.map_or(0, |_| gpu::TEXTURE_WORDS);
     let mut commands = r.commands();
     if needed != 0
         && commands.words.len() - commands.used < needed + gpu::DRAW_WORDS + 8 + gpu::FINISH_WORDS
@@ -458,6 +482,10 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
     }
     if let Some(s) = raster {
         gpu::raster(&mut commands, s)?;
+    }
+
+    if let Some(t) = texture {
+        gpu::texture(&mut commands, t)?;
     }
 
     if let Some(v) = viewport {
@@ -476,6 +504,7 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
     r.matrices.dirty = false;
     r.frame.viewport_dirty = false;
     r.frame.raster.dirty = false;
+    r.frame.textures.dirty = false;
     Ok(())
 }
 
@@ -934,6 +963,15 @@ mod lifecycle_tests {
                 glDrawElements(4, 3, 0x1401, ptr::null());
                 assert_eq!(MOCK.lock().unwrap().allocations, allocations + 1);
                 assert_eq!(glGetError(), 0);
+                crate::arrays::uv_lifecycle();
+                crate::texture::lifecycle(|| {
+                    let mut m = MOCK.lock().unwrap();
+                    m.fail_at = m.allocations + 1;
+                });
+                // Texture image replacement must leave a resident VBO mesh reusable.
+                let after_textures = MOCK.lock().unwrap().allocations;
+                glDrawElements(4, 3, 0x1401, ptr::null());
+                assert_eq!(MOCK.lock().unwrap().allocations, after_textures);
                 glDeleteBuffers(3, names.as_ptr());
                 assert_eq!(c3dglNativePresent(), 0);
                 // A rejected draw does not poison the next frame.
@@ -950,8 +988,10 @@ mod lifecycle_tests {
                     crate::matrix::glLoadIdentity();
                     assert_eq!(glGetError(), 0x0502);
                     glColor4ub(255, 0, 0, 255);
+                    glTexCoord2f(0.25, 0.75);
                     glVertex2f(-1., -1.);
                     glColor3f(0., 1., 0.);
+                    glTexCoord2f(0.5, 1.);
                     glVertex3f(1., -1., 0.);
                     glColor4f(0., 0., 1., 1.);
                     glVertex4f(0., 1., 0., 1.);
@@ -959,8 +999,11 @@ mod lifecycle_tests {
                     assert_eq!(glGetError(), 0);
                     with_immediate(|r| {
                         assert_eq!(r.transient.len(), 1);
-                        let v = slice::from_raw_parts(r.transient[0].pointer.cast::<Vertex>(), 3);
+                        let v =
+                            slice::from_raw_parts(r.transient[0].pointer.cast::<GpuVertex>(), 3);
                         assert_eq!(v[0].color, [1., 0., 0., 1.]);
+                        assert_eq!(v[0].texcoord, [0.25, 0.75, 0., 1.]);
+                        assert_eq!(v[1].texcoord, [0.5, 1., 0., 1.]);
                         assert_eq!(v[1].position, [1., -1., 0., 1.]);
                         assert_eq!(v[2].color, [0., 0., 1., 1.]);
                     });
@@ -1017,7 +1060,7 @@ pub(crate) unsafe fn end_immediate() {
                 return Ok(());
             }
             r.transient.try_reserve(1).map_err(|_| 0x0505u32)?;
-            let bytes = vertices.len() * core::mem::size_of::<Vertex>();
+            let bytes = vertices.len() * core::mem::size_of::<GpuVertex>();
             let storage = Buffer::new(bytes, false).ok_or(0x0505u32)?;
             ptr::copy_nonoverlapping(vertices.as_ptr().cast::<u8>(), storage.pointer, bytes);
             if p::c3dglPlatformFlush(storage.pointer, bytes as u32) < 0 {
@@ -1029,6 +1072,7 @@ pub(crate) unsafe fn end_immediate() {
                 .map_err(|_| 0x0505u32)?;
             r.used = c.used;
             r.transient.push(storage);
+            r.frame.textures.sampled();
             r.draws += 1;
             Ok(())
         })();
@@ -1066,13 +1110,19 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                 return Ok(());
             }
 
-            let (address, index) =
-                r.arrays
-                    .prepare(first as usize, count, kind, indices, r.immediate.color)?;
+            let (address, index) = r.arrays.prepare(
+                first as usize,
+                count,
+                kind,
+                indices,
+                r.immediate.color,
+                r.immediate.texcoord,
+            )?;
             update_draw_state(r).map_err(|_| 0x0505u32)?;
             let mut c = r.commands();
             gpu::geometry(&mut c, address, 0, count as u32, index).map_err(|_| 0x0505u32)?;
             r.used = c.used;
+            r.frame.textures.sampled();
             r.draws += 1;
 
             Ok(())

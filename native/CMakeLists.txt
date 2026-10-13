@@ -24,7 +24,7 @@ add_custom_command(OUTPUT "${C3DGL_ARCHIVE}"
         -Zbuild-std=core,alloc --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     DEPENDS Cargo.toml build.rs rust-toolchain.toml src/lib.rs src/platform.rs src/gpu.rs
-        src/renderer.rs src/arrays.rs src/matrix.rs src/frame.rs src/raster.rs src/registers.rs src/shader.rs
+        src/renderer.rs src/arrays.rs src/immediate.rs src/texture.rs src/blend.rs src/matrix.rs src/frame.rs src/raster.rs src/registers.rs src/shader.rs
     VERBATIM)
 add_custom_target(c3dgl_native_build ALL DEPENDS "${C3DGL_ARCHIVE}")
 add_library(c3dgl_native_rust STATIC IMPORTED GLOBAL)
@@ -57,6 +57,10 @@ if(C3DGL_NATIVE_BUILD_TRIANGLE)
     target_link_libraries(c3dgl_native_immediate PRIVATE c3dgl::native)
     target_compile_options(c3dgl_native_immediate PRIVATE -O2 -Wall -Wextra -Werror)
     ctr_create_3dsx(c3dgl_native_immediate)
+    add_executable(c3dgl_native_textured examples/textured.c)
+    target_link_libraries(c3dgl_native_textured PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_textured PRIVATE -O2 -Wall -Wextra -Werror)
+    ctr_create_3dsx(c3dgl_native_textured)
 endif()
 option(C3DGL_NATIVE_BUILD_CPP_TEST "Build the same GPU test as a C++ consumer" ${C3DGL_NATIVE_TOP_LEVEL})
 if(C3DGL_NATIVE_BUILD_CPP_TEST)
@@ -66,4 +70,9 @@ if(C3DGL_NATIVE_BUILD_CPP_TEST)
     target_compile_options(c3dgl_native_triangle_cpp PRIVATE -O2 -Wall -Wextra -Werror)
     set_target_properties(c3dgl_native_triangle_cpp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
     ctr_create_3dsx(c3dgl_native_triangle_cpp)
+    add_executable(c3dgl_native_textured_cpp examples/textured.cpp)
+    target_link_libraries(c3dgl_native_textured_cpp PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_textured_cpp PRIVATE -O2 -Wall -Wextra -Werror)
+    set_target_properties(c3dgl_native_textured_cpp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    ctr_create_3dsx(c3dgl_native_textured_cpp)
 endif()

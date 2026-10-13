@@ -22,10 +22,12 @@ cmake -S native -B build-native -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/3DS.cma
 cmake --build build-native
 cmake -S native/benchmark -B build-native-reference -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/3DS.cmake"
 cmake --build build-native-reference
-"$DEVKITPRO/devkitARM/bin/arm-none-eabi-nm" build-native/c3dgl_native_triangle.elf > build-native-host/symbols.txt
-if rg '(C3D_|GPUCMD_|DVLB_|shaderProgram)' build-native-host/symbols.txt; then
-    echo 'Unexpected Citro3D/libctru GPU encoder or shader helper in native executable' >&2
-    exit 1
-fi
+for consumer in c3dgl_native_triangle c3dgl_native_triangle_cpp c3dgl_native_cube c3dgl_native_immediate c3dgl_native_textured c3dgl_native_textured_cpp; do
+    "$DEVKITPRO/devkitARM/bin/arm-none-eabi-nm" "build-native/$consumer.elf" > "build-native-host/$consumer-symbols.txt"
+    if rg '(C3D_|GPUCMD_|DVLB_|shaderProgram)' "build-native-host/$consumer-symbols.txt"; then
+        echo "Unexpected Citro3D/libctru GPU encoder or shader helper in $consumer" >&2
+        exit 1
+    fi
+done
 "$root/native/scripts/check_rust3ds.sh"
 echo 'PASS: Rust tests, C/C++ ABI, rust3ds consumer, 3DS builds and native dependency audits.'

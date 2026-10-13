@@ -19,6 +19,81 @@ typedef float GLfloat;
 typedef double GLdouble;
 #define GL_FALSE 0
 #define GL_TRUE 1
+#define GL_TEXTURE_2D 0x0de1
+#define GL_TEXTURE0 0x84c0
+#define GL_TEXTURE_ENV 0x2300
+#define GL_TEXTURE_ENV_MODE 0x2200
+#define GL_MODULATE 0x2100
+#define GL_REPLACE 0x1e01
+void glTexEnvi(GLenum target, GLenum pname, GLint param);
+#define GL_ACTIVE_TEXTURE 0x84e0
+#define GL_TEXTURE_BINDING_2D 0x8069
+#define GL_TEXTURE_COORD_ARRAY 0x8078
+#define GL_MAX_TEXTURE_SIZE 0x0d33
+#define GL_UNPACK_ALIGNMENT 0x0cf5
+#define GL_RGB 0x1907
+#define GL_RGBA 0x1908
+#define GL_NEAREST 0x2600
+#define GL_LINEAR 0x2601
+#define GL_NEAREST_MIPMAP_NEAREST 0x2700
+#define GL_LINEAR_MIPMAP_NEAREST 0x2701
+#define GL_NEAREST_MIPMAP_LINEAR 0x2702
+#define GL_LINEAR_MIPMAP_LINEAR 0x2703
+#define GL_TEXTURE_MIN_FILTER 0x2801
+#define GL_TEXTURE_MAG_FILTER 0x2800
+#define GL_TEXTURE_WRAP_S 0x2802
+#define GL_TEXTURE_WRAP_T 0x2803
+#define GL_REPEAT 0x2901
+#define GL_CLAMP_TO_EDGE 0x812f
+#define GL_MIRRORED_REPEAT 0x8370
+void glActiveTexture(GLenum unit);
+void glGenTextures(GLsizei n, GLuint *textures);
+void glBindTexture(GLenum target, GLuint texture);
+void glDeleteTextures(GLsizei n, const GLuint *textures);
+GLboolean glIsTexture(GLuint texture);
+void glPixelStorei(GLenum pname, GLint param);
+void glTexParameteri(GLenum target, GLenum pname, GLint param);
+void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params);
+void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels);
+void glTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels);
+void glTexCoord2f(GLfloat s, GLfloat t);
+void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer);
+#define GL_BLEND 0x0be2
+#define GL_ZERO 0
+#define GL_ONE 1
+#define GL_SRC_COLOR 0x0300
+#define GL_ONE_MINUS_SRC_COLOR 0x0301
+#define GL_SRC_ALPHA 0x0302
+#define GL_ONE_MINUS_SRC_ALPHA 0x0303
+#define GL_DST_ALPHA 0x0304
+#define GL_ONE_MINUS_DST_ALPHA 0x0305
+#define GL_DST_COLOR 0x0306
+#define GL_ONE_MINUS_DST_COLOR 0x0307
+#define GL_SRC_ALPHA_SATURATE 0x0308
+#define GL_CONSTANT_COLOR 0x8001
+#define GL_ONE_MINUS_CONSTANT_COLOR 0x8002
+#define GL_CONSTANT_ALPHA 0x8003
+#define GL_ONE_MINUS_CONSTANT_ALPHA 0x8004
+#define GL_BLEND_COLOR 0x8005
+#define GL_FUNC_ADD 0x8006
+#define GL_MIN 0x8007
+#define GL_MAX 0x8008
+#define GL_BLEND_EQUATION 0x8009
+#define GL_BLEND_EQUATION_RGB 0x8009
+#define GL_BLEND_EQUATION_ALPHA 0x883d
+#define GL_FUNC_SUBTRACT 0x800a
+#define GL_FUNC_REVERSE_SUBTRACT 0x800b
+#define GL_BLEND_SRC 0x0be1
+#define GL_BLEND_DST 0x0be0
+#define GL_BLEND_SRC_RGB 0x80c9
+#define GL_BLEND_DST_RGB 0x80c8
+#define GL_BLEND_SRC_ALPHA 0x80cb
+#define GL_BLEND_DST_ALPHA 0x80ca
+void glBlendFunc(GLenum src, GLenum dst);
+void glBlendFuncSeparate(GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha);
+void glBlendEquation(GLenum mode);
+void glBlendEquationSeparate(GLenum rgb, GLenum alpha);
+void glBlendColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
 #define GL_DEPTH_TEST 0x0b71
 #define GL_DEPTH_WRITEMASK 0x0b72
 #define GL_DEPTH_FUNC 0x0b74

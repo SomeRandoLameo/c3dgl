@@ -61,6 +61,13 @@ Official tooling: [ctru-rs](https://github.com/rust3ds/ctru-rs),
 The consumer also runs the array/VBO checkpoint: client-array and u8/u16 index
 readback comparisons, persistent indexed VBO draws, in-frame SubData changes,
 BufferData replacement and deletion, and GPU memory recovery after shutdown.
-The five benchmark workloads are static, matrix, viewport, indexed and update;
+The seven benchmark workloads are static, matrix, viewport, indexed, update, cube and raster;
 all run at 1/64/512 draws. Use `emulator_check.py --vbo-state --rust3ds-rom ...`
 for the complete C/C++/rust3ds/reference image and performance gate.
+
+
+The same build now produces `textured.3dsx` from `src/bin/textured.rs`. This consumer
+uses the exported texture, UV-array, immediate-mode and blending entry points from
+`c3dgl::raw`, with a persistent VBO checkerboard and a transparent textured triangle.
+Its executable is included in the native dependency audit. Compilation/linking and
+host behavior checks pass; emulator verification for this new consumer is pending.

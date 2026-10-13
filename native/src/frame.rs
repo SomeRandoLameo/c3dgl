@@ -9,6 +9,7 @@ pub const DEPTH: u32 = 0x0100;
 
 pub struct FrameState {
     pub raster: crate::raster::Raster,
+    pub textures: crate::texture::Textures,
     pub viewport: [i32; 4],
     pub viewport_dirty: bool,
     pub drawable: bool,
@@ -20,6 +21,7 @@ impl FrameState {
     pub fn new() -> Self {
         Self {
             raster: crate::raster::Raster::new(),
+            textures: crate::texture::Textures::new(),
             viewport: [0, 0, 400, 240],
             viewport_dirty: false,
             drawable: true,
@@ -82,6 +84,9 @@ pub unsafe extern "C" fn glClear(mask: u32) {
 }
 
 fn query(s: &FrameState, m: &Matrices, pname: u32) -> Option<([f64; 16], usize)> {
+    if let Some(v) = s.textures.query(pname) {
+        return Some(v);
+    }
     if let Some(v) = s.raster.query(pname) {
         return Some(v);
     }
@@ -152,11 +157,13 @@ pub unsafe extern "C" fn glGetIntegerv(pname: u32, out: *mut i32) {
         match query(s, m, pname) {
             Some((v, n)) => {
                 for (i, value) in v[..n].iter().enumerate() {
-                    let integer = if pname == 0x0c22 || pname == 0x0b73 || pname == 0x0b70 {
-                        (*value * 2147483647.) as i32
-                    } else {
-                        (*value + if *value >= 0. { 0.5 } else { -0.5 }) as i32
-                    };
+                    let integer =
+                        if pname == 0x0c22 || pname == 0x0b73 || pname == 0x0b70 || pname == 0x8005
+                        {
+                            (*value * 2147483647.) as i32
+                        } else {
+                            (*value + if *value >= 0. { 0.5 } else { -0.5 }) as i32
+                        };
 
                     out.add(i).write(integer);
                 }

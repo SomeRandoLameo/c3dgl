@@ -1,6 +1,6 @@
 //! Client arrays and buffer-backed geometry. Cache storage survives submitted work.
 use crate::platform::gpu as p;
-use crate::renderer::{with_renderer, Buffer, Vertex};
+use crate::renderer::{with_renderer, Buffer, GpuVertex};
 use alloc::vec::Vec;
 use core::{ffi::c_void, ptr};
 
@@ -23,6 +23,8 @@ struct Key {
     vertex: Array,
     color: Option<Array>,
     current_color: [u32; 4],
+    texcoord: Option<Array>,
+    current_texcoord: [u32; 4],
     first: usize,
     count: usize,
     kind: u32,
@@ -39,7 +41,8 @@ struct Mesh {
 pub(crate) struct Arrays {
     vertex: Array,
     color: Array,
-    enabled: [bool; 2],
+    texcoord: Array,
+    enabled: [bool; 3],
     bound: [u32; 2],
     next: u32,
     objects: Vec<Object>,
@@ -52,7 +55,8 @@ impl Arrays {
         Self {
             vertex: Array::default(),
             color: Array::default(),
-            enabled: [false; 2],
+            texcoord: Array::default(),
+            enabled: [false; 3],
             bound: [0; 2],
             next: 1,
             objects: Vec::new(),
@@ -71,6 +75,7 @@ impl Arrays {
             let k = &self.cache[i].key;
             if k.vertex.buffer == name
                 || k.color.is_some_and(|a| a.buffer == name)
+                || k.texcoord.is_some_and(|a| a.buffer == name)
                 || k.element == name
             {
                 self.retired.push(self.cache.swap_remove(i));
@@ -101,6 +106,7 @@ impl Arrays {
             Ok(o.data.as_ptr().add(address))
         }
     }
+
     unsafe fn value(&self, a: Array, index: usize, color: bool) -> Result<[f32; 4], u32> {
         let width = width(a.kind).ok_or(0x0500u32)?;
         let step = if a.stride == 0 {
@@ -152,6 +158,7 @@ impl Arrays {
         kind: u32,
         indices: usize,
         current_color: [f32; 4],
+        current_texcoord: [f32; 4],
     ) -> Result<(u32, Option<u32>), u32> {
         if !self.enabled[0] {
             return Err(0x0502);
@@ -166,6 +173,12 @@ impl Arrays {
                 current_color.map(f32::to_bits)
             },
 
+            texcoord: self.enabled[2].then_some(self.texcoord),
+            current_texcoord: if self.enabled[2] {
+                [0; 4]
+            } else {
+                current_texcoord.map(f32::to_bits)
+            },
             first,
             count,
             kind,
@@ -175,6 +188,7 @@ impl Arrays {
 
         let persistent = key.vertex.buffer != 0
             && key.color.is_none_or(|a| a.buffer != 0)
+            && key.texcoord.is_none_or(|a| a.buffer != 0)
             && (kind == 0 || key.element != 0);
         if persistent {
             if let Some(m) = self.cache.iter().find(|m| m.key == key) {
@@ -220,15 +234,20 @@ impl Arrays {
             return Err(0x0501);
         }
 
-        let offset = vertex_count * 32;
+        let offset = vertex_count * core::mem::size_of::<GpuVertex>();
         let storage = Buffer::new(offset + index_data.len() * 2, false).ok_or(0x0505u32)?;
         for i in 0..vertex_count {
-            storage.pointer.cast::<Vertex>().add(i).write(Vertex {
+            storage.pointer.cast::<GpuVertex>().add(i).write(GpuVertex {
                 position: self.value(key.vertex, if kind == 0 { first + i } else { i }, false)?,
                 color: if let Some(a) = key.color {
                     self.value(a, if kind == 0 { first + i } else { i }, true)?
                 } else {
                     current_color
+                },
+                texcoord: if let Some(a) = key.texcoord {
+                    self.value(a, if kind == 0 { first + i } else { i }, false)?
+                } else {
+                    current_texcoord
                 },
             });
         }
@@ -340,6 +359,7 @@ unsafe fn enable(state: u32, on: bool) {
         let i = match state {
             0x8074 => 0,
             0x8076 => 1,
+            0x8078 => 2,
             _ => return Err(0x0500),
         };
 
@@ -500,6 +520,10 @@ pub unsafe extern "C" fn glDeleteBuffers(n: i32, names: *const u32) {
             if a.color.buffer == name {
                 a.color = Array::default();
             }
+
+            if a.texcoord.buffer == name {
+                a.texcoord = Array::default();
+            }
         }
 
         Ok(())
@@ -563,4 +587,93 @@ mod tests {
             assert_eq!(a.value(color, 0, true).unwrap(), [-1., 0., 1., 1.]);
         }
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glTexCoordPointer(
+    size: i32,
+    kind: u32,
+    stride: i32,
+    pointer: *const c_void,
+) {
+    api!(|a: &mut Arrays| {
+        if !matches!(kind, 0x1402 | 0x1406) {
+            return Err(0x0500);
+        }
+
+        if size != 2 || stride < 0 {
+            return Err(0x0501);
+        }
+
+        a.texcoord = Array {
+            size: 2,
+            kind,
+            stride: stride as usize,
+            pointer: pointer as usize,
+            buffer: a.bound[0],
+        };
+
+        Ok(())
+    });
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn uv_lifecycle() {
+    use crate::matrix::glGetError;
+    let mut name = 0;
+    glGenBuffers(1, &mut name);
+    glBindBuffer(0x8892, name);
+    let coords: [[f32; 2]; 3] = [[0., 0.], [1., 0.], [0.5, 1.]];
+    glBufferData(0x8892, 24, coords.as_ptr().cast(), 0x88e4);
+    glTexCoordPointer(2, 0x1406, 8, ptr::null());
+    glEnableClientState(0x8078);
+    glDrawElements(4, 3, 0x1401, ptr::null());
+    let mut old = ptr::null_mut();
+    with_renderer(|r| {
+        let m = r
+            .arrays
+            .cache
+            .iter()
+            .find(|m| m.key.texcoord.is_some_and(|a| a.buffer == name))
+            .unwrap();
+        old = m.storage.pointer;
+        let v = core::slice::from_raw_parts(old.cast::<GpuVertex>(), 3);
+        assert_eq!(v[1].texcoord, [1., 0., 0., 1.]);
+        assert_eq!(v[2].texcoord, [0.5, 1., 0., 1.]);
+    });
+    glBindBuffer(0x8892, 0);
+    glDrawElements(4, 3, 0x1401, ptr::null());
+    with_renderer(|r| {
+        assert_eq!(
+            r.arrays
+                .cache
+                .iter()
+                .find(|m| m.key.texcoord.is_some_and(|a| a.buffer == name))
+                .unwrap()
+                .storage
+                .pointer,
+            old
+        )
+    });
+    let patch = [0.25f32, 0.75];
+    glBindBuffer(0x8892, name);
+    glBufferSubData(0x8892, 0, 8, patch.as_ptr().cast());
+    glDrawElements(4, 3, 0x1401, ptr::null());
+    with_renderer(|r| {
+        let m = r
+            .arrays
+            .cache
+            .iter()
+            .find(|m| m.key.texcoord.is_some_and(|a| a.buffer == name))
+            .unwrap();
+        assert_ne!(m.storage.pointer, old);
+        assert!(r.arrays.retired.iter().any(|m| m.storage.pointer == old));
+        assert_eq!(
+            (*m.storage.pointer.cast::<GpuVertex>()).texcoord,
+            [0.25, 0.75, 0., 1.]
+        );
+    });
+    glDeleteBuffers(1, &name);
+    glDisableClientState(0x8078);
+    assert_eq!(glGetError(), 0);
 }

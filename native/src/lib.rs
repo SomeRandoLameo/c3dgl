@@ -4,6 +4,8 @@ extern crate alloc;
 #[cfg(any(target_os = "horizon", test))]
 mod arrays;
 #[cfg(any(target_os = "horizon", test))]
+mod blend;
+#[cfg(any(target_os = "horizon", test))]
 mod frame;
 #[cfg(any(target_os = "horizon", test))]
 mod gpu;
@@ -20,6 +22,8 @@ mod registers;
 mod renderer;
 #[cfg(any(target_os = "horizon", test))]
 mod shader;
+#[cfg(any(target_os = "horizon", test))]
+mod texture;
 
 /// PICA command encoding is independent of GPU services and memory allocation.
 /// The caller owns the storage; no allocation and no partial writes on overflow.
@@ -143,11 +147,14 @@ mod tests {
 #[cfg(target_os = "horizon")]
 pub mod raw {
     pub use crate::arrays::*;
+    pub use crate::blend::*;
     pub use crate::frame::{
         glClear, glClearColor, glClearDepth, glClearDepthf, glGetBooleanv, glGetFloatv,
         glGetIntegerv, glViewport,
     };
+    pub use crate::immediate::*;
     pub use crate::raster::*;
+    pub use crate::texture::*;
 
     pub use crate::matrix::*;
     pub use crate::renderer::{
