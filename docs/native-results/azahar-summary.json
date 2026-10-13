@@ -1,0 +1,202 @@
+{
+  "measurements": [
+    {
+      "renderer": "native",
+      "run": 1,
+      "draws": 1,
+      "cpu_ms": 0.3337,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "native",
+      "run": 1,
+      "draws": 64,
+      "cpu_ms": 0.401,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "native",
+      "run": 1,
+      "draws": 512,
+      "cpu_ms": 0.8789,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "reference",
+      "run": 1,
+      "draws": 1,
+      "cpu_ms": 0.4244,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 1,
+      "draws": 64,
+      "cpu_ms": 1.5869,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 1,
+      "draws": 512,
+      "cpu_ms": 9.8531,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "native-cpp",
+      "run": 1,
+      "draws": 1,
+      "cpu_ms": 0.3337,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "native-cpp",
+      "run": 1,
+      "draws": 64,
+      "cpu_ms": 0.401,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "native-cpp",
+      "run": 1,
+      "draws": 512,
+      "cpu_ms": 0.8789,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "native",
+      "run": 2,
+      "draws": 1,
+      "cpu_ms": 0.3337,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "native",
+      "run": 2,
+      "draws": 64,
+      "cpu_ms": 0.401,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "native",
+      "run": 2,
+      "draws": 512,
+      "cpu_ms": 0.8789,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "reference",
+      "run": 2,
+      "draws": 1,
+      "cpu_ms": 0.4244,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 2,
+      "draws": 64,
+      "cpu_ms": 1.5869,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 2,
+      "draws": 512,
+      "cpu_ms": 9.8531,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "native",
+      "run": 3,
+      "draws": 1,
+      "cpu_ms": 0.3337,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "native",
+      "run": 3,
+      "draws": 64,
+      "cpu_ms": 0.401,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "native",
+      "run": 3,
+      "draws": 512,
+      "cpu_ms": 0.8789,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "reference",
+      "run": 3,
+      "draws": 1,
+      "cpu_ms": 0.4244,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 3,
+      "draws": 64,
+      "cpu_ms": 1.5869,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 3,
+      "draws": 512,
+      "cpu_ms": 9.8531,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    }
+  ],
+  "comparisons": [
+    {
+      "draws": 1,
+      "native_cpu_ms": 0.3337,
+      "reference_cpu_ms": 0.4244,
+      "reduction_percent": 21.371347785108384
+    },
+    {
+      "draws": 64,
+      "native_cpu_ms": 0.401,
+      "reference_cpu_ms": 1.5869,
+      "reduction_percent": 74.7306068435314
+    },
+    {
+      "draws": 512,
+      "native_cpu_ms": 0.8789,
+      "reference_cpu_ms": 9.8531,
+      "reduction_percent": 91.07996468116633
+    }
+  ],
+  "image_sha256": {
+    "azahar-native-cpp-run1.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-native-run1.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-native-run2.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-native-run3.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-reference-run1.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-reference-run3.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-reference-run2.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a"
+  },
+  "caveat": "Emulated guest timing; not a real-3DS performance claim."
+}

@@ -3,12 +3,12 @@
 #[cfg(not(any(test, feature = "host-tests")))]
 mod runtime {
     use core::alloc::{GlobalAlloc, Layout};
-    
+
     extern "C" {
         fn c3dglPlatformAllocate(size: usize, alignment: usize) -> *mut u8;
         fn c3dglPlatformFree(pointer: *mut u8);
     }
-    
+
     struct PlatformAllocator;
     unsafe impl GlobalAlloc for PlatformAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -18,12 +18,12 @@ mod runtime {
             c3dglPlatformFree(pointer);
         }
     }
-    
+
     #[global_allocator]
     static ALLOCATOR: PlatformAllocator = PlatformAllocator;
 }
 
-#[cfg(target_os = "horizon")]
+#[cfg(any(target_os = "horizon", test))]
 pub mod gpu {
     extern "C" {
         pub fn c3dglPlatformLinearAllocate(size: usize) -> *mut u8;

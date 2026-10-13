@@ -1,0 +1,54 @@
+PASS: embedded shader matches PICA source.
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (native/target/debug/build/c3dgl-native/81023c897c40e2f7/out/c3dgl-81023c897c40e2f7)
+
+running 7 tests
+test tests::invalid_inputs_and_largest_packet ... ok
+test gpu::tests::draw_overflow_leaves_commands_unchanged ... ok
+test gpu::tests::float_formats_match_ctru_layout ... ok
+test gpu::tests::init_and_frame_have_aligned_finalizers ... ok
+test tests::overflow_is_transactional ... ok
+test tests::packet_layout_and_padding ... ok
+test renderer::lifecycle_tests::allocation_rollback_lifecycle_and_overflow ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests c3dgl
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `release` profile [optimized] target(s) in 0.10s
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/elias/Documents/projekte/c3dgl/build-native
+[  7%] Built target c3dgl_native_build
+[ 23%] Built target c3dgl_native_platform
+[ 38%] Built target c3dgl_native_abi
+[ 46%] Building C object CMakeFiles/c3dgl_native_triangle.dir/examples/triangle.o
+[ 53%] Linking C executable c3dgl_native_triangle.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 53%] Built target c3dgl_native_triangle
+[ 61%] Building 3DSX executable target c3dgl_native_triangle_3dsx
+[ 69%] Built target c3dgl_native_triangle_3dsx
+[ 76%] Building CXX object CMakeFiles/c3dgl_native_triangle_cpp.dir/examples/triangle.o
+[ 84%] Linking CXX executable c3dgl_native_triangle_cpp.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 84%] Built target c3dgl_native_triangle_cpp
+[ 92%] Building 3DSX executable target c3dgl_native_triangle_cpp_3dsx
+[100%] Built target c3dgl_native_triangle_cpp_3dsx
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/elias/Documents/projekte/c3dgl/build-native-reference
+[ 10%] Built target c3dgl_vsh
+[ 40%] Built target c3dgl_shaders
+[ 60%] Built target c3dgl
+[ 70%] Building C object CMakeFiles/c3dgl_reference_triangle.dir/reference.o
+[ 80%] Linking C executable c3dgl_reference_triangle.elf
+[ 80%] Built target c3dgl_reference_triangle
+[ 90%] Building 3DSX executable target c3dgl_reference_triangle_3dsx
+[100%] Built target c3dgl_reference_triangle_3dsx
+PASS: Rust tests, C/C++ ABI, 3DS builds and native dependency audit.

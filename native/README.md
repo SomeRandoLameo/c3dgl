@@ -1,49 +1,93 @@
-# Native Rust bootstrap
+# Native Rust triangle renderer
 
-This is the beginning of `native-rewrite`, not a working renderer. The C renderer
-and examples at the repository root remain unchanged. Do not link both renderers
-into one program once native exports the existing GL/platform symbols.
+`no_std` + `alloc` Rust static library with a C ABI. The renderer generates its
+own PICA200 commands, uploads its own vertex shader and renders into VRAM.
+Citro3D is not linked. All allocation, GSP/GX, cache, display, event, APT and timing
+calls are confined to `platform/libctru.c` and its Rust declarations.
 
-## Build
+The current scope is top-screen colored triangles with persistent vertex data,
+RGBA8/D24S8 targets, GPU clear, asynchronous command submission, display transfer,
+VBlank presentation, readback and shutdown. This is **not yet the full OpenGL
+port**. Existing setup names `c3dglInit`, `c3dglClose`, `c3dglSwapBuffers` are
+exported; use `c3dgl_native.h` for the currently implemented drawing API. Do not
+link the native and C renderer into the same program.
 
-Rust is pinned by `rust-toolchain.toml`. From this directory:
+## Build and verification
 
-```
-cargo test --features host-tests
-cargo build --release --target armv6k-nintendo-3ds -Zbuild-std=core,alloc
-```
-
-The target uses the built-in ARMv6K Nintendo 3DS ABI, including hard-float.
-The artifact is `target/armv6k-nintendo-3ds/release/libc3dgl.a`.
-`alloc` uses callbacks from the separate platform adapter; GPU storage must not
-use this ordinary CPU allocator. Panic aborts and does not unwind across C.
-
-A devkitPro application can use `add_subdirectory(path/to/native native-build)`
-and link `c3dgl::native`. This target links libctru, never Citro3D. The original
-root `c3dgl::c3dgl` target still builds the C reference with Citro3D.
-
-For the host C ABI smoke test, rebuild core/alloc with abort semantics:
+Install devkitPro and the pinned Rust toolchain in `rust-toolchain.toml`.
+From the repository root:
 
 ```
-cargo build --release -Zbuild-std=core,alloc --target aarch64-apple-darwin
-cc -Iinclude tests/abi.c tests/platform_host.c \
-  target/aarch64-apple-darwin/release/libc3dgl.a -o target/abi-test
-./target/abi-test
+export DEVKITPRO=/opt/devkitpro
+native/scripts/check.sh
 ```
 
-Use your host triple in place of `aarch64-apple-darwin` on another platform.
-`host-tests` enables std only for unit tests; do not enable it for the 3DS library.
-The encoder has no global state. C buffers must be valid, aligned and disjoint.
+This runs Rust packet/lifecycle tests, actual C and C++ host link tests, both 3DS
+consumer builds and an executable symbol audit. Native CMake is configured with
+`$DEVKITPRO/cmake/3DS.cmake`. Cargo rebuilds `core` and `alloc` for
+`armv6k-nintendo-3ds`, with abort semantics and hard-float ABI. The Rust archive is
+`build-native/cargo/armv6k-nintendo-3ds/release/libc3dgl.a`.
 
-## Remaining first milestone
+Run `build-native/c3dgl_native_triangle.3dsx` in Azahar. It automatically checks
+240 frames with alternating clears, colored pixels, API errors, eight init/close
+cycles and restoration of free linear/VRAM space. It then measures 1, 64 and 512
+draws per frame, each with 30 warmups and 120 measured frames. START exits.
+The C++ executable performs the identical checks.
 
-- GPU-visible linear command/vertex storage and VRAM color/depth targets.
-- PICA baseline state, viewport, vertex layout, shader upload and draw trigger.
-- Command-list finalization, cache flush and checked GX submission.
-- Clear, display transfer, VBlank/swap and completion before resource release.
-- Minimal C and C++ triangle applications and hardware verification over repeated
-  frames, allocation failures and init/close cycles.
+For repeatable emulator acceptance, with the emulator's actual SDMC directory:
 
-No existing GL entry point is currently implemented by the Rust library. There
-is deliberately no successful `c3dglInit` stub or software triangle substituted
-for the missing GPU renderer.
+```
+python3 native/scripts/emulator_check.py \
+  --emulator /Applications/Azahar.app/Contents/MacOS/azahar \
+  --sdmc '/path/to/Azahar/sdmc' \
+  --output build-native/emulator-results --runs 3
+```
+
+The runner requires all checks to pass, identical full GPU images versus the C
+reference, and the slowest native CPU result to beat the fastest C result for
+every tested workload. Guest CPU work excludes explicitly tracked GPU/VBlank
+waiting. Total frame time uses identical 60 Hz synchronization. Emulator GPU
+and CPU timing cannot establish performance on actual 3DS hardware.
+
+## Embed in an application
+
+```
+set(C3DGL_NATIVE_BUILD_ABI_TEST OFF CACHE BOOL "" FORCE)
+set(C3DGL_NATIVE_BUILD_TRIANGLE OFF CACHE BOOL "" FORCE)
+set(C3DGL_NATIVE_BUILD_CPP_TEST OFF CACHE BOOL "" FORCE)
+add_subdirectory(path/to/c3dgl/native native-build)
+target_link_libraries(my_app PRIVATE c3dgl::native)
+```
+
+C usage after `gfxInitDefault()`:
+
+```
+#include <c3dgl_native.h>
+if (!c3dglInit()) { /* handle failure */ }
+/* vertices: float4 OpenGL clip-space positions and float4 RGBA */
+if (c3dglNativeUpload(vertices, vertex_count) != 0) { /* handle failure */ }
+while (aptMainLoop()) {
+    if (c3dglNativeBegin(0x183050ff, true) != 0) break;
+    if (c3dglNativeDraw(0, vertex_count) != 0) break;
+    if (c3dglNativePresent() != 0) break;
+}
+c3dglClose();
+/* application eventually calls gfxExit() */
+```
+
+All API calls run on one application thread. The application owns graphics/GSP
+initialization and shutdown; the renderer exclusively owns GPU submissions while
+initialized. Top display format must be RGB8 at 400x240, with stereo disabled.
+Mixing another active GX queue or renderer is unsupported.
+
+Vertices upload between frames and remain in linear storage. Steady frames
+allocate nothing and upload no vertex data. Initial state and shader commands
+are encoded once and replayed after APT restoration; each draw emits only the
+required PICA array sequence. Cache maintenance covers uploaded vertex ranges
+and the submitted command bytes, not the whole linear heap. Shutdown drains GPU
+work before freeing buffers. All five GPU allocations unwind on failure.
+
+The next steps are the actual OpenGL groups in `docs/native-rewrite.md` and the
+later independent system/service backend. The ordinary `alloc` allocator is
+separate from GPU-visible linear/VRAM storage. Rust std is enabled only for host
+tests, never for the 3DS archive.

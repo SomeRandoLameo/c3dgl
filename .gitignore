@@ -56,3 +56,10 @@ CLAUDE.local.md
 
 # Rust native rewrite
 native/target/
+
+# Generated Python bytecode
+__pycache__/
+*.pyc
+# Keep protocol attribution and license notices for the native renderer.
+!native/third_party/
+!native/third_party/**

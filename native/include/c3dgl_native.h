@@ -31,7 +31,7 @@ int c3dglNativeBegin(uint32_t clear_rgba, bool sync_vblank);
 int c3dglNativeDraw(size_t first, size_t count);
 int c3dglNativePresent(void);
 int c3dglNativeGetStats(C3DGLnativeStats *stats);
-/* Copies displayed pixels after GPU completion: BGR8, column major, y inverted.
+/* Copies displayed pixels after GPU completion: BGR8, column major, y=0 at bottom.
  * Requires at least 400*240*3 bytes. For validation, outside timed frames. */
 int c3dglNativeReadback(uint8_t *pixels, size_t capacity);
 

@@ -5,10 +5,10 @@ pub const FINISH_WORDS: usize = 10;
 pub const DRAW_WORDS: usize = 22;
 
 fn write(c: &mut Commands<'_>, reg: u16, mask: u8, values: &[u32], inc: bool) -> Result<(), ()> {
-    if c.write(reg, mask, inc, values) { 
-        Ok(()) 
-    } else { 
-        Err(()) 
+    if c.write(reg, mask, inc, values) {
+        Ok(())
+    } else {
+        Err(())
     }
 }
 
@@ -28,16 +28,16 @@ pub fn pica_float(value: f32, mantissa_bits: u32) -> u32 {
     let bits = value.to_bits();
     let sign = bits >> 31;
     let exponent = ((bits >> 23) & 255) as i32 - 127 + 63;
-    if exponent < 0 { 
-        return sign << (mantissa_bits + 7); 
+    if exponent < 0 {
+        return sign << (mantissa_bits + 7);
     }
-    
-    let mantissa = if exponent > 127 { 
-        0 
-    } else { 
-        (bits & 0x7fffff) >> (23 - mantissa_bits) 
+
+    let mantissa = if exponent > 127 {
+        0
+    } else {
+        (bits & 0x7fffff) >> (23 - mantissa_bits)
     };
-    
+
     (sign << (mantissa_bits + 7)) | ((exponent.min(127) as u32) << mantissa_bits) | mantissa
 }
 
@@ -51,8 +51,16 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
     one(c, r::COLORBUFFER_FORMAT, 2)?;
     one(c, r::FRAMEBUFFER_BLOCK32, 0)?;
     seq(c, r::COLORBUFFER_READ, &[15, 15, 3, 3])?;
-    seq(c, r::VIEWPORT_WIDTH, &[pica_float(120.0, 16), pica_float(2.0 / 240.0, 23) << 1,
-        pica_float(200.0, 16), pica_float(2.0 / 400.0, 23) << 1])?;
+    seq(
+        c,
+        r::VIEWPORT_WIDTH,
+        &[
+            pica_float(120.0, 16),
+            pica_float(2.0 / 240.0, 23) << 1,
+            pica_float(200.0, 16),
+            pica_float(2.0 / 400.0, 23) << 1,
+        ],
+    )?;
     one(c, r::VIEWPORT_XY, 0)?;
     seq(c, r::SCISSORTEST_MODE, &[0, 0, 0])?;
     one(c, r::DEPTHMAP_ENABLE, 1)?;
@@ -76,9 +84,22 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
     masked(c, r::TEXENV_UPDATE_BUFFER, 7, 0)?;
     one(c, r::TEXENV_BUFFER_COLOR, u32::MAX)?;
     one(c, r::FOG_COLOR, 0)?;
-    for (stage, reg) in [r::TEXENV0_SOURCE, r::TEXENV1_SOURCE, r::TEXENV2_SOURCE,
-        r::TEXENV3_SOURCE, r::TEXENV4_SOURCE, r::TEXENV5_SOURCE].iter().enumerate() {
-        seq(c, *reg, &[if stage == 0 { 0 } else { 0x000f000f }, 0, 0, u32::MAX, 0])?;
+    for (stage, reg) in [
+        r::TEXENV0_SOURCE,
+        r::TEXENV1_SOURCE,
+        r::TEXENV2_SOURCE,
+        r::TEXENV3_SOURCE,
+        r::TEXENV4_SOURCE,
+        r::TEXENV5_SOURCE,
+    ]
+    .iter()
+    .enumerate()
+    {
+        seq(
+            c,
+            *reg,
+            &[if stage == 0 { 0 } else { 0x000f000f }, 0, 0, u32::MAX, 0],
+        )?;
     }
     one(c, r::LIGHTING_ENABLE0, 0)?;
     one(c, r::LIGHTING_ENABLE1, 1)?;
@@ -96,8 +117,13 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
     one(c, r::VSH_OUTMAP_TOTAL1, 1)?;
     one(c, r::VSH_OUTMAP_TOTAL2, 1)?;
     masked(c, r::PRIMITIVE_CONFIG, 1, 1)?;
-    seq(c, r::SH_OUTMAP_TOTAL, &[2, 0x03020100, 0x0b0a0908,
-        0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f])?;
+    seq(
+        c,
+        r::SH_OUTMAP_TOTAL,
+        &[
+            2, 0x03020100, 0x0b0a0908, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f,
+        ],
+    )?;
     one(c, r::SH_OUTATTR_MODE, 0)?;
     one(c, r::SH_OUTATTR_CLOCK, 3)?;
     masked(c, r::GEOSTAGE_CONFIG, 10, 0)?;
@@ -123,10 +149,10 @@ pub fn begin(c: &mut Commands<'_>) -> Result<(), ()> {
 
 pub fn draw(c: &mut Commands<'_>, first: u32, count: u32) -> Result<(), ()> {
     // Reserve the whole draw and the eventual finish before touching the buffer.
-    if c.words.len() - c.used < DRAW_WORDS + FINISH_WORDS { 
-        return Err(()); 
+    if c.words.len() - c.used < DRAW_WORDS + FINISH_WORDS {
+        return Err(());
     }
-    
+
     masked(c, r::PRIMITIVE_CONFIG, 2, 0)?;
     one(c, r::RESTART_PRIMITIVE, 1)?;
     one(c, r::INDEXBUFFER_CONFIG, 0x80000000)?;
@@ -141,26 +167,26 @@ pub fn draw(c: &mut Commands<'_>, first: u32, count: u32) -> Result<(), ()> {
 }
 
 pub fn finish(c: &mut Commands<'_>) -> Result<(), ()> {
-    if c.words.len() - c.used < FINISH_WORDS { 
-        return Err(()); 
+    if c.words.len() - c.used < FINISH_WORDS {
+        return Err(());
     }
-    
+
     one(c, r::FRAMEBUFFER_FLUSH, 1)?;
     one(c, r::FRAMEBUFFER_INVALIDATE, 1)?;
     one(c, r::EARLYDEPTH_CLEAR, 1)?;
     one(c, r::FINALIZE, 0x12345678)?;
-    
-    if c.used % 4 != 0 { 
-        one(c, r::FINALIZE, 0x12345678)?; 
+
+    if c.used % 4 != 0 {
+        one(c, r::FINALIZE, 0x12345678)?;
     }
-    
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn draw_overflow_leaves_commands_unchanged() {
         let mut words = [7; 36];
@@ -173,7 +199,7 @@ mod tests {
         finish(&mut c).unwrap();
         assert_eq!(c.used % 4, 0);
     }
-    
+
     #[test]
     fn init_and_frame_have_aligned_finalizers() {
         let mut words = [0; 1024];
@@ -183,7 +209,7 @@ mod tests {
         assert!(c.used < 1024);
         assert_eq!(c.as_slice()[c.used - 1] & 0x3ff, r::FINALIZE as u32);
     }
-    
+
     #[test]
     fn float_formats_match_ctru_layout() {
         assert_eq!(pica_float(1.0, 16), 0x3f0000);
