@@ -6,6 +6,8 @@ publish = false
 
 [features]
 host-tests = []
+# Use the application-owned std runtime/allocator; compile the libctru adapter.
+rust3ds = []
 
 [lib]
 name = "c3dgl"

@@ -23,8 +23,8 @@ add_custom_command(OUTPUT "${C3DGL_ARCHIVE}"
         ${C3DGL_CARGO} build --release --target ${C3DGL_RUST_TARGET}
         -Zbuild-std=core,alloc --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    DEPENDS Cargo.toml rust-toolchain.toml src/lib.rs src/platform.rs src/gpu.rs
-        src/renderer.rs src/matrix.rs src/registers.rs src/shader.rs
+    DEPENDS Cargo.toml build.rs rust-toolchain.toml src/lib.rs src/platform.rs src/gpu.rs
+        src/renderer.rs src/matrix.rs src/frame.rs src/registers.rs src/shader.rs
     VERBATIM)
 add_custom_target(c3dgl_native_build ALL DEPENDS "${C3DGL_ARCHIVE}")
 add_library(c3dgl_native_rust STATIC IMPORTED GLOBAL)

@@ -1,0 +1,30 @@
+Rust native / no Citro3D
+GPU acceptance + performance
+cycle 1/8 errors=0
+cycle 2/8 errors=0
+cycle 3/8 errors=0
+cycle 4/8 errors=0
+cycle 5/8 errors=0
+cycle 6/8 errors=0
+cycle 7/8 errors=0
+cycle 8/8 errors=0
+PASS 240 frames, 8 init/close
+workload=static draws=1 CPU 0.3340 GPU 0.2494
+total 16.7123 ms/frame
+workload=static draws=64 CPU 0.4072 GPU 0.2494
+total 16.7123 ms/frame
+workload=static draws=512 CPU 0.9268 GPU 0.2494
+total 16.7123 ms/frame
+workload=matrix draws=1 CPU 0.3363 GPU 0.2494
+total 16.7123 ms/frame
+workload=matrix draws=64 CPU 0.5514 GPU 0.2494
+total 16.7123 ms/frame
+workload=matrix draws=512 CPU 2.0920 GPU 0.2494
+total 16.7123 ms/frame
+workload=viewport draws=1 CPU 0.3350 GPU 0.2494
+total 16.7123 ms/frame
+workload=viewport draws=64 CPU 0.4741 GPU 0.2494
+total 16.7123 ms/frame
+workload=viewport draws=512 CPU 1.4683 GPU 0.2494
+total 16.7123 ms/frame
+ALL CHECKS PASSED - START exits

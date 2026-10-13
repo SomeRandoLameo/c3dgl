@@ -1,6 +1,8 @@
-#![cfg_attr(not(any(test, feature = "host-tests")), no_std)]
+#![cfg_attr(not(any(test, feature = "host-tests", feature = "rust3ds")), no_std)]
 
 extern crate alloc;
+#[cfg(any(target_os = "horizon", test))]
+mod frame;
 #[cfg(any(target_os = "horizon", test))]
 mod gpu;
 #[cfg(any(target_os = "horizon", test))]
@@ -87,7 +89,7 @@ pub unsafe extern "C" fn c3dglNativeEncodeCommand(
     }
 }
 
-#[cfg(not(any(test, feature = "host-tests")))]
+#[cfg(not(any(test, feature = "host-tests", feature = "rust3ds")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {
@@ -128,4 +130,20 @@ mod tests {
         assert_eq!(commands.as_slice().len(), 258);
         assert_eq!(commands.as_slice()[1], 0x0fff0200);
     }
+}
+
+/// Raw Rust entry points with the same single-thread/exclusive-GPU contract as C.
+/// `rust3ds` builds use the application's std allocator and panic runtime.
+#[cfg(target_os = "horizon")]
+pub mod raw {
+    pub use crate::frame::{
+        glClear, glClearColor, glClearDepth, glClearDepthf, glGetFloatv, glGetIntegerv, glViewport,
+    };
+
+    pub use crate::matrix::*;
+    pub use crate::renderer::{
+        c3dglClose, c3dglInit, c3dglNativeBegin, c3dglNativeDraw, c3dglNativeGetStats,
+        c3dglNativePresent, c3dglNativeReadback, c3dglNativeUpload, c3dglSwapBuffers, Stats,
+        Vertex,
+    };
 }

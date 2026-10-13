@@ -167,6 +167,30 @@ pub fn matrix(c: &mut Commands<'_>, m: &[f32; 16]) -> Result<(), ()> {
     write(c, r::VSH_FLOATUNIFORM_DATA, 15, &data, false)
 }
 
+pub fn viewport(c: &mut Commands<'_>, v: [i32; 4]) -> Result<(), ()> {
+    if c.words.len() - c.used < 8 + DRAW_WORDS + FINISH_WORDS {
+        return Err(());
+    }
+
+    let [x, y, w, h] = v;
+    seq(
+        c,
+        r::VIEWPORT_WIDTH,
+        &[
+            pica_float(h as f32 * 0.5, 16),
+            pica_float(2. / h as f32, 23) << 1,
+            pica_float(w as f32 * 0.5, 16),
+            pica_float(2. / w as f32, 23) << 1,
+        ],
+    )?;
+
+    one(
+        c,
+        r::VIEWPORT_XY,
+        ((400 - x - w) as u32 & 0xffff) << 16 | (y as u32 & 0xffff),
+    )
+}
+
 pub fn begin(c: &mut Commands<'_>) -> Result<(), ()> {
     one(c, r::FRAMEBUFFER_INVALIDATE, 1)
 }
@@ -210,6 +234,17 @@ pub fn finish(c: &mut Commands<'_>) -> Result<(), ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn landscape_subviewport_layout() {
+        let mut words = [0; 64];
+        let mut c = Commands::new(&mut words);
+        viewport(&mut c, [200, 120, 200, 120]).unwrap();
+        assert_eq!(c.used, 8);
+        assert_eq!(c.as_slice()[0], pica_float(60., 16));
+        assert_eq!(c.as_slice()[4], pica_float(2. / 200., 23) << 1);
+        assert_eq!(c.as_slice()[6], 120);
+    }
 
     #[test]
     fn matrix_uniform_layout_and_overflow() {

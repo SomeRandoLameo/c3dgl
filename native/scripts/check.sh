@@ -27,4 +27,5 @@ if rg '(C3D_|GPUCMD_|DVLB_|shaderProgram)' build-native-host/symbols.txt; then
     echo 'Unexpected Citro3D/libctru GPU encoder or shader helper in native executable' >&2
     exit 1
 fi
-echo 'PASS: Rust tests, C/C++ ABI, 3DS builds and native dependency audit.'
+"$root/native/scripts/check_rust3ds.sh"
+echo 'PASS: Rust tests, C/C++ ABI, rust3ds consumer, 3DS builds and native dependency audits.'

@@ -1,5 +1,5 @@
 //! Single application-thread renderer. All service calls go through platform.
-use crate::{gpu, matrix::Matrices, platform::gpu as p, Commands};
+use crate::{frame::FrameState, gpu, matrix::Matrices, platform::gpu as p, Commands};
 use core::{ptr, slice};
 // 512 draws with a matrix upload each need 21,504 words plus frame commands.
 const COMMAND_WORDS: usize = 32768;
@@ -62,6 +62,10 @@ impl Drop for Buffer {
 }
 
 struct Renderer {
+    frame: FrameState,
+    work_wait_ticks: u64,
+    work_gpu_ticks: u64,
+    submitted_bytes: u32,
     matrices: Matrices,
     commands: Buffer,
     state: Buffer,
@@ -88,6 +92,65 @@ pub unsafe fn with_matrices(f: impl FnOnce(&mut Matrices)) {
     }
 }
 
+pub unsafe fn with_frame(f: impl FnOnce(&mut FrameState, &mut Matrices)) {
+    if let Some(r) = (&mut *ptr::addr_of_mut!(CONTEXT)).as_mut() {
+        f(&mut r.frame, &mut r.matrices);
+    }
+}
+pub unsafe fn clear_gl(mask: u32) {
+    if mask & !(crate::frame::COLOR | crate::frame::DEPTH) != 0 {
+        with_matrices(|m| m.fail(0x0501));
+        return;
+    }
+    if mask == 0 {
+        return;
+    }
+    let Some(r) = (&mut *ptr::addr_of_mut!(CONTEXT)).as_mut() else {
+        return;
+    };
+    if !r.active {
+        if begin_frame(r, true, None) != 0 {
+            r.matrices.fail(0x0502);
+            return;
+        }
+    } else {
+        // Complete prior commands before a memory fill, preserving clear/draw order.
+        let mut commands = r.commands();
+        if gpu::finish(&mut commands).is_err() {
+            r.matrices.fail(0x0505);
+            return;
+        }
+        r.used = commands.used;
+        let wait = p::c3dglPlatformTick();
+        if p::c3dglPlatformSubmit(r.commands.pointer, (r.used * 4) as u32, ptr::null_mut()) < 0 {
+            r.matrices.fail(0x0502);
+            return;
+        }
+        r.work_gpu_ticks += p::c3dglPlatformWait();
+        r.submitted_bytes += (r.used * 4) as u32;
+        r.work_wait_ticks += p::c3dglPlatformTick() - wait;
+        r.used = 0;
+        let mut commands = r.commands();
+        if gpu::begin(&mut commands).is_err() {
+            r.matrices.fail(0x0505);
+            return;
+        }
+        r.used = commands.used;
+    }
+    let depth = ((1. - r.frame.clear_depth) * 16777215.) as u32;
+    if p::c3dglPlatformClearMasked(
+        r.color.pointer,
+        r.depth.pointer,
+        r.frame.clear_color,
+        depth,
+        TARGET_BYTES as u32,
+        mask,
+    ) < 0
+    {
+        r.matrices.fail(0x0502);
+    }
+}
+
 impl Renderer {
     unsafe fn create() -> Option<Self> {
         // Fallible allocation and RAII rollback for every intermediate failure.
@@ -111,6 +174,10 @@ impl Renderer {
         let state_words = encoded.used;
 
         Some(Self {
+            frame: FrameState::new(),
+            work_wait_ticks: 0,
+            work_gpu_ticks: 0,
+            submitted_bytes: 0,
             matrices: Matrices::new(),
             commands,
             state,
@@ -150,6 +217,7 @@ impl Renderer {
 
         self.generation = generation;
         self.matrices.dirty = true;
+        self.frame.viewport_dirty = true;
 
         true
     }
@@ -246,6 +314,9 @@ pub unsafe extern "C" fn c3dglNativeBegin(clear: u32, sync: bool) -> i32 {
         return -1;
     };
 
+    begin_frame(r, sync, Some(clear))
+}
+unsafe fn begin_frame(r: &mut Renderer, sync: bool, clear: Option<u32>) -> i32 {
     if r.active {
         return -2;
     }
@@ -267,6 +338,9 @@ pub unsafe extern "C" fn c3dglNativeBegin(clear: u32, sync: bool) -> i32 {
     r.used = 0;
     r.draws = 0;
     r.error = 0;
+    r.work_wait_ticks = 0;
+    r.work_gpu_ticks = 0;
+    r.submitted_bytes = 0;
 
     let mut commands = r.commands();
     if gpu::begin(&mut commands).is_err() {
@@ -275,10 +349,12 @@ pub unsafe extern "C" fn c3dglNativeBegin(clear: u32, sync: bool) -> i32 {
 
     r.used = commands.used;
 
-    let result =
-        p::c3dglPlatformClear(r.color.pointer, r.depth.pointer, clear, TARGET_BYTES as u32);
-    if result < 0 {
-        return result;
+    if let Some(clear) = clear {
+        let result =
+            p::c3dglPlatformClear(r.color.pointer, r.depth.pointer, clear, TARGET_BYTES as u32);
+        if result < 0 {
+            return result;
+        }
     }
 
     r.active = true;
@@ -301,19 +377,16 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
         return -2;
     }
 
-    let update = if r.matrices.dirty {
-        Some(r.matrices.combined())
-    } else {
-        None
-    };
-    let mut commands = r.commands();
-    if let Some(matrix) = update {
-        if gpu::matrix(&mut commands, &matrix).is_err() {
-            r.error = -4;
-            return -4;
-        }
+    if !r.frame.drawable {
+        r.draws += 1;
+        return 0;
     }
 
+    if (r.frame.viewport_dirty || r.matrices.dirty) && update_draw_state(r).is_err() {
+        r.error = -4;
+        return -4;
+    }
+    let mut commands = r.commands();
     if gpu::draw(&mut commands, first as u32, count as u32).is_err() {
         r.error = -4;
         return -4;
@@ -321,9 +394,51 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
 
     r.used = commands.used;
     r.draws += 1;
-    r.matrices.dirty = false;
 
     0
+}
+
+// Keep matrix/viewport packet work out of the unchanged-state draw loop.
+#[inline(never)]
+unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
+    let viewport = if r.frame.viewport_dirty {
+        Some(r.frame.viewport)
+    } else {
+        None
+    };
+
+    let update = if r.matrices.dirty {
+        Some(r.matrices.combined())
+    } else {
+        None
+    };
+
+    let mut commands = r.commands();
+    // Single-state writers already reserve draw + finish. Reserve both only
+    // when both updates are needed, keeping the unchanged-state draw path cheap.
+    if viewport.is_some()
+        && update.is_some()
+        && commands.words.len() - commands.used < gpu::DRAW_WORDS + gpu::FINISH_WORDS + 28
+    {
+        return Err(());
+    }
+
+    if let Some(v) = viewport {
+        if gpu::viewport(&mut commands, v).is_err() {
+            return Err(());
+        }
+    }
+
+    if let Some(matrix) = update {
+        if gpu::matrix(&mut commands, &matrix).is_err() {
+            return Err(());
+        }
+    }
+
+    r.used = commands.used;
+    r.matrices.dirty = false;
+    r.frame.viewport_dirty = false;
+    Ok(())
 }
 
 #[no_mangle]
@@ -347,9 +462,9 @@ pub unsafe extern "C" fn c3dglNativePresent() -> i32 {
     let result = p::c3dglPlatformSubmit(r.commands.pointer, (r.used * 4) as u32, r.color.pointer);
 
     r.active = false;
-    r.stats.cpu_ticks = p::c3dglPlatformTick() - r.started;
-    r.stats.wait_ticks = r.wait_ticks;
-    r.stats.command_bytes = (r.used * 4) as u32;
+    r.stats.cpu_ticks = p::c3dglPlatformTick() - r.started - r.work_wait_ticks;
+    r.stats.wait_ticks = r.wait_ticks + r.work_wait_ticks;
+    r.stats.command_bytes = r.submitted_bytes + (r.used * 4) as u32;
     r.stats.draws = r.draws;
 
     if result < 0 {
@@ -370,7 +485,7 @@ pub unsafe extern "C" fn c3dglNativeGetStats(output: *mut Stats) -> i32 {
         return -2;
     }
 
-    r.stats.gpu_ticks = p::c3dglPlatformWait();
+    r.stats.gpu_ticks = r.work_gpu_ticks + p::c3dglPlatformWait();
 
     output.write(r.stats);
 
@@ -411,6 +526,7 @@ mod lifecycle_tests {
         acquired: bool,
         generation: u32,
         submits: usize,
+        clear_calls: Vec<(u32, u32, u32)>,
         waits: usize,
         tick: u64,
     }
@@ -422,6 +538,7 @@ mod lifecycle_tests {
         acquired: false,
         generation: 1,
         submits: 0,
+        clear_calls: Vec::new(),
         waits: 0,
         tick: 0,
     });
@@ -529,6 +646,19 @@ mod lifecycle_tests {
     }
 
     #[no_mangle]
+    unsafe extern "C" fn c3dglPlatformClearMasked(
+        _c: *mut u8,
+        _d: *mut u8,
+        v: u32,
+        dv: u32,
+        _b: u32,
+        m: u32,
+    ) -> i32 {
+        MOCK.lock().unwrap().clear_calls.push((m, v, dv));
+        0
+    }
+
+    #[no_mangle]
     unsafe extern "C" fn c3dglPlatformSubmit(commands: *mut u8, bytes: u32, _: *mut u8) -> i32 {
         assert_eq!(commands as usize % 128, 0);
         assert_eq!(bytes % 16, 0);
@@ -614,6 +744,39 @@ mod lifecycle_tests {
                     color: [1.0; 4],
                 }; 3];
                 assert_eq!(c3dglNativeUpload(vertices.as_ptr(), 3), 0);
+                use crate::frame::*;
+                glViewport(0, 0, -1, 240);
+                assert_eq!(glGetError(), 0x0501);
+                let mut vp = [0; 4];
+                glGetIntegerv(0x0ba2, vp.as_mut_ptr());
+                assert_eq!(vp, [0, 0, 400, 240]);
+                glClear(0);
+                assert!(!(&*ptr::addr_of!(CONTEXT)).as_ref().unwrap().active);
+                glClear(1);
+                assert_eq!(glGetError(), 0x0501);
+                glClearColor(1., 0., 0., 1.);
+                glClearDepth(-1.);
+                let mut color = [0; 4];
+                glGetIntegerv(0x0c22, color.as_mut_ptr());
+                assert_eq!(color, [i32::MAX, 0, 0, i32::MAX]);
+                glClear(COLOR);
+                assert_eq!(
+                    MOCK.lock().unwrap().clear_calls.last(),
+                    Some(&(COLOR, 0xff0000ff, 0xffffff))
+                );
+                assert_eq!(c3dglNativeDraw(0, 3), 0);
+                let before = MOCK.lock().unwrap().submits;
+                glClear(DEPTH);
+                assert_eq!(MOCK.lock().unwrap().submits, before + 1);
+                assert_eq!(MOCK.lock().unwrap().clear_calls.last().unwrap().0, DEPTH);
+                glViewport(0, 0, 0, 0);
+                let before = (&*ptr::addr_of!(CONTEXT)).as_ref().unwrap().used;
+                assert_eq!(c3dglNativeDraw(0, 3), 0);
+                assert_eq!((&*ptr::addr_of!(CONTEXT)).as_ref().unwrap().used, before);
+                glViewport(0, 0, 400, 240);
+                glClearDepth(1.);
+                assert_eq!(c3dglNativePresent(), 0);
+                assert_eq!(glGetError(), 0);
                 assert_eq!(c3dglNativeBegin(0xff, false), 0);
                 assert_eq!(c3dglNativeUpload(vertices.as_ptr(), 3), -2);
                 assert_eq!(c3dglNativeBegin(0xff, false), -2);

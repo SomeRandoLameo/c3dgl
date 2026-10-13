@@ -1,0 +1,15 @@
+C c3dgl + Citro3D reference
+Persistent cached indexed VBO
+workload=static draws=1 CPU 0.4244 GPU 0.2495
+total 16.7121 ms/frame
+workload=static draws=64 CPU 1.5876 GPU 0.2495
+total 16.7121 ms/frame
+workload=static draws=512 CPU 9.8589 GPU 0.2495
+total 16.7121 ms/frame
+workload=matrix draws=1 CPU 0.4260 GPU 0.2495
+total 16.7121 ms/frame
+workload=matrix draws=64 CPU 2.3427 GPU 0.2495
+total 16.7121 ms/frame
+workload=matrix draws=512 CPU 16.0259 GPU 0.2495
+total 16.7177 ms/frame
+GL error=0 - START exits

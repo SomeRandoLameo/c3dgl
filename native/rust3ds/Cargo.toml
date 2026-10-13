@@ -1,0 +1,13 @@
+[package]
+name = "c3dgl-rust3ds-triangle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+[dependencies]
+c3dgl-native = { path = "..", features = ["rust3ds"] }
+ctru-rs = { git = "https://github.com/rust3ds/ctru-rs.git" }
+ctru-sys = { git = "https://github.com/rust3ds/ctru-rs.git" }
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

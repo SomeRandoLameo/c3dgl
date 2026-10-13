@@ -49,6 +49,7 @@ static int pixel(int x, int y, int red, int green, int blue, int tolerance) {
 }
 
 static bool matrix_workload;
+static bool viewport_workload,gl_frame;
 static unsigned matrix_phase;
 
 static void transform(unsigned draw) {
@@ -57,10 +58,12 @@ static void transform(unsigned draw) {
 }
 
 static int frame(unsigned clear, unsigned draws, bool sync) {
-    if (!check(c3dglNativeBegin(clear,sync), "begin")) return 0;
+    if (gl_frame) glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+    else if (!check(c3dglNativeBegin(clear,sync), "begin")) return 0;
 
     for (unsigned j = 0; j < draws; j++) {
         if (matrix_workload) transform(j+matrix_phase);
+        if (viewport_workload) glViewport((j+matrix_phase)&1?200:0,(j+matrix_phase)&1?120:0,200,120);
         if (!check(c3dglNativeDraw(0,3), "draw")) return 0;
     }
 
@@ -79,11 +82,11 @@ static void validate(unsigned clear, bool triangle) {
 }
 
 
-static void save_image(bool transformed) {
+static void save_image(unsigned workload) {
 #ifdef __cplusplus
-    FILE *image=fopen(transformed?"sdmc:/c3dgl-native-cpp-matrix.ppm":"sdmc:/c3dgl-native-cpp.ppm","wb");
+    FILE *image=fopen(workload==3?"sdmc:/c3dgl-native-cpp-state.ppm":workload==2?"sdmc:/c3dgl-native-cpp-viewport.ppm":workload==1?"sdmc:/c3dgl-native-cpp-matrix.ppm":"sdmc:/c3dgl-native-cpp.ppm","wb");
 #else
-    FILE *image=fopen(transformed?"sdmc:/c3dgl-native-matrix.ppm":"sdmc:/c3dgl-native.ppm","wb");
+    FILE *image=fopen(workload==3?"sdmc:/c3dgl-native-state.ppm":workload==2?"sdmc:/c3dgl-native-viewport.ppm":workload==1?"sdmc:/c3dgl-native-matrix.ppm":"sdmc:/c3dgl-native.ppm","wb");
 #endif
     if (!image) return;
     fprintf(image,"P6\n400 240\n255\n");
@@ -145,9 +148,13 @@ int main(void) {
         printf("PASS 240 frames, 8 init/close\n");
 
         const unsigned loads[] = {1, 64, 512};
-        for (unsigned load = 0; load < 6 && !failures; load++) {
+        for (unsigned load = 0; load < 9 && !failures; load++) {
             unsigned draws = loads[load%3];
-            matrix_workload=load>=3;
+            matrix_workload=load>=3 && load<6;
+            viewport_workload=load>=6;
+            gl_frame=true;
+            glViewport(0,0,400,240);
+            glClearColor(24.f/255,48.f/255,80.f/255,1);
             glLoadIdentity();
 
             u64 cpu = 0, gpu = 0, total = 0;
@@ -172,7 +179,7 @@ int main(void) {
 
             printf(
                 "workload=%s draws=%u CPU %.4f GPU %.4f\n",
-                matrix_workload?"matrix":"static", draws,
+                viewport_workload?"viewport":matrix_workload?"matrix":"static", draws,
                 (double)cpu * 1000 / SYSCLOCK_ARM11 / 120,
                 (double)gpu * 1000 / SYSCLOCK_ARM11 / 120
             );
@@ -181,17 +188,39 @@ int main(void) {
                 "total %.4f ms/frame\n",
                 (double)total * 1000 / SYSCLOCK_ARM11 / 120
             );
+            if (load%3==2) {
+                check(c3dglNativeReadback(pixels,sizeof(pixels)),"workload readback");
+                save_image(load/3);
+            }
         }
 
         if (glGetError()!=GL_NO_ERROR) { printf("FAIL matrix GL error\n"); failures++; }
-        check(c3dglNativeReadback(pixels,sizeof(pixels)),"matrix readback");
-        save_image(true);
+
         matrix_workload=false;
+        viewport_workload=false;
+        glViewport(0,0,400,240);
         glLoadIdentity();
+        glClearColor(.75f,.25f,.125f,1);
+        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        check(c3dglNativeDraw(0,3),"state draw before clear");
+        glClearColor(24.f/255,48.f/255,80.f/255,1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glViewport(0,0,0,0);
+        check(c3dglNativeDraw(0,3),"zero viewport draw");
+        glViewport(0,0,400,240);
+        check(c3dglNativeDraw(0,3),"state full draw");
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glViewport(0,0,200,120);
+        check(c3dglNativeDraw(0,3),"state subviewport draw");
+        check(c3dglNativePresent(),"state present");
+        check(c3dglNativeReadback(pixels,sizeof(pixels)),"state readback");
+        save_image(3);
+        glViewport(0,0,400,240);
+        if (glGetError()!=GL_NO_ERROR) {printf("FAIL frame GL error\n");failures++;}
         /* Leave the verified triangle displayed after benchmarks. */
         frame(0x183050ff, 1, true);
         validate(0x183050ff, true);
-        save_image(false);
+        save_image(0);
 
         c3dglClose();
     }

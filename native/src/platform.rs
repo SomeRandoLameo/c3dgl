@@ -1,6 +1,6 @@
-//! All runtime allocation goes through the selected platform adapter.
-//! GPU-visible storage will need a separate linear/VRAM allocator.
-#[cfg(not(any(test, feature = "host-tests")))]
+//! Retained libctru services and GPU-visible linear/VRAM storage.
+//! C/C++ uses the platform allocator; rust3ds uses its application std allocator.
+#[cfg(not(any(test, feature = "host-tests", feature = "rust3ds")))]
 mod runtime {
     use core::alloc::{GlobalAlloc, Layout};
 
@@ -40,6 +40,14 @@ pub mod gpu {
         pub fn c3dglPlatformGeneration() -> u32;
         pub fn c3dglPlatformVblank();
         pub fn c3dglPlatformClear(color: *mut u8, depth: *mut u8, value: u32, bytes: u32) -> i32;
+        pub fn c3dglPlatformClearMasked(
+            color: *mut u8,
+            depth: *mut u8,
+            value: u32,
+            depth_value: u32,
+            bytes: u32,
+            mask: u32,
+        ) -> i32;
         pub fn c3dglPlatformSubmit(commands: *mut u8, bytes: u32, color: *mut u8) -> i32;
     }
 }

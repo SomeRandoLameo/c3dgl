@@ -87,6 +87,16 @@ int c3dglPlatformClear(void *color, void *depth, u32 value, u32 bytes) {
         depth, 0, (u32 *)((u8 *)depth + bytes), GX_FILL_TRIGGER | GX_FILL_32BIT_DEPTH);
 }
 
+int c3dglPlatformClearMasked(void *color, void *depth, u32 value, u32 depth_value, u32 bytes, u32 mask) {
+    void *c = (mask & 0x4000) ? color : NULL;
+    void *d = (mask & 0x0100) ? depth : NULL;
+    /* libctru's GX queue counts PSC0 and ignores PSC1. A depth-only fill must
+     * therefore use slot 0, or the queue never reaches its completion callback. */
+    if (!c) { c = d; value = depth_value; d = NULL; }
+    return GX_MemoryFill(c, value, c ? (u32 *)((u8 *)c + bytes) : NULL, c ? GX_FILL_TRIGGER | GX_FILL_32BIT_DEPTH : 0,
+        d, depth_value, d ? (u32 *)((u8 *)d + bytes) : NULL, d ? GX_FILL_TRIGGER | GX_FILL_32BIT_DEPTH : 0);
+}
+
 int c3dglPlatformSubmit(void *commands, u32 bytes, void *color) {
     /* Clear (optional), command list, transfer: at most three queue entries. */
     if (queue.numEntries > 1) return -1;

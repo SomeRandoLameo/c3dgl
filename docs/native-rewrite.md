@@ -20,28 +20,30 @@ helpers currently generate commands too: keeping them would conceal a renderer
 responsibility inside the platform adapter. The intended GPU core therefore
 encodes shader commands itself.
 
-For the first libctru backend the application continues to own `gfxInit*`,
+libctru is the retained platform backend (user decision, 2026-10-13).
+The application continues to own `gfxInit*`,
 `aptMainLoop`, input and `gfxExit`. The renderer must exclusively own GPU work
 while initialized. No concurrent Citro3D renderer or external GX queue is
 supported. Shutdown waits for all renderer-owned GPU work before releasing
 memory; it never shuts down application-owned gfx/GSP services.
 
-The later service backend must negotiate display/GSP ownership explicitly.
-Static linking does not remove libctru calls or make independent GPU owners
-safe. Keep that backend separate from the initial libctru adapter.
+Keep libctru for CPU/linear/VRAM allocation, physical address translation,
+cache maintenance, GSP/GX submission, APT hooks and display/VBlank operations.
+The port replaces Citro3D renderer responsibilities, not libctru services.
+An independent system/service backend is outside the roadmap.
 
 ## Acceptance gate
 
 The user authorized Azahar as the current functional acceptance environment on
 2026-10-12. The emulator gate requires colored GPU rendering, full framebuffer
-identity with the C reference, repeated frames, C/C++ consumers, allocation
+identity with the C reference, repeated frames, C/C++ and rust3ds consumers, allocation
 rollback, GPU memory recovery and a repeatable CPU performance advantage for
 each tested workload. Results live in `native-results/`.
 
 The separate hardware gate remains: a real 3DS must render a colored GPU
 triangle through init → clear → draw → display transfer → swap → close without
 Citro3D. Record device/system version, toolchain, archive undefined-symbol audit,
-frame count and init/close repetitions. Check both C and C++ consumers. Verify
+frame count and init/close repetitions. Check C, C++ and rust3ds consumers. Verify
 orientation, color channels, absence of stale frames/hangs, and resource recovery
 on repeated initialization and allocation failure. Host command tests cannot
 establish any of those hardware properties.
@@ -83,3 +85,15 @@ repeated workload comparisons and no material GPU/total latency regression too.
 Each checkpoint keeps the emulator image, resource recovery and CPU gates; the
 next group is added only after the current comparison has passed. This sequence
 does not declare full GL header compatibility.
+
+The first Rust application compatibility gate is recorded in
+`native-results/rust3ds-step/`: a real ctru-rs/cargo-3ds Cargo consumer with
+application-owned std runtime, exact GPU image comparisons and independent
+CPU gates. Keep that consumer in all subsequent renderer checkpoints. The
+C/C++ static library retains its standalone no_std runtime configuration.
+
+The GL clear/viewport checkpoint is recorded in `native-results/frame-step/`.
+It includes the real rust3ds consumer in every GPU/performance comparison and
+reports incremental CPU costs for both consumers. The next implementation group
+is vertex arrays, indices and VBOs, with persistent indexed mesh and update
+workloads before the depth/culling cube.

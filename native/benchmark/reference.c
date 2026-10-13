@@ -52,8 +52,10 @@ int main(void) {
     glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);
     glClearColor(24.0f/255,48.0f/255,80.0f/255,1);
     const unsigned loads[]={1,64,512};
-    for (unsigned load=0; load<6; load++) {
-        bool matrix_workload=load>=3;
+    for (unsigned load=0; load<9; load++) {
+        bool matrix_workload=load>=3 && load<6;
+        bool viewport_workload=load>=6;
+        glViewport(0,0,400,240);
         glLoadIdentity();
         u64 total=0; double cpu=0,gpu=0; unsigned samples=0;
         for (unsigned i=0; i<150 && aptMainLoop(); i++) {
@@ -63,6 +65,7 @@ int main(void) {
 
             for (unsigned j=0; j<loads[load%3]; j++) {
                 if (matrix_workload) transform(j+i);
+                if (viewport_workload) glViewport((j+i)&1?200:0,(j+i)&1?120:0,200,120);
                 glDrawElements(GL_TRIANGLES,3,GL_UNSIGNED_SHORT,0);
             }
             last_output=gfxGetFramebuffer(GFX_TOP,GFX_LEFT,NULL,NULL);
@@ -76,16 +79,26 @@ int main(void) {
             if (i>=30) { samples++; cpu+=cpuMs; gpu+=gpuMs; total+=svcGetSystemTick()-start; }
         }
         if (samples!=120) { report("FAIL incomplete benchmark\n"); return 1; }
-        report("workload=%s draws=%u CPU %.4f GPU %.4f\n",matrix_workload?"matrix":"static",loads[load%3],
+        report("workload=%s draws=%u CPU %.4f GPU %.4f\n",viewport_workload?"viewport":matrix_workload?"matrix":"static",loads[load%3],
             cpu/120,gpu/120);
         report("total %.4f ms/frame\n",(double)total*1000/SYSCLOCK_ARM11/120);
-        if (load==2 || load==5) {
+        if (load%3==2) {
             if (!C3D_FrameBegin(0)) return 1;
-            save_image(load==2?"sdmc:/c3dgl-reference.ppm":"sdmc:/c3dgl-reference-matrix.ppm");
+            save_image(load==8?"sdmc:/c3dgl-reference-viewport.ppm":load==2?"sdmc:/c3dgl-reference.ppm":"sdmc:/c3dgl-reference-matrix.ppm");
             C3D_FrameEnd(GX_CMDLIST_FLUSH);
         }
     }
+    glLoadIdentity(); glViewport(0,0,400,240);
+    glClearColor(.75f,.25f,.125f,1); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+    glDrawElements(GL_TRIANGLES,3,GL_UNSIGNED_SHORT,0);
+    glClearColor(24.f/255,48.f/255,80.f/255,1); glClear(GL_COLOR_BUFFER_BIT);
+    glViewport(0,0,0,0); glDrawElements(GL_TRIANGLES,3,GL_UNSIGNED_SHORT,0);
+    glViewport(0,0,400,240); glDrawElements(GL_TRIANGLES,3,GL_UNSIGNED_SHORT,0);
+    glClear(GL_DEPTH_BUFFER_BIT); glViewport(0,0,200,120);
+    glDrawElements(GL_TRIANGLES,3,GL_UNSIGNED_SHORT,0);
+    last_output=gfxGetFramebuffer(GFX_TOP,GFX_LEFT,NULL,NULL); c3dglSwapBuffers();
     if (!C3D_FrameBegin(0)) return 1;
+    save_image("sdmc:/c3dgl-reference-state.ppm");
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
     report("GL error=%u - START exits\n",glGetError());
     while (aptMainLoop()) { hidScanInput(); if (hidKeysDown()&KEY_START) break; gspWaitForVBlank(); }

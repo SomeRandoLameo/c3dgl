@@ -40,7 +40,7 @@ impl Matrices {
         }
     }
 
-    fn fail(&mut self, error: u32) {
+    pub(crate) fn fail(&mut self, error: u32) {
         if self.error == 0 {
             self.error = error;
         }
@@ -59,6 +59,22 @@ impl Matrices {
             &self.stacks[self.mode][self.depths[self.mode]],
             &value,
         ));
+    }
+
+    pub(crate) fn query(&self, pname: u32) -> Option<([f32; 16], usize)> {
+        let mut out = [0.; 16];
+        match pname {
+            0x0ba6 | 0x0ba7 => {
+                let mode = (pname - 0x0ba6) as usize;
+                return Some((self.stacks[mode][self.depths[mode]], 16));
+            }
+            0x0ba0 => out[0] = (0x1700 + self.mode) as f32,
+            0x0ba3 | 0x0ba4 => out[0] = (self.depths[(pname - 0x0ba3) as usize] + 1) as f32,
+            0x0d36 => out[0] = 32.,
+            0x0d38 => out[0] = 2.,
+            _ => return None,
+        }
+        Some((out, 1))
     }
 
     pub fn combined(&self) -> [f32; 16] {
@@ -171,7 +187,7 @@ pub unsafe extern "C" fn glRotatef(angle: f32, x: f32, y: f32, z: f32) {
     if length == 0. {
         return;
     }
-    
+
     let (x, y, z) = (x / length, y / length, z / length);
     let radians = angle * (core::f32::consts::PI / 180.);
     let (s, c) = (sinf(radians), cosf(radians));
