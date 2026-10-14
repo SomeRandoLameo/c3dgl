@@ -8,7 +8,7 @@ export DEVKITPRO DEVKITARM CARGO_TARGET_DIR
 cd "$root/native/rust3ds"
 cargo fmt --check
 cargo 3ds build --release --locked --offline
-for consumer in c3dgl-rust3ds-triangle textured; do
+for consumer in c3dgl-rust3ds-triangle textured primitives; do
     elf="$CARGO_TARGET_DIR/armv6k-nintendo-3ds/release/$consumer.elf"
     "$DEVKITARM/bin/arm-none-eabi-nm" "$elf" > "$CARGO_TARGET_DIR/$consumer-symbols.txt"
     if rg '(C3D_|GPUCMD_|DVLB_|shaderProgram)' "$CARGO_TARGET_DIR/$consumer-symbols.txt"; then

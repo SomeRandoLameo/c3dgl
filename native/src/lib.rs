@@ -15,6 +15,8 @@ mod immediate;
 mod matrix;
 mod platform;
 #[cfg(any(target_os = "horizon", test))]
+mod primitive;
+#[cfg(any(target_os = "horizon", test))]
 mod raster;
 #[cfg(any(target_os = "horizon", test))]
 mod registers;

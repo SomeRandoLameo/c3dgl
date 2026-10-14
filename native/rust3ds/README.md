@@ -71,3 +71,8 @@ uses the exported texture, UV-array, immediate-mode and blending entry points fr
 `c3dgl::raw`, with a persistent VBO checkerboard and a transparent textured triangle.
 Its executable is included in the native dependency audit. Compilation/linking and
 host behavior checks pass; emulator verification for this new consumer is pending.
+
+The build also produces `primitives.3dsx`: six filled primitive modes through
+client arrays, u32-indexed VBOs and immediate vector calls, with culling enabled.
+It is included in executable dependency audits. Its native C counterpart has
+one passing Azahar smoke run; this Cargo consumer has compilation/link verification.

@@ -20,6 +20,7 @@ struct Object {
 
 #[derive(PartialEq, Eq)]
 struct Key {
+    mode: u32,
     vertex: Array,
     color: Option<Array>,
     current_color: [u32; 4],
@@ -153,18 +154,22 @@ impl Arrays {
 
     pub unsafe fn prepare(
         &mut self,
+        mode: u32,
         first: usize,
         count: usize,
         kind: u32,
         indices: usize,
         current_color: [f32; 4],
         current_texcoord: [f32; 4],
-    ) -> Result<(u32, Option<u32>), u32> {
+    ) -> Result<(u32, Option<u32>, u32), u32> {
         if !self.enabled[0] {
             return Err(0x0502);
         }
 
+        let plan = crate::primitive::Plan::new(mode, count)?;
+        let count = plan.consumed;
         let key = Key {
+            mode,
             vertex: self.vertex,
             color: self.enabled[1].then_some(self.color),
             current_color: if self.enabled[1] {
@@ -192,7 +197,7 @@ impl Arrays {
             && (kind == 0 || key.element != 0);
         if persistent {
             if let Some(m) = self.cache.iter().find(|m| m.key == key) {
-                return Ok((m.storage.physical(), m.index_offset));
+                return Ok((m.storage.physical(), m.index_offset, plan.output as u32));
             }
         }
 
@@ -208,6 +213,7 @@ impl Arrays {
             let w = match kind {
                 0x1401 => 1,
                 0x1403 => 2,
+                0x1405 => 4,
                 _ => return Err(0x0500),
             };
 
@@ -217,11 +223,15 @@ impl Arrays {
 
             let mut max = 0;
             for i in 0..count {
-                let n = if w == 1 {
-                    ptr::read(source.add(i)) as u16
-                } else {
-                    ptr::read_unaligned(source.add(i * 2).cast::<u16>())
+                let n = match w {
+                    1 => ptr::read(source.add(i)) as u32,
+                    2 => ptr::read_unaligned(source.add(i * 2).cast::<u16>()) as u32,
+                    _ => ptr::read_unaligned(source.add(i * 4).cast::<u32>()),
                 };
+                if n >= 4096 {
+                    return Err(0x0501);
+                }
+                let n = n as u16;
 
                 max = max.max(n as usize);
                 index_data.push(n);
@@ -234,6 +244,9 @@ impl Arrays {
             return Err(0x0501);
         }
 
+        if mode != 4 {
+            index_data = plan.indices(|i| if kind == 0 { i as u16 } else { index_data[i] })?;
+        }
         let offset = vertex_count * core::mem::size_of::<GpuVertex>();
         let storage = Buffer::new(offset + index_data.len() * 2, false).ok_or(0x0505u32)?;
         for i in 0..vertex_count {
@@ -263,7 +276,7 @@ impl Arrays {
         }
 
         let physical = storage.physical();
-        let index_offset = (kind != 0).then_some(offset as u32 | 0x80000000);
+        let index_offset = (kind != 0 || mode != 4).then_some(offset as u32 | 0x80000000);
         let mesh = Mesh {
             key,
             storage,
@@ -280,7 +293,7 @@ impl Arrays {
             self.retired.push(mesh);
         }
 
-        Ok((physical, index_offset))
+        Ok((physical, index_offset, plan.output as u32))
     }
 }
 
@@ -537,7 +550,7 @@ pub unsafe extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glDrawElements(mode: u32, count: i32, kind: u32, indices: *const c_void) {
-    if !matches!(kind, 0x1401 | 0x1403) {
+    if !matches!(kind, 0x1401 | 0x1403 | 0x1405) {
         crate::renderer::with_matrices(|m| m.fail(0x0500));
 
         return;
@@ -675,5 +688,116 @@ pub(crate) unsafe fn uv_lifecycle() {
     });
     glDeleteBuffers(1, &name);
     glDisableClientState(0x8078);
+    assert_eq!(glGetError(), 0);
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn topology_lifecycle() {
+    use crate::matrix::glGetError;
+    let positions: [[f32; 3]; 5] = [
+        [99.; 3],
+        [-1., -1., 0.],
+        [1., -1., 0.],
+        [1., 1., 0.],
+        [-1., 1., 0.],
+    ];
+    let mut names = [0; 2];
+    glGenBuffers(2, names.as_mut_ptr());
+    glBindBuffer(0x8892, names[0]);
+    glBufferData(0x8892, 60, positions.as_ptr().cast(), 0x88e4);
+    glVertexPointer(3, 0x1406, 12, ptr::null());
+    glEnableClientState(0x8074);
+    glDisableClientState(0x8076);
+    glDisableClientState(0x8078);
+    glDrawArrays(7, 1, 4);
+    let mut old = ptr::null_mut();
+    with_renderer(|r| {
+        let m = r
+            .arrays
+            .cache
+            .iter()
+            .find(|m| m.key.vertex.buffer == names[0] && m.key.mode == 7 && m.key.kind == 0)
+            .unwrap();
+        old = m.storage.pointer;
+        assert_eq!((*old.cast::<GpuVertex>()).position, [-1., -1., 0., 1.]);
+        assert_eq!(
+            core::slice::from_raw_parts(old.add(4 * 48).cast::<u16>(), 6),
+            &[0, 1, 2, 0, 2, 3]
+        );
+    });
+    // The fifth input is incomplete; no access beyond the VBO and no new upload.
+    glDrawArrays(7, 1, 5);
+    with_renderer(|r| {
+        assert_eq!(
+            r.arrays
+                .cache
+                .iter()
+                .find(|m| m.key.vertex.buffer == names[0] && m.key.mode == 7 && m.key.kind == 0)
+                .unwrap()
+                .storage
+                .pointer,
+            old
+        )
+    });
+    glDrawArrays(5, 1, 4);
+    with_renderer(|r| {
+        let m = r
+            .arrays
+            .cache
+            .iter()
+            .find(|m| m.key.vertex.buffer == names[0] && m.key.mode == 5)
+            .unwrap();
+        assert_ne!(m.storage.pointer, old);
+        assert_eq!(
+            core::slice::from_raw_parts(m.storage.pointer.add(4 * 48).cast::<u16>(), 6),
+            &[0, 1, 2, 2, 1, 3]
+        );
+    });
+    let indices = [1u32, 2, 3, 4];
+    glBindBuffer(0x8893, names[1]);
+    glBufferData(0x8893, 16, indices.as_ptr().cast(), 0x88e4);
+    glDrawElements(7, 4, 0x1405, ptr::null());
+    let mut indexed = ptr::null_mut();
+    with_renderer(|r| {
+        let m = r
+            .arrays
+            .cache
+            .iter()
+            .find(|m| m.key.vertex.buffer == names[0] && m.key.kind == 0x1405)
+            .unwrap();
+        indexed = m.storage.pointer;
+        assert_eq!(m.index_offset, Some(5 * 48 | 0x80000000));
+        assert_eq!(
+            core::slice::from_raw_parts(indexed.add(5 * 48).cast::<u16>(), 6),
+            &[1, 2, 3, 1, 3, 4]
+        );
+    });
+    let patch = [4u32, 3, 2, 1];
+    glBufferSubData(0x8893, 0, 16, patch.as_ptr().cast());
+    glDrawElements(7, 4, 0x1405, ptr::null());
+    with_renderer(|r| {
+        let m = r
+            .arrays
+            .cache
+            .iter()
+            .find(|m| m.key.vertex.buffer == names[0] && m.key.kind == 0x1405)
+            .unwrap();
+        assert_ne!(m.storage.pointer, indexed);
+        assert_eq!(
+            core::slice::from_raw_parts(m.storage.pointer.add(5 * 48).cast::<u16>(), 6),
+            &[4, 3, 2, 4, 2, 1]
+        );
+        assert!(r
+            .arrays
+            .retired
+            .iter()
+            .any(|m| m.storage.pointer == indexed));
+    });
+    let invalid = u32::MAX;
+    glBufferSubData(0x8893, 0, 4, (&invalid as *const u32).cast());
+    glDrawElements(7, 4, 0x1405, ptr::null());
+    assert_eq!(glGetError(), 0x0501);
+    glDeleteBuffers(2, names.as_ptr());
+    glDisableClientState(0x8074);
     assert_eq!(glGetError(), 0);
 }

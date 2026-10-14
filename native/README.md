@@ -135,12 +135,13 @@ draw, a zero-size viewport and a subviewport against the C renderer. Use
 ## Vertex arrays and buffer objects
 
 `glVertexPointer`, `glColorPointer`, client-state enable/disable, `glDrawArrays`
-and `glDrawElements` support `GL_TRIANGLES`. Vertex formats are SHORT and FLOAT
+and `glDrawElements` support triangles, triangle strips/fans, quads, quad strips
+and convex polygons. Vertex formats are SHORT and FLOAT
 with 2–4 components; colors support BYTE, UNSIGNED_BYTE, SHORT, UNSIGNED_SHORT
 and FLOAT with 3–4 components. Integer colors are normalized. Disabled color
-arrays supply white. Stride zero means tightly packed. DrawElements accepts
-UNSIGNED_BYTE or UNSIGNED_SHORT and emits a real PICA indexed draw. Incomplete
-trailing triangles are ignored. The converted vertex range is limited to 4096.
+arrays supply the current color (initially white). Stride zero means tightly packed. DrawElements accepts
+UNSIGNED_BYTE, UNSIGNED_SHORT or UNSIGNED_INT and emits a real PICA indexed draw.
+Incomplete trailing primitives are ignored. The converted vertex range is limited to 4096.
 
 `glGenBuffers`, `glBindBuffer`, `glDeleteBuffers`, `glBufferData` and
 `glBufferSubData` implement ARRAY_BUFFER and ELEMENT_ARRAY_BUFFER. Pointer calls
@@ -222,9 +223,9 @@ The C generic primitive path supplies the one FRONT_AND_BACK correctness cell,
 because its indexed path fails to reject both faces; measured draws all remain
 indexed. Run three repetitions for C, C++, rust3ds and the C reference.
 
-Immediate mode supports `glBegin(GL_TRIANGLES)` / `glEnd`, `glVertex2f/3f/4f`,
-`glColor3f/4f` and `glColor4ub`, with at most 4096 vertices per begin/end pair.
-Incomplete trailing triangles are ignored. Colors persist between begin/end pairs
+Immediate mode supports the six filled primitive modes via `glBegin` / `glEnd`,
+`glVertex2f/3f/4f`, their vector forms, `glColor3f/4f`, byte colors and vector forms, with at most 4096 vertices per begin/end pair.
+Incomplete trailing primitives are ignored. Colors persist between begin/end pairs
 and supply the default color when the color array is disabled; VBO cache keys
 include that current color. Matrix, raster and array state changes during a pair
 report `GL_INVALID_OPERATION`. Each completed batch uses its own GPU allocation,
@@ -232,8 +233,8 @@ retained until the next completed frame wait.
 
 `c3dgl_native_immediate.3dsx` is a rotating RGB triangle consumer of this API.
 Host tests verify assembly, errors, per-vertex colors and submitted storage lifetime;
-the complete build check covers its 3DS compilation and linking. Immediate mode
-has not yet been checked in the emulator.
+the complete build check covers its 3DS compilation and linking. The immediate
+path is also covered by the texture and primitive emulator smoke reports.
 
 
 ## Textures and blending
@@ -290,3 +291,31 @@ consumer image comparisons and performance remain pending.
 `c3dgl_native_texture_smoke.3dsx` runs seven deterministic frames and writes
 `sdmc:/c3dgl-texture-smoke-results.txt` plus GPU PPM readbacks, covering texture
 updates, filter/wrap changes, blending and renderer cleanup without interactive input.
+
+
+## Filled primitive compatibility
+
+`GL_TRIANGLES`, `GL_TRIANGLE_STRIP`, `GL_TRIANGLE_FAN`, `GL_QUADS`, `GL_QUAD_STRIP`
+and convex `GL_POLYGON` use shared triangle assembly for arrays, indexed VBOs and
+immediate mode. Strip parity preserves front-face winding, including degenerate
+indices. Quads use a consistent diagonal. Incomplete triangles/quads and the
+last unmatched quad-strip vertex are ignored. Current colors and UVs persist.
+
+New vector APIs are `glVertex2fv/3fv/4fv`, `glColor3fv/4fv`, `glColor3ubv/4ubv`
+and `glTexCoord2fv`; scalar `glColor3ub` is available too. Null vector pointers
+report `GL_INVALID_VALUE`. `GL_UNSIGNED_INT` index input is checked before
+conversion to PICA u16 indices: referenced vertices must remain within the
+existing 4096-vertex limit. No truncation of large u32 values occurs.
+
+Converted topology is cached with the primitive mode, descriptors and index
+source. Unchanged VBO draws reuse both vertices and generated triangle indices;
+updates retire dependent storage until GPU completion. Points, lines, concave
+polygon tessellation and flat shading remain outside this subset.
+
+`c3dgl_native_primitives.3dsx`, its C++ variant and Cargo `primitives.3dsx`
+display the six modes through arrays, indexed VBOs and immediate vector calls.
+`c3dgl_native_primitive_smoke.3dsx` captures and compares those cells automatically.
+The complete build check passes 24 host tests and all consumer/dependency audits.
+One native C Azahar run passes 32 checks, including whole-cell pixel equivalence,
+front-face culling, zero GL errors and complete GPU memory recovery; evidence is
+in `docs/native-results/primitive-step/`. Other consumers have build verification.

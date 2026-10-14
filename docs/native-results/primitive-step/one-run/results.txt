@@ -1,0 +1,33 @@
+PASS present=0 GL=0
+PASS mode=4 path=0 RGB=240,80,40
+PASS mode=5 path=0 RGB=30,200,230
+PASS mode=6 path=0 RGB=240,210,30
+PASS mode=7 path=0 RGB=150,70,220
+PASS mode=8 path=0 RGB=40,210,70
+PASS mode=9 path=0 RGB=230,100,170
+PASS mode=4 path=1 RGB=240,80,40
+PASS mode=5 path=1 RGB=30,200,230
+PASS mode=6 path=1 RGB=240,210,30
+PASS mode=7 path=1 RGB=150,70,220
+PASS mode=8 path=1 RGB=40,210,70
+PASS mode=9 path=1 RGB=230,100,170
+PASS mode=4 path=2 RGB=240,80,40
+PASS mode=5 path=2 RGB=30,200,230
+PASS mode=6 path=2 RGB=240,210,30
+PASS mode=7 path=2 RGB=150,70,220
+PASS mode=8 path=2 RGB=40,210,70
+PASS mode=9 path=2 RGB=230,100,170
+PASS complete cell match mode=4 path=1
+PASS complete cell match mode=5 path=1
+PASS complete cell match mode=6 path=1
+PASS complete cell match mode=7 path=1
+PASS complete cell match mode=8 path=1
+PASS complete cell match mode=9 path=1
+PASS complete cell match mode=4 path=2
+PASS complete cell match mode=5 path=2
+PASS complete cell match mode=6 path=2
+PASS complete cell match mode=7 path=2
+PASS complete cell match mode=8 path=2
+PASS complete cell match mode=9 path=2
+PASS GPU memory recovery linear=31941632/31941632 VRAM=6291456/6291456
+ALL CHECKS PASSED: 32 checks, 0 failures

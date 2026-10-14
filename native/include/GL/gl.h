@@ -125,10 +125,16 @@ void glCullFace(GLenum face);
 void glFrontFace(GLenum front);
 void glGetBooleanv(GLenum pname, GLboolean *out);
 #define GL_TRIANGLES 0x0004
+#define GL_TRIANGLE_STRIP 0x0005
+#define GL_TRIANGLE_FAN 0x0006
+#define GL_QUADS 0x0007
+#define GL_QUAD_STRIP 0x0008
+#define GL_POLYGON 0x0009
 #define GL_BYTE 0x1400
 #define GL_UNSIGNED_BYTE 0x1401
 #define GL_SHORT 0x1402
 #define GL_UNSIGNED_SHORT 0x1403
+#define GL_UNSIGNED_INT 0x1405
 #define GL_FLOAT 0x1406
 #define GL_VERTEX_ARRAY 0x8074
 #define GL_COLOR_ARRAY 0x8076
@@ -178,9 +184,18 @@ void glGetIntegerv(GLenum pname,GLint *out);
 #define GL_STACK_OVERFLOW 0x0503
 #define GL_STACK_UNDERFLOW 0x0504
 GLenum glGetError(void);
-/* Immediate mode currently supports GL_TRIANGLES, up to 4096 vertices. */
+/* Filled triangle/strip/fan/quad/quad-strip/convex polygon batches; up to 4096 vertices. */
 void glBegin(GLenum mode);
 void glEnd(void);
+void glVertex2fv(const GLfloat *v);
+void glVertex3fv(const GLfloat *v);
+void glVertex4fv(const GLfloat *v);
+void glColor3fv(const GLfloat *v);
+void glColor4fv(const GLfloat *v);
+void glColor3ub(GLubyte r, GLubyte g, GLubyte b);
+void glColor3ubv(const GLubyte *v);
+void glColor4ubv(const GLubyte *v);
+void glTexCoord2fv(const GLfloat *v);
 void glVertex2f(GLfloat x, GLfloat y);
 void glVertex3f(GLfloat x, GLfloat y, GLfloat z);
 void glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w);

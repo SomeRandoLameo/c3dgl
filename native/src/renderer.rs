@@ -973,6 +973,7 @@ mod lifecycle_tests {
                 glDrawElements(4, 3, 0x1401, ptr::null());
                 assert_eq!(MOCK.lock().unwrap().allocations, after_textures);
                 glDeleteBuffers(3, names.as_ptr());
+                crate::arrays::topology_lifecycle();
                 assert_eq!(c3dglNativePresent(), 0);
                 // A rejected draw does not poison the next frame.
                 assert_eq!(c3dglNativeBegin(0xff, false), 0);
@@ -980,6 +981,8 @@ mod lifecycle_tests {
                 assert_eq!(c3dglNativePresent(), 0);
                 {
                     use crate::immediate::*;
+                    glVertex3fv(ptr::null());
+                    assert_eq!(glGetError(), 0x0501);
                     glVertex3f(0., 0., 0.);
                     assert_eq!(glGetError(), 0x0502);
                     glBegin(4);
@@ -987,14 +990,14 @@ mod lifecycle_tests {
                     assert_eq!(glGetError(), 0x0502);
                     crate::matrix::glLoadIdentity();
                     assert_eq!(glGetError(), 0x0502);
-                    glColor4ub(255, 0, 0, 255);
+                    glColor4ubv([255, 0, 0, 255].as_ptr());
                     glTexCoord2f(0.25, 0.75);
-                    glVertex2f(-1., -1.);
-                    glColor3f(0., 1., 0.);
+                    glVertex2fv([-1f32, -1.].as_ptr());
+                    glColor3fv([0f32, 1., 0.].as_ptr());
                     glTexCoord2f(0.5, 1.);
-                    glVertex3f(1., -1., 0.);
-                    glColor4f(0., 0., 1., 1.);
-                    glVertex4f(0., 1., 0., 1.);
+                    glVertex3fv([1f32, -1., 0.].as_ptr());
+                    glColor4fv([0f32, 0., 1., 1.].as_ptr());
+                    glVertex4fv([0f32, 1., 0., 1.].as_ptr());
                     glEnd();
                     assert_eq!(glGetError(), 0);
                     with_immediate(|r| {
@@ -1049,8 +1052,9 @@ pub(crate) unsafe fn with_renderer(f: impl FnOnce(&mut Renderer)) {
 pub(crate) unsafe fn end_immediate() {
     with_immediate(|r| {
         let result = (|| -> Result<(), u32> {
-            let vertices = r.immediate.end()?;
-            if vertices.is_empty() {
+            let batch = r.immediate.end()?;
+            let vertices = batch.vertices;
+            if batch.count == 0 {
                 return Ok(());
             }
             if !r.active && begin_frame(r, true, None) != 0 {
@@ -1061,15 +1065,27 @@ pub(crate) unsafe fn end_immediate() {
             }
             r.transient.try_reserve(1).map_err(|_| 0x0505u32)?;
             let bytes = vertices.len() * core::mem::size_of::<GpuVertex>();
-            let storage = Buffer::new(bytes, false).ok_or(0x0505u32)?;
+            let total = bytes + batch.indices.len() * 2;
+            let storage = Buffer::new(total, false).ok_or(0x0505u32)?;
             ptr::copy_nonoverlapping(vertices.as_ptr().cast::<u8>(), storage.pointer, bytes);
-            if p::c3dglPlatformFlush(storage.pointer, bytes as u32) < 0 {
+            ptr::copy_nonoverlapping(
+                batch.indices.as_ptr().cast::<u8>(),
+                storage.pointer.add(bytes),
+                batch.indices.len() * 2,
+            );
+            if p::c3dglPlatformFlush(storage.pointer, total as u32) < 0 {
                 return Err(0x0502);
             }
             update_draw_state(r).map_err(|_| 0x0505u32)?;
             let mut c = r.commands();
-            gpu::geometry(&mut c, storage.physical(), 0, vertices.len() as u32, None)
-                .map_err(|_| 0x0505u32)?;
+            gpu::geometry(
+                &mut c,
+                storage.physical(),
+                0,
+                batch.count,
+                (!batch.indices.is_empty()).then_some(bytes as u32 | 0x80000000),
+            )
+            .map_err(|_| 0x0505u32)?;
             r.used = c.used;
             r.transient.push(storage);
             r.frame.textures.sampled();
@@ -1085,19 +1101,16 @@ pub(crate) unsafe fn end_immediate() {
 pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, indices: usize) {
     with_renderer(|r| {
         let result = (|| -> Result<(), u32> {
-            if mode != 4 {
-                return Err(0x0500);
-            }
-
             if first < 0 || count < 0 {
                 return Err(0x0501);
             }
 
-            if kind != 0 && !matches!(kind, 0x1401 | 0x1403) {
+            if kind != 0 && !matches!(kind, 0x1401 | 0x1403 | 0x1405) {
                 return Err(0x0500);
             }
 
-            let count = count as usize / 3 * 3;
+            let plan = crate::primitive::Plan::new(mode, count as usize)?;
+            let count = plan.consumed;
             if count == 0 {
                 return Ok(());
             }
@@ -1110,7 +1123,8 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                 return Ok(());
             }
 
-            let (address, index) = r.arrays.prepare(
+            let (address, index, draw_count) = r.arrays.prepare(
+                mode,
                 first as usize,
                 count,
                 kind,
@@ -1120,7 +1134,7 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
             )?;
             update_draw_state(r).map_err(|_| 0x0505u32)?;
             let mut c = r.commands();
-            gpu::geometry(&mut c, address, 0, count as u32, index).map_err(|_| 0x0505u32)?;
+            gpu::geometry(&mut c, address, 0, draw_count, index).map_err(|_| 0x0505u32)?;
             r.used = c.used;
             r.frame.textures.sampled();
             r.draws += 1;

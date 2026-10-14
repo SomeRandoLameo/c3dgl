@@ -117,3 +117,10 @@ is zero. Its extra memory assertion used an uninitialized VRAM baseline; the
 original failed assertion is retained and the corrected harness was rebuilt
 without a second emulator launch. This does not complete repeated performance
 or independent C++/Rust consumer gates.
+
+Filled primitive compatibility now supports triangle strips/fans, quads, quad
+strips and convex polygons across client arrays, indexed VBOs and immediate mode,
+plus float/color/UV vector calls and validated u32 index inputs. All 24 host tests
+and C/C++/rust3ds builds pass. One native C Azahar run passes 32 checks, including
+complete cell comparisons and memory recovery; see `native-results/primitive-step/`.
+Independent consumer comparisons and performance gates remain separate.
