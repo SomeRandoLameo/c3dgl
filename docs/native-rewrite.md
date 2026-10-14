@@ -405,3 +405,22 @@ GL_*_SWAP_BYTES and GL_*_LSB_FIRST can only be set to false and report GL_INVALI
 otherwise. Mesa GLU's `gluBuild1DMipmaps` and `gluBuild2DMipmaps` run on it: the original glu
 example pages (`glu0`, `glu1`, `glu2`) and all 19 earlier scenes match the C framebuffer
 exactly (`native-results/glu-step/`). Host tests: 54 pass.
+
+
+## Stipple checkpoint
+
+`glLineStipple`, `glPolygonStipple`, `glGetPolygonStipple` and `GL_LINE_STIPPLE` /
+`GL_POLYGON_STIPPLE` (enable, queries, attrib groups, display lists; the pattern unpacks like a
+32x32 glBitmap with the unpack state). Line stipple runs while lines are expanded: the pattern
+position counts fragments along the major axis, carries over from segment to segment and restarts
+for every `GL_LINES` pair, strip, loop and polygon outline; each run of lit fragments becomes a
+quad (positions interpolate with the unclamped parameter, attributes with the clamped one, as the
+C renderer does). Polygon stipple samples the pattern as a 32x32 A8 texture on PICA unit 0 in
+projection mode (the vertex shader gets a `stipple` branch: texcoord 0 is the window position / 32
+times w, GL units 0 and 1 move to texcoords 1 and 2), and TexEnv stage 3 gives the fragments
+outside the pattern an alpha that fails the alpha test (`stipple::alpha_test`). It applies to
+filled polygons only; with texture unit 2 sampled, or `glAlphaFunc(GL_NOTEQUAL)` with a reference
+between 1 and 254, the draw is not exact and reports GL_INVALID_OPERATION. The original stipple
+example keeps `createTexture()`, `setupScene()` and `drawFrame()` (extracted unchanged): its first
+frame and all 22 earlier scenes match the C framebuffer exactly (`native-results/stipple-step/`).
+Host tests: 54 pass.

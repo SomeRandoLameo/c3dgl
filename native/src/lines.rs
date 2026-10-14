@@ -268,8 +268,10 @@ fn stippled(
             let u0 = (k0 + k as f32).max(ua - cap_u);
             let u1 = (k0 + run as f32).min(ub + cap_u);
             let (t0, t1) = ((u0 - ua) / (ub - ua), (u1 - ua) / (ub - ua));
-            let (t0, t1) = (t0.clamp(0., 1.), t1.clamp(0., 1.));
-            let (va, vb) = (lerp(a, b, t0), lerp(a, b, t1));
+            // The attributes interpolate within the line, the position at the run's own ends
+            // (which reach into the square caps).
+            let (c0, c1) = (t0.clamp(0., 1.), t1.clamp(0., 1.));
+            let (va, vb) = (lerp(a, b, c0), lerp(a, b, c1));
             let p0: [f32; 3] = core::array::from_fn(|i| pa[i] + (pb[i] - pa[i]) * t0);
             let p1: [f32; 3] = core::array::from_fn(|i| pa[i] + (pb[i] - pa[i]) * t1);
             quad(
