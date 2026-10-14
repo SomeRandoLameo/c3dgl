@@ -287,3 +287,19 @@ framebuffer exactly, as do the eleven selected original scenes
 lines, point sprites/attenuation/size arrays, edge-flag arrays, evaluated normals
 (no lighting yet), two-sided lighting, user clip planes, scissored `glClear` and the
 remaining examples. Host tests: 40 pass.
+
+
+## Lighting and attribute stack checkpoint
+
+CPU vertex lighting (lights, materials, color material, light model, two-sided
+lighting with back colors, normalization/rescaling, spot cones, local viewer) is ported
+from the C renderer and uses libm `powf`/`cosf`/`sqrtf` like it does. Normals come from
+`glNormal*`, `glNormalPointer` or evaluators; lit vertices bypass the persistent mesh
+cache. `glPushAttrib/glPopAttrib` and `glPushClientAttrib/glPopClientAttrib` snapshot the
+implemented state and restore the pushed groups (current, point, line, polygon, lighting,
+depth buffer, viewport, transform, enable, color buffer, eval, texture, scissor, client
+vertex arrays and pixel store). The unchanged cells of the original lighting main loop
+match the C framebuffer exactly, as do the eleven earlier scenes
+(`native-results/lighting-step/`, one run each). New state of later features (fog,
+stencil, clip planes, stipple, pixel state, lists) must join the snapshot when added.
+Host tests: 44 pass.

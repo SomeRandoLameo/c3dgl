@@ -41,13 +41,27 @@ struct Mesh {
     index_offset: Option<u32>,
 }
 
+/// What glPushClientAttrib keeps of the vertex arrays.
+#[derive(Clone, Copy)]
+pub(crate) struct ArraysSave {
+    vertex: Array,
+    color: Array,
+    texcoord: Array,
+    extra_texcoords: [Array; 2],
+    normal: Array,
+    enabled: [bool; 6],
+    bound: [u32; 2],
+    client_active: usize,
+}
+
 pub(crate) struct Arrays {
     vertex: Array,
     color: Array,
     texcoord: Array,
     extra_texcoords: [Array; 2],
+    normal: Array,
     pub client_active: usize,
-    enabled: [bool; 5],
+    enabled: [bool; 6],
     bound: [u32; 2],
     next: u32,
     objects: Vec<Object>,
@@ -62,8 +76,9 @@ impl Arrays {
             color: Array::default(),
             texcoord: Array::default(),
             extra_texcoords: [Array::default(); 2],
+            normal: Array::default(),
             client_active: 0,
-            enabled: [false; 5],
+            enabled: [false; 6],
             bound: [0; 2],
             next: 1,
             objects: Vec::new(),
@@ -91,6 +106,45 @@ impl Arrays {
                 i += 1;
             }
         }
+    }
+
+    pub fn save(&self) -> ArraysSave {
+        ArraysSave {
+            vertex: self.vertex,
+            color: self.color,
+            texcoord: self.texcoord,
+            extra_texcoords: self.extra_texcoords,
+            normal: self.normal,
+            enabled: self.enabled,
+            bound: self.bound,
+            client_active: self.client_active,
+        }
+    }
+
+    /// Buffers deleted since the save are not bound again (their arrays are cleared).
+    pub fn restore(&mut self, s: &ArraysSave) {
+        let exists = |name: u32| name == 0 || self.objects.iter().any(|o| o.name == name);
+        let fix = |a: Array, exists: &dyn Fn(u32) -> bool| {
+            if exists(a.buffer) {
+                a
+            } else {
+                Array::default()
+            }
+        };
+        self.vertex = fix(s.vertex, &exists);
+        self.color = fix(s.color, &exists);
+        self.texcoord = fix(s.texcoord, &exists);
+        self.extra_texcoords = [
+            fix(s.extra_texcoords[0], &exists),
+            fix(s.extra_texcoords[1], &exists),
+        ];
+        self.normal = fix(s.normal, &exists);
+        self.enabled = s.enabled;
+        self.bound = [
+            if exists(s.bound[0]) { s.bound[0] } else { 0 },
+            if exists(s.bound[1]) { s.bound[1] } else { 0 },
+        ];
+        self.client_active = s.client_active;
     }
 
     /// Unit 0 reads four texcoord components per vertex: q is in use.
@@ -145,6 +199,8 @@ impl Arrays {
                 0x1401 => ptr::read(q) as f32,
                 0x1402 => ptr::read_unaligned(q.cast::<i16>()) as f32,
                 0x1403 => ptr::read_unaligned(q.cast::<u16>()) as f32,
+                0x1404 => ptr::read_unaligned(q.cast::<i32>()) as f32,
+                0x1405 => ptr::read_unaligned(q.cast::<u32>()) as f32,
                 _ => return Err(0x0500),
             };
 
@@ -167,6 +223,7 @@ impl Arrays {
     }
 
     /// The vertices of a draw in drawing order (indices resolved), for CPU-side expansion.
+    /// Normals are read in the same order (the current normal without a normal array).
     pub unsafe fn gather(
         &self,
         first: usize,
@@ -176,7 +233,8 @@ impl Arrays {
         current_color: [f32; 4],
         current_texcoord: [f32; 4],
         extra_current: [[f32; 4]; 2],
-    ) -> Result<Vec<GpuVertex>, u32> {
+        current_normal: [f32; 3],
+    ) -> Result<(Vec<GpuVertex>, Vec<[f32; 3]>), u32> {
         if !self.enabled[0] {
             return Err(0x0502);
         }
@@ -200,7 +258,9 @@ impl Arrays {
             )?
         };
         let mut out = Vec::new();
+        let mut normals = Vec::new();
         out.try_reserve_exact(count).map_err(|_| 0x0505u32)?;
+        normals.try_reserve_exact(count).map_err(|_| 0x0505u32)?;
         for i in 0..count {
             let n = match w {
                 0 => first + i,
@@ -217,6 +277,11 @@ impl Arrays {
                     extra[unit] = self.value(self.extra_texcoords[unit], n, false)?;
                 }
             }
+            normals.push(if self.enabled[5] {
+                self.normal_value(n)?
+            } else {
+                current_normal
+            });
             out.push(GpuVertex {
                 position: self.value(self.vertex, n, false)?,
                 color: if self.enabled[1] {
@@ -232,6 +297,37 @@ impl Arrays {
                 },
                 extra_texcoords: extra,
             });
+        }
+        Ok((out, normals))
+    }
+
+    /// Element `index` of the normal array: signed integers map to [-1, 1] like glColor.
+    unsafe fn normal_value(&self, index: usize) -> Result<[f32; 3], u32> {
+        let a = self.normal;
+        let width = width(a.kind).ok_or(0x0500u32)?;
+        let step = if a.stride == 0 { 3 * width } else { a.stride };
+        let offset = index
+            .checked_mul(step)
+            .and_then(|n| n.checked_add(a.pointer))
+            .ok_or(0x0502u32)?;
+        let source = self.source(a.buffer, offset, 3 * width)?;
+        let mut out = [0.; 3];
+        for (i, v) in out.iter_mut().enumerate() {
+            let q = source.add(i * width);
+            *v = match a.kind {
+                0x1406 => ptr::read_unaligned(q.cast::<f32>()),
+                0x140a => ptr::read_unaligned(q.cast::<f64>()) as f32,
+                0x140c => ptr::read_unaligned(q.cast::<i32>()) as f32 * (1. / 65536.),
+                0x1400 => (2. * ptr::read(q.cast::<i8>()) as f32 + 1.) / 255.,
+                0x1402 => (2. * ptr::read_unaligned(q.cast::<i16>()) as f32 + 1.) / 65535.,
+                0x1404 => {
+                    ((2. * ptr::read_unaligned(q.cast::<i32>()) as f64 + 1.) / 4294967295.) as f32
+                }
+                _ => return Err(0x0500),
+            };
+            if !v.is_finite() {
+                return Err(0x0501);
+            }
         }
         Ok(out)
     }
@@ -405,7 +501,7 @@ fn width(kind: u32) -> Option<usize> {
     match kind {
         0x1400 | 0x1401 => Some(1),
         0x1402 | 0x1403 => Some(2),
-        0x1406 | 0x140c => Some(4),
+        0x1404 | 0x1405 | 0x1406 | 0x140c => Some(4),
         0x140a => Some(8),
         _ => None,
     }
@@ -444,9 +540,31 @@ pub unsafe extern "C" fn glColorPointer(size: i32, kind: u32, stride: i32, point
     pointer_set(true, size, kind, stride, pointer);
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn glNormalPointer(kind: u32, stride: i32, pointer: *const c_void) {
+    api!(|a: &mut Arrays| {
+        if !matches!(kind, 0x1400 | 0x1402 | 0x1404 | 0x1406 | 0x140a | 0x140c) {
+            return Err(0x0500);
+        }
+        if stride < 0 {
+            return Err(0x0501);
+        }
+        a.normal = Array {
+            size: 3,
+            kind,
+            stride: stride as usize,
+            pointer: pointer as usize,
+            buffer: a.bound[0],
+        };
+        Ok(())
+    });
+}
+
 unsafe fn pointer_set(color: bool, size: i32, kind: u32, stride: i32, pointer: *const c_void) {
     api!(|a: &mut Arrays| {
-        if width(kind).is_none() || (!color && !matches!(kind, 0x1402 | 0x1406)) {
+        if width(kind).is_none()
+            || (!color && !matches!(kind, 0x1400 | 0x1402 | 0x1404 | 0x1406 | 0x140a | 0x140c))
+        {
             return Err(0x0500);
         }
 
@@ -477,6 +595,7 @@ unsafe fn enable(state: u32, on: bool) {
         let i = match state {
             0x8074 => 0,
             0x8076 => 1,
+            0x8075 => 5,
             0x8078 => 2 + a.client_active,
             _ => return Err(0x0500),
         };

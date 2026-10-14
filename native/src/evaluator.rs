@@ -44,7 +44,40 @@ pub(crate) struct Evaluated {
     pub texcoord: Option<[f32; 4]>,
 }
 
+/// What glPushAttrib keeps: map enables, auto-normal and the grids.
+#[derive(Clone, Copy)]
+pub(crate) struct EvalSave {
+    map1: [bool; 9],
+    map2: [bool; 9],
+    auto_normal: bool,
+    grid1: (i32, f32, f32),
+    grid2: (i32, f32, f32, i32, f32, f32),
+}
+
 impl Evaluators {
+    pub fn save(&self) -> EvalSave {
+        EvalSave {
+            map1: core::array::from_fn(|i| self.map1[i].enabled),
+            map2: core::array::from_fn(|i| self.map2[i].enabled),
+            auto_normal: self.auto_normal,
+            grid1: self.grid1,
+            grid2: self.grid2,
+        }
+    }
+
+    pub fn restore_enables(&mut self, s: &EvalSave) {
+        for i in 0..9 {
+            self.map1[i].enabled = s.map1[i];
+            self.map2[i].enabled = s.map2[i];
+        }
+        self.auto_normal = s.auto_normal;
+    }
+
+    pub fn restore_grids(&mut self, s: &EvalSave) {
+        self.grid1 = s.grid1;
+        self.grid2 = s.grid2;
+    }
+
     pub fn new() -> Self {
         Self {
             map1: core::array::from_fn(|_| Map::default()),
@@ -188,9 +221,7 @@ unsafe fn submit(r: &mut crate::renderer::Renderer, e: Evaluated) {
     if e.texcoord.is_some_and(|t| t[3] != 1.) {
         r.frame.textures.mark_q();
     }
-    if let Err(code) = r.immediate.vertex_with(e.position, e.color, e.texcoord) {
-        r.matrices.fail(code);
-    }
+    crate::renderer::emit_vertex(r, e.position, e.color, e.texcoord);
 }
 
 unsafe fn eval_coord1(u: f32) {

@@ -162,6 +162,22 @@ unsafe fn enable(cap: u32, on: bool) {
         return;
     }
 
+    if matches!(cap, 0x0b50 | 0x4000..=0x4007 | 0x0b57 | 0x0ba1 | 0x803a) {
+        crate::renderer::with_immediate(|r| {
+            if r.immediate.active {
+                r.matrices.fail(0x0502);
+                return;
+            }
+            let current = r
+                .immediate
+                .color
+                .map(crate::immediate::gpu_color_component)
+                .map(|c| c as u8);
+            r.frame.light.set_enabled(cap, on, current);
+        });
+        return;
+    }
+
     if matches!(cap, 0x0d80 | 0x0d90..=0x0d98 | 0x0db0..=0x0db8) {
         with_frame(|s, _| {
             s.eval.set_enabled(cap, on);

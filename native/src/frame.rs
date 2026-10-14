@@ -8,6 +8,7 @@ pub const COLOR: u32 = 0x4000;
 pub const DEPTH: u32 = 0x0100;
 
 /// Polygon state handled on the CPU (see polygon.rs).
+#[derive(Clone, Copy)]
 pub struct PolyState {
     pub flat: bool,
     pub modes: [u32; 2],
@@ -17,6 +18,7 @@ pub struct PolyState {
 }
 
 pub struct FrameState {
+    pub light: crate::lighting::Lighting,
     pub eval: crate::evaluator::Evaluators,
     pub poly: PolyState,
     pub raster: crate::raster::Raster,
@@ -33,6 +35,7 @@ pub struct FrameState {
 impl FrameState {
     pub fn new() -> Self {
         Self {
+            light: crate::lighting::Lighting::new(),
             eval: crate::evaluator::Evaluators::new(),
             poly: PolyState {
                 flat: false,
@@ -169,6 +172,9 @@ pub unsafe extern "C" fn glClear(mask: u32) {
 }
 
 fn query(s: &FrameState, m: &Matrices, pname: u32) -> Option<([f64; 16], usize)> {
+    if let Some(v) = s.light.query(pname) {
+        return Some(v);
+    }
     if let Some(v) = s.textures.query(pname) {
         return Some(v);
     }

@@ -98,6 +98,7 @@ pub(crate) struct Renderer {
     stats: Stats,
     error: i32,
     /// The GPU currently holds the clip-space state (identity matrix, no culling).
+    pub(crate) stacks: crate::attrib::Stacks,
     clip_applied: bool,
     /// Polygon offset folded into the uploaded matrix.
     bias_applied: f32,
@@ -255,6 +256,7 @@ impl Renderer {
         core::ptr::addr_of_mut!((*slot).draws).write(0);
         core::ptr::addr_of_mut!((*slot).stats).write(Stats::default());
         core::ptr::addr_of_mut!((*slot).error).write(0);
+        core::ptr::addr_of_mut!((*slot).stacks).write(crate::attrib::Stacks::default());
         core::ptr::addr_of_mut!((*slot).clip_applied).write(false);
         core::ptr::addr_of_mut!((*slot).bias_applied).write(0.);
         Some(alloc::boxed::Box::from_raw(slot))
@@ -1118,6 +1120,55 @@ pub(crate) unsafe fn with_renderer(f: impl FnOnce(&mut Renderer)) {
     });
 }
 
+/// Submit one immediate-mode vertex: lighting turns the current color into the lit front color
+/// (and the back color with two-sided lighting). `color`/`texcoord` override the current ones.
+pub(crate) unsafe fn emit_vertex(
+    r: &mut Renderer,
+    position: [f32; 4],
+    color: Option<[f32; 4]>,
+    texcoord: Option<[f32; 4]>,
+) {
+    let mut gpu = color
+        .unwrap_or(r.immediate.color)
+        .map(crate::immediate::gpu_color_component);
+    let mut back = None;
+    if r.frame.light.enabled {
+        let mv = r.matrices.modelview();
+        let bytes = gpu.map(|c| c as u8);
+        let (front, b) = r
+            .frame
+            .light
+            .light_vertex(&mv, position, r.immediate.normal, bytes);
+        gpu = front.map(|c| c as f32);
+        back = b.map(|b| b.map(|c| c as f32));
+    }
+    if let Err(e) = r.immediate.push(position, gpu, back, texcoord) {
+        r.matrices.fail(e);
+    }
+}
+
+/// Light every vertex of a draw in place; the back colors with two-sided lighting (else empty).
+unsafe fn light_vertices(
+    r: &mut Renderer,
+    vertices: &mut [GpuVertex],
+    normals: &[[f32; 3]],
+) -> alloc::vec::Vec<[f32; 4]> {
+    let mut backs = alloc::vec::Vec::new();
+    if !r.frame.light.enabled {
+        return backs;
+    }
+    let mv = r.matrices.modelview();
+    for (v, n) in vertices.iter_mut().zip(normals) {
+        let bytes = v.color.map(|c| c as u8);
+        let (front, back) = r.frame.light.light_vertex(&mv, v.position, *n, bytes);
+        v.color = front.map(|c| c as f32);
+        if let Some(b) = back {
+            backs.push(b.map(|c| c as f32));
+        }
+    }
+    backs
+}
+
 fn line_style(r: &Renderer) -> crate::lines::Style {
     crate::lines::Style {
         pmv: r.matrices.combined(),
@@ -1131,6 +1182,7 @@ fn poly_settings(r: &Renderer) -> crate::polygon::Settings {
     let (poly, raster) = (&r.frame.poly, &r.frame.raster);
     crate::polygon::Settings {
         flat: poly.flat,
+        two_sided: r.frame.light.enabled && r.frame.light.two_side,
         modes: poly.modes,
         offset: poly.offset,
         factor: poly.factor,
@@ -1238,6 +1290,7 @@ pub(crate) unsafe fn end_immediate() {
                 let items = crate::polygon::assemble(
                     batch.primitive,
                     &batch.vertices,
+                    &batch.backs,
                     &batch.edges,
                     &settings,
                 )?;
@@ -1286,8 +1339,10 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                 r.frame.textures.mark_q();
             }
 
-            if mode < 4 {
-                let source = r.arrays.gather(
+            let settings = poly_settings(r);
+            let lit = r.frame.light.enabled;
+            if mode < 4 || lit || settings.needed() {
+                let (mut source, normals) = r.arrays.gather(
                     first as usize,
                     count,
                     kind,
@@ -1295,29 +1350,31 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                     r.immediate.color,
                     r.immediate.texcoord,
                     r.immediate.extra_texcoords,
+                    r.immediate.normal,
                 )?;
-                let (vertices, tris) =
-                    crate::lines::expand(mode, &source, &line_style(r), r.frame.poly.flat)?;
-                if tris.is_empty() {
+                let backs = light_vertices(r, &mut source, &normals);
+                if mode < 4 {
+                    let (vertices, tris) =
+                        crate::lines::expand(mode, &source, &line_style(r), r.frame.poly.flat)?;
+                    if tris.is_empty() {
+                        return Ok(());
+                    }
+                    return draw_transient(r, &vertices, &tris, tris.len() as u32, true, 0.);
+                }
+                if settings.needed() {
+                    let edges = alloc::vec![true; source.len()];
+                    let items = crate::polygon::assemble(mode, &source, &backs, &edges, &settings)?;
+                    return draw_items(r, items);
+                }
+                if !r.frame.raster.drawable() {
                     return Ok(());
                 }
-                return draw_transient(r, &vertices, &tris, tris.len() as u32, true, 0.);
-            }
-
-            let settings = poly_settings(r);
-            if settings.needed() {
-                let source = r.arrays.gather(
-                    first as usize,
-                    count,
-                    kind,
-                    indices,
-                    r.immediate.color,
-                    r.immediate.texcoord,
-                    r.immediate.extra_texcoords,
-                )?;
-                let edges = alloc::vec![true; source.len()];
-                let items = crate::polygon::assemble(mode, &source, &edges, &settings)?;
-                return draw_items(r, items);
+                // Lit vertices are drawn as an indexed triangle list.
+                let tris =
+                    crate::primitive::Plan::new(mode, source.len())?.indices(|i| i as u16)?;
+                let count = if mode == 4 { source.len() } else { tris.len() };
+                let indices = if mode == 4 { &[][..] } else { &tris[..] };
+                return draw_transient(r, &source, indices, count as u32, false, 0.);
             }
 
             if !r.frame.raster.drawable() {

@@ -6,6 +6,8 @@ pub(crate) struct Batch {
     pub vertices: Vec<GpuVertex>,
     pub indices: Vec<u16>,
     pub edges: Vec<bool>,
+    /// Back colors (two-sided lighting), or empty.
+    pub backs: Vec<[f32; 4]>,
     pub count: u32,
     /// GL mode of the batch; modes below 4 (points, lines) carry raw vertices for expansion.
     pub primitive: u32,
@@ -17,9 +19,12 @@ pub(crate) struct Immediate {
     pub texcoord: [f32; 4],
     pub extra_texcoords: [[f32; 4]; 2],
     pub edge: bool,
+    pub normal: [f32; 3],
     mode: u32,
     vertices: Vec<GpuVertex>,
     edges: Vec<bool>,
+    /// Back colors of two-sided lighting, parallel to `vertices` (empty without it).
+    backs: Vec<[f32; 4]>,
 }
 
 impl Immediate {
@@ -30,9 +35,11 @@ impl Immediate {
             texcoord: [0., 0., 0., 1.],
             extra_texcoords: [[0., 0., 0., 1.]; 2],
             edge: true,
+            normal: [0., 0., 1.],
             mode: 4,
             vertices: Vec::new(),
             edges: Vec::new(),
+            backs: Vec::new(),
         }
     }
 
@@ -48,6 +55,7 @@ impl Immediate {
             .map_err(|_| 0x0505u32)?;
         self.vertices.clear();
         self.edges.clear();
+        self.backs.clear();
         self.active = true;
         self.mode = mode;
 
@@ -65,6 +73,18 @@ impl Immediate {
         color: Option<[f32; 4]>,
         texcoord: Option<[f32; 4]>,
     ) -> Result<(), u32> {
+        let color = color.unwrap_or(self.color).map(gpu_color_component);
+        self.push(position, color, None, texcoord)
+    }
+
+    /// A vertex with its final (possibly lit) GPU color bytes and optional back color.
+    pub fn push(
+        &mut self,
+        position: [f32; 4],
+        color: [f32; 4],
+        back: Option<[f32; 4]>,
+        texcoord: Option<[f32; 4]>,
+    ) -> Result<(), u32> {
         if !self.active {
             return Err(0x0502);
         }
@@ -74,9 +94,12 @@ impl Immediate {
         }
 
         self.edges.push(self.edge);
+        if let Some(back) = back {
+            self.backs.push(back);
+        }
         self.vertices.push(GpuVertex {
             position,
-            color: color.unwrap_or(self.color).map(gpu_color_component),
+            color,
             texcoord: texcoord.unwrap_or(self.texcoord),
             extra_texcoords: self.extra_texcoords,
         });
@@ -93,8 +116,10 @@ impl Immediate {
         let plan = crate::primitive::Plan::new(self.mode, self.vertices.len())?;
         self.vertices.truncate(plan.consumed);
         self.edges.truncate(plan.consumed);
+        self.backs.truncate(plan.consumed);
         let vertices = core::mem::take(&mut self.vertices);
         let edges = core::mem::take(&mut self.edges);
+        let backs = core::mem::take(&mut self.backs);
         let indices = if self.mode <= 4 {
             Vec::new()
         } else {
@@ -105,6 +130,7 @@ impl Immediate {
             vertices,
             indices,
             edges,
+            backs,
             count: if self.mode < 4 {
                 plan.consumed as u32
             } else {
@@ -131,11 +157,7 @@ pub unsafe extern "C" fn glEnd() {
 
 #[no_mangle]
 pub unsafe extern "C" fn glVertex4f(x: f32, y: f32, z: f32, w: f32) {
-    with_immediate(|r| {
-        if let Err(e) = r.immediate.vertex([x, y, z, w]) {
-            r.matrices.fail(e);
-        }
-    });
+    with_immediate(|r| crate::renderer::emit_vertex(r, [x, y, z, w], None, None));
 }
 
 #[no_mangle]
@@ -273,6 +295,42 @@ mod tests {
         }
         assert_eq!(s.vertex([0.; 4]), Err(0x0505));
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glNormal3f(x: f32, y: f32, z: f32) {
+    with_immediate(|r| r.immediate.normal = [x, y, z]);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glNormal3fv(v: *const f32) {
+    if let Some(n) = vector::<f32, 3>(v) {
+        glNormal3f(n[0], n[1], n[2]);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glNormal3d(x: f64, y: f64, z: f64) {
+    glNormal3f(x as f32, y as f32, z as f32);
+}
+
+/// Signed integers map to [-1, 1] like glColor: (2c + 1) / (2^b - 1).
+#[no_mangle]
+pub unsafe extern "C" fn glNormal3b(x: i8, y: i8, z: i8) {
+    let f = |c: i8| (2. * c as f32 + 1.) / 255.;
+    glNormal3f(f(x), f(y), f(z));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glNormal3s(x: i16, y: i16, z: i16) {
+    let f = |c: i16| (2. * c as f32 + 1.) / 65535.;
+    glNormal3f(f(x), f(y), f(z));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glNormal3i(x: i32, y: i32, z: i32) {
+    let f = |c: i32| ((2. * c as f64 + 1.) / 4294967295.) as f32;
+    glNormal3f(f(x), f(y), f(z));
 }
 
 #[no_mangle]

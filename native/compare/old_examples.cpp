@@ -25,6 +25,9 @@
 #else
 #define CASE "texture"
 #endif
+#elif defined(C3DGL_OLD_LIGHTING)
+#include "../../examples/lighting/main.cpp"
+#define CASE "lighting"
 #else
 #include "../../examples/cube/main.cpp"
 #ifdef C3DGL_OLD_OVERLAY
@@ -91,6 +94,17 @@ int main() {
     const GLuint tex=createF(16);drawTexcoordPage(tex);
 #elif defined(C3DGL_OLD_TEXTURE)
     const GLuint tex=createF(16);drawCell(0,0,tex);
+#elif defined(C3DGL_OLD_LIGHTING)
+    // The cells of the original main loop, call for call
+    const GLuint tex=0;const Sphere sphere=createSphere(24,16);
+    beginCell(0,0);drawDiffuse(sphere);endCell();
+    beginCell(1,0);drawSpecular(sphere);endCell();
+    beginCell(2,0);drawPointLight();endCell();
+    beginCell(3,0);drawSpotLight();endCell();
+    beginCell(0,1);drawThreeLights(sphere);endCell();
+    beginCell(1,1);drawColorMaterial(sphere);endCell();
+    beginCell(2,1);drawTwoSided();endCell();
+    beginCell(3,1);drawFlatScaled(sphere);endCell();
 #elif defined(C3DGL_OLD_OVERLAY)
     const GLuint tex=0;drawOverlay();
 #else

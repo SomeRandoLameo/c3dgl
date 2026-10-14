@@ -14,6 +14,8 @@ const CLIP_W_MIN: f32 = 1e-5;
 
 pub(crate) struct Settings {
     pub flat: bool,
+    /// Two-sided lighting: back-facing polygons take the back colors.
+    pub two_sided: bool,
     /// Front and back polygon mode.
     pub modes: [u32; 2],
     /// glPolygonOffset enable for fill, line and point.
@@ -35,6 +37,7 @@ impl Settings {
     /// Does anything require polygons to be assembled on the CPU?
     pub fn needed(&self) -> bool {
         self.flat
+            || self.two_sided
             || self.modes_active()
             || ((self.factor != 0. || self.units != 0.) && self.offset.iter().any(|o| *o))
     }
@@ -150,18 +153,23 @@ impl Builder<'_> {
         }
     }
 
-    /// A polygon (triangle, quad, polygon) with edge flags: filled, outlined or as vertices
-    /// depending on the polygon mode of the side facing the viewer. `pv`: flat shading vertex.
+    /// A polygon (triangle, quad, polygon) of the vertices `idx` of `src` with edge flags:
+    /// filled, outlined or as vertices depending on the polygon mode of the side facing the
+    /// viewer. `pv`: flat shading vertex.
     fn polygon(
         &mut self,
-        vs: &[GpuVertex],
+        src: &Src,
+        idx: &[usize],
         edges: &[bool],
-        pv: Option<&GpuVertex>,
+        pv: Option<usize>,
     ) -> Result<(), u32> {
         let s = self.s;
-        let n = vs.len();
+        let n = idx.len();
+        let vs: Vec<GpuVertex> = idx.iter().map(|i| src.v[*i]).collect();
+        let two_sided = !src.backs.is_empty();
         let active = s.modes_active();
-        let front = !active || (area(s, vs) > 0.) == s.front_ccw;
+        let front = !(active || two_sided) || (area(s, &vs) > 0.) == s.front_ccw;
+        let back = two_sided && !front;
         let mode = if active {
             // Outlines and vertices are drawn in NDC: the GPU cannot cull them.
             if s.cull && (s.cull_face == 0x0408 || (s.cull_face == 0x0404) == front) {
@@ -178,21 +186,25 @@ impl Builder<'_> {
         };
         let range = s.range[1] - s.range[0];
         let window = if offset && range != 0. {
-            polygon_offset(s, vs) / range
+            polygon_offset(s, &vs) / range
         } else {
             0.
         };
-        let shade = |v: &GpuVertex| match pv {
-            Some(pv) => lines::shaded(v, pv),
-            None => *v,
+        // The vertex with the color of the provoking vertex (flat shading) or of the side seen.
+        let shade = |k: usize| {
+            let color_of = |i: usize| if back { src.backs[i] } else { src.v[i].color };
+            GpuVertex {
+                color: color_of(pv.unwrap_or(idx[k])),
+                ..vs[k]
+            }
         };
         match mode {
             FILL => {
-                let a = shade(&vs[0]);
+                let a = shade(0);
                 let out = self.fill(window);
                 out.try_reserve(3 * (n - 2)).map_err(|_| 0x0505u32)?;
                 for i in 1..n - 1 {
-                    out.extend([a, shade(&vs[i]), shade(&vs[i + 1])]);
+                    out.extend([a, shade(i), shade(i + 1)]);
                 }
             }
             _ => {
@@ -202,10 +214,10 @@ impl Builder<'_> {
                     if !edges[i] {
                         continue;
                     }
-                    let a = shade(&vs[i]);
+                    let a = shade(i);
                     let (out, indices) = self.clip();
                     if mode == LINE {
-                        let b = shade(&vs[(i + 1) % n]);
+                        let b = shade((i + 1) % n);
                         lines::segment(&s.style, &a, &b, 2. * window, out, indices)?;
                     } else {
                         lines::point(&s.style, &a, 2. * window, out, indices)?;
@@ -217,11 +229,20 @@ impl Builder<'_> {
     }
 }
 
-/// Assemble the primitives of `mode` (4..=9) from `v` (drawing order; `edges`: GL edge flags of
-/// each vertex) into ordered draws.
+/// The vertices of a draw: drawing order, back colors (empty without two-sided lighting) and
+/// GL edge flags.
+struct Src<'a> {
+    v: &'a [GpuVertex],
+    backs: &'a [[f32; 4]],
+    edges: &'a [bool],
+}
+
+/// Assemble the primitives of `mode` (4..=9) from `v` (drawing order; `backs`: back colors of
+/// two-sided lighting or empty; `edges`: GL edge flags of each vertex) into ordered draws.
 pub(crate) fn assemble(
     mode: u32,
     v: &[GpuVertex],
+    backs: &[[f32; 4]],
     edges: &[bool],
     s: &Settings,
 ) -> Result<Vec<Item>, u32> {
@@ -229,44 +250,43 @@ pub(crate) fn assemble(
         s,
         items: Vec::new(),
     };
-    let flat = |pv: &GpuVertex| s.flat.then_some(*pv);
+    let src = Src { v, backs, edges };
+    let flat = |i: usize| s.flat.then_some(i);
+    let flags = |idx: &[usize]| idx.iter().map(|i| edges[*i]).collect::<Vec<bool>>();
     match mode {
         4 => {
-            for (t, e) in v.chunks_exact(3).zip(edges.chunks_exact(3)) {
-                b.polygon(t, e, flat(&t[2]).as_ref())?;
+            for k in (0..v.len() / 3 * 3).step_by(3) {
+                let idx = [k, k + 1, k + 2];
+                b.polygon(&src, &idx, &flags(&idx), flat(k + 2))?;
             }
         }
         5 => {
             for i in 0..v.len().saturating_sub(2) {
                 // Every other triangle is flipped to keep the winding of the first one.
-                let t = if i % 2 == 1 {
-                    [v[i + 1], v[i], v[i + 2]]
+                let idx = if i % 2 == 1 {
+                    [i + 1, i, i + 2]
                 } else {
-                    [v[i], v[i + 1], v[i + 2]]
+                    [i, i + 1, i + 2]
                 };
-                b.polygon(&t, &[true; 3], flat(&v[i + 2]).as_ref())?;
+                b.polygon(&src, &idx, &[true; 3], flat(i + 2))?;
             }
         }
         6 => {
             for i in 1..v.len().saturating_sub(1) {
-                b.polygon(
-                    &[v[0], v[i], v[i + 1]],
-                    &[true; 3],
-                    flat(&v[i + 1]).as_ref(),
-                )?;
+                b.polygon(&src, &[0, i, i + 1], &[true; 3], flat(i + 1))?;
             }
         }
         7 => {
-            for (q, e) in v.chunks_exact(4).zip(edges.chunks_exact(4)) {
-                b.polygon(q, e, flat(&q[3]).as_ref())?;
+            for k in (0..v.len() / 4 * 4).step_by(4) {
+                let idx = [k, k + 1, k + 2, k + 3];
+                b.polygon(&src, &idx, &flags(&idx), flat(k + 3))?;
             }
         }
         8 => {
             let mut i = 0;
             while i + 3 < v.len() {
                 // Quad i is v[2i], v[2i+1], v[2i+3], v[2i+2].
-                let q = [v[i], v[i + 1], v[i + 3], v[i + 2]];
-                b.polygon(&q, &[true; 4], flat(&v[i + 3]).as_ref())?;
+                b.polygon(&src, &[i, i + 1, i + 3, i + 2], &[true; 4], flat(i + 3))?;
                 i += 2;
             }
         }
@@ -274,10 +294,11 @@ pub(crate) fn assemble(
             if v.len() >= 3 {
                 if s.modes_active() {
                     // One polygon: its outline and flags are not a fan's.
-                    b.polygon(v, edges, flat(&v[0]).as_ref())?;
+                    let idx: Vec<usize> = (0..v.len()).collect();
+                    b.polygon(&src, &idx, edges, flat(0))?;
                 } else {
                     for i in 1..v.len() - 1 {
-                        b.polygon(&[v[0], v[i], v[i + 1]], &[true; 3], flat(&v[0]).as_ref())?;
+                        b.polygon(&src, &[0, i, i + 1], &[true; 3], flat(0))?;
                     }
                 }
             }
@@ -303,6 +324,7 @@ mod tests {
     fn settings() -> Settings {
         Settings {
             flat: false,
+            two_sided: false,
             modes: [FILL, FILL],
             offset: [false; 3],
             factor: 0.,
@@ -331,7 +353,7 @@ mod tests {
             vertex(0., 1., 40.),
         ];
         // Fan: triangle (0, 1, 2) takes vertex 2, (0, 2, 3) vertex 3.
-        let items = assemble(6, &v, &[true; 4], &s).unwrap();
+        let items = assemble(6, &v, &[], &[true; 4], &s).unwrap();
         let Item::Fill { vertices, bias } = &items[0] else {
             panic!()
         };
@@ -341,12 +363,12 @@ mod tests {
             [30., 30., 30., 40., 40., 40.]
         );
         // GL_POLYGON: the first vertex; quads: the last.
-        let items = assemble(9, &v, &[true; 4], &s).unwrap();
+        let items = assemble(9, &v, &[], &[true; 4], &s).unwrap();
         let Item::Fill { vertices, .. } = &items[0] else {
             panic!()
         };
         assert!(vertices.iter().all(|v| v.color[0] == 10.));
-        let items = assemble(7, &v, &[true; 4], &s).unwrap();
+        let items = assemble(7, &v, &[], &[true; 4], &s).unwrap();
         let Item::Fill { vertices, .. } = &items[0] else {
             panic!()
         };
@@ -363,7 +385,7 @@ mod tests {
             vertex(0.5, 0.5, 1.),
         ];
         let edges = [true, true, false];
-        let items = assemble(4, &v, &edges, &s).unwrap();
+        let items = assemble(4, &v, &[], &edges, &s).unwrap();
         let Item::Clip { vertices, .. } = &items[0] else {
             panic!()
         };
@@ -371,22 +393,23 @@ mod tests {
         // Back face culled on the CPU (clockwise triangle, CCW front).
         s.cull = true;
         let cw = [v[0], v[2], v[1]];
-        assert!(assemble(4, &cw, &[true; 3], &s).unwrap().is_empty());
-        assert_eq!(assemble(4, &v, &[true; 3], &s).unwrap().len(), 1);
+        assert!(assemble(4, &cw, &[], &[true; 3], &s).unwrap().is_empty());
+        assert_eq!(assemble(4, &v, &[], &[true; 3], &s).unwrap().len(), 1);
         // Front fill, back line: the clockwise triangle becomes an outline, the other fills.
         s.cull = false;
         s.modes = [FILL, LINE];
         assert!(matches!(
-            assemble(4, &v, &[true; 3], &s).unwrap()[0],
+            assemble(4, &v, &[], &[true; 3], &s).unwrap()[0],
             Item::Fill { .. }
         ));
         assert!(matches!(
-            assemble(4, &cw, &[true; 3], &s).unwrap()[0],
+            assemble(4, &cw, &[], &[true; 3], &s).unwrap()[0],
             Item::Clip { .. }
         ));
         // Point mode: one quad per flagged vertex.
         s.modes = [POINT, POINT];
-        let Item::Clip { vertices, .. } = &assemble(4, &v, &[true, false, true], &s).unwrap()[0]
+        let Item::Clip { vertices, .. } =
+            &assemble(4, &v, &[], &[true, false, true], &s).unwrap()[0]
         else {
             panic!()
         };
@@ -400,7 +423,7 @@ mod tests {
         s.units = 1.;
         let v = [vertex(0., 0., 1.), vertex(1., 0., 1.), vertex(0., 1., 1.)];
         assert!(s.needed());
-        let items = assemble(4, &v, &[true; 3], &s).unwrap();
+        let items = assemble(4, &v, &[], &[true; 3], &s).unwrap();
         let Item::Fill { bias, .. } = &items[0] else {
             panic!()
         };

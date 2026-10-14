@@ -1105,6 +1105,89 @@ pub unsafe extern "C" fn glTexParameteri(kind: u32, pname: u32, value: i32) {
             return Err(0x0500);
         }
         let i = t.index()?;
+        t.set_param(i, pname, value)
+    });
+}
+
+/// What glPushAttrib keeps of a texture unit.
+#[derive(Clone, Copy)]
+pub(crate) struct UnitSave {
+    enabled: bool,
+    bound: u32,
+    env: Environment,
+    /// min filter, mag filter, wrap s, wrap t, generate mipmap of the bound object.
+    params: Option<[u32; 5]>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TexSave {
+    units: [UnitSave; 3],
+    active: usize,
+}
+
+impl Textures {
+    pub fn alignment(&self) -> usize {
+        self.alignment
+    }
+
+    pub fn set_alignment(&mut self, alignment: usize) {
+        self.alignment = alignment;
+    }
+
+    pub fn save(&self) -> TexSave {
+        TexSave {
+            units: core::array::from_fn(|u| {
+                let unit = &self.units[u];
+                UnitSave {
+                    enabled: unit.enabled,
+                    bound: unit.bound,
+                    env: unit.env,
+                    params: self
+                        .objects
+                        .iter()
+                        .find(|o| o.name == unit.bound)
+                        .map(|o| [o.min, o.mag, o.wrap[0], o.wrap[1], o.generate as u32]),
+                }
+            }),
+            active: self.active,
+        }
+    }
+
+    /// Restore the enable flags and/or the bindings, sampler parameters, environments and the
+    /// active unit of a saved state.
+    pub unsafe fn restore(&mut self, save: &TexSave, enables: bool, state: bool) {
+        for (u, saved) in save.units.iter().enumerate() {
+            if enables {
+                self.units[u].enabled = saved.enabled;
+            }
+            if !state {
+                continue;
+            }
+            self.units[u].env = saved.env;
+            let exists = self.objects.iter().any(|o| o.name == saved.bound);
+            self.units[u].bound = if exists || saved.bound == 0 {
+                saved.bound
+            } else {
+                0
+            };
+            if let (Some(i), Some(p)) = (
+                self.objects.iter().position(|o| o.name == saved.bound),
+                saved.params,
+            ) {
+                for (pname, value) in [0x2801, 0x2800, 0x2802, 0x2803, 0x8191].into_iter().zip(p) {
+                    let _ = self.set_param(i, pname, value);
+                }
+            }
+        }
+        if state {
+            self.active = save.active;
+        }
+        self.dirty = true;
+    }
+
+    /// Set a sampler parameter of object `i` (GL_TEXTURE_MIN_FILTER .. GL_GENERATE_MIPMAP).
+    unsafe fn set_param(&mut self, i: usize, pname: u32, value: u32) -> Result<(), u32> {
+        let t = self;
         let o = &t.objects[i];
         let current = match pname {
             0x2801 => o.min,
@@ -1173,8 +1256,9 @@ pub unsafe extern "C" fn glTexParameteri(kind: u32, pname: u32, value: i32) {
             t.dirty = true;
         }
         Ok(())
-    });
+    }
 }
+
 #[no_mangle]
 pub unsafe extern "C" fn glGetTexParameteriv(kind: u32, pname: u32, out: *mut i32) {
     api!(|t: &mut Textures| {

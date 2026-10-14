@@ -4,6 +4,8 @@ extern crate alloc;
 #[cfg(any(target_os = "horizon", test))]
 mod arrays;
 #[cfg(any(target_os = "horizon", test))]
+mod attrib;
+#[cfg(any(target_os = "horizon", test))]
 mod blend;
 #[cfg(any(target_os = "horizon", test))]
 mod evaluator;
@@ -13,6 +15,8 @@ mod frame;
 mod gpu;
 #[cfg(any(target_os = "horizon", test))]
 mod immediate;
+#[cfg(any(target_os = "horizon", test))]
+mod lighting;
 #[cfg(any(target_os = "horizon", test))]
 mod lines;
 #[cfg(any(target_os = "horizon", test))]

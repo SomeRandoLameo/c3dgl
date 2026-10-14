@@ -86,6 +86,18 @@ impl Matrices {
             self.mode = 2 + unit;
         }
     }
+    pub fn mode(&self) -> usize {
+        self.mode
+    }
+
+    pub fn set_mode(&mut self, mode: usize) {
+        self.mode = mode;
+    }
+
+    pub fn modelview(&self) -> [f32; 16] {
+        self.stacks[0][self.depths[0]]
+    }
+
     pub fn texture(&self) -> [f32; 16] {
         self.texture_for(self.active)
     }
