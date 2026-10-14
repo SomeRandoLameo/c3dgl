@@ -319,3 +319,18 @@ The complete build check passes 24 host tests and all consumer/dependency audits
 One native C Azahar run passes 32 checks, including whole-cell pixel equivalence,
 front-face culling, zero GL errors and complete GPU memory recovery; evidence is
 in `docs/native-results/primitive-step/`. Other consumers have build verification.
+
+
+## Compare existing examples directly
+
+Further GL compatibility work uses the original `examples/` scenes as its primary
+comparison. `native/compare/` builds identical capture entry points against the old
+C and native Rust renderer, reusing original functions without copying geometry
+or substituting unsupported APIs. Run `native/scripts/compare_old_examples.py`
+for one run per renderer/example and a strict whole-image comparison.
+
+The first results are in `docs/native-results/old-examples/`: the F texture matches
+exactly; primitive colors differ by at most one channel value; the old cube exposes
+missing 12x12 NPOT texture support. Selected original functions are covered;
+complete interactive pages and their remaining feature gaps are documented in
+`native/compare/README.md`. Missing-symbol inventory covers all existing examples.

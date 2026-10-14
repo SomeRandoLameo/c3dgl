@@ -1,0 +1,95 @@
+{
+  "repetitions": 1,
+  "cases": {
+    "primitives": {
+      "source": "examples/primitives/main.cpp",
+      "source_sha256": "12a955c1ed58ff13fcda53aac0cd1c6b39c1f0c95ccce51c199d746828c43f4a",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "c5cace99d54f6bf97ba5ac5e5bce868cc1d5603f58c5a12d613f8b19f7ed23e3",
+        "images": {
+          "c3dgl-old-primitives-reference.ppm": "2c9e0c0afcdae3c602a74887eb8f57bd2a22364af50a9db12316c53ecc542b87"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "2a0a52758d5de7b9045086d75a8ae9a51a303f2adb47f72b85331f491ebce0c8",
+        "images": {
+          "c3dgl-old-primitives-native.ppm": "9122c4e87f7c7b1f4677e8f3fe93a4567fdb32b29983c9b86cdc0db859d2e175"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": false,
+        "different_pixels": 4591,
+        "pixels_over_one": 0,
+        "max_channel_delta": 1
+      },
+      "adapter_sha256": "6ed5be03426a8b3adc34f4e3d4aa6bfbbcb068477de9d0bace108d892fb49fa8"
+    },
+    "texture": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1bedd9f1e26c265cd02d8d9dd4c1f2f99a7ac45e75b655414d000ec8aafd007a",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "3b6c04dc8201a867d9abe2c7940773e0d8f42c03824962938974e876a05c17da",
+        "images": {
+          "c3dgl-old-texture-reference.ppm": "8769c18bde15d7d0a7c98721d245f8b9c2f86b51a6f175f25a9589a04fadf1db"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "86548c417692b41d45140765fa5db86f65599a90c0fc8cfa8e323dc020e893ee",
+        "images": {
+          "c3dgl-old-texture-native.ppm": "8769c18bde15d7d0a7c98721d245f8b9c2f86b51a6f175f25a9589a04fadf1db"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      },
+      "adapter_sha256": "6ed5be03426a8b3adc34f4e3d4aa6bfbbcb068477de9d0bace108d892fb49fa8"
+    },
+    "cube": {
+      "source": "examples/cube/main.cpp",
+      "source_sha256": "b52080ba5a51929390d51da50dcec9ba20d8b6b23b5e7129088695600de6c7b0",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "82892bc0f7c1b83819f3e7bf6e63bee12a084848a92cc7ca2ac285f2c94cd6be",
+        "images": {
+          "c3dgl-old-cube-reference.ppm": "7b2e5e6bb7b1f8275c82a13d77a0d00a492b64d56514c1dd536ca179a3011618"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": false,
+        "rom_sha256": "ab22a1ae01bddae2ba5cde5b1d994228c6e5823931b98b3781385e252f913362",
+        "images": {
+          "c3dgl-old-cube-native.ppm": "27b6af58a232527efb31676920d879404528fb03a3c2121f00732f7862c457cd"
+        },
+        "process_exit": -9
+      },
+      "execution_failed": true,
+      "comparison": {
+        "exact_equal": false,
+        "different_pixels": 3732,
+        "pixels_over_one": 3732,
+        "max_channel_delta": 255
+      },
+      "adapter_sha256": "6ed5be03426a8b3adc34f4e3d4aa6bfbbcb068477de9d0bace108d892fb49fa8"
+    }
+  },
+  "whole_original_programs": false,
+  "native_dependency_audits_passed": true
+}

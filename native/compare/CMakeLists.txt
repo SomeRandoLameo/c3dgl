@@ -1,0 +1,43 @@
+cmake_minimum_required(VERSION 3.18)
+project(c3dgl_old_example_compare LANGUAGES C CXX ASM)
+set(C3DGL_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(C3DGL_BUILD_GLU OFF CACHE BOOL "" FORCE)
+add_subdirectory(../.. reference)
+# Both implementations use Z depth; keep the C source unchanged.
+target_compile_definitions(c3dgl PRIVATE C3DGL_W_DEPTH=0)
+set(C3DGL_NATIVE_BUILD_ABI_TEST OFF CACHE BOOL "" FORCE)
+set(C3DGL_NATIVE_BUILD_TRIANGLE OFF CACHE BOOL "" FORCE)
+set(C3DGL_NATIVE_BUILD_CPP_TEST OFF CACHE BOOL "" FORCE)
+add_subdirectory(.. native)
+find_package(PNG REQUIRED)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/old_examples.cpp")
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/old_examples.cpp" adapter_hash)
+foreach(example primitives texture cube)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../examples/${example}/main.cpp")
+    file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/../../examples/${example}/main.cpp" source_hash)
+    file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/old_${example}_source.json"
+        CONTENT "{\"source_sha256\":\"${source_hash}\",\"adapter_sha256\":\"${adapter_hash}\"}\n")
+    foreach(backend reference native)
+        set(target old_${example}_${backend})
+        add_executable(${target} old_examples.cpp)
+        set_target_properties(${target} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+        target_compile_options(${target} PRIVATE -O2 -ffunction-sections -fdata-sections -Wall -Wextra)
+        target_link_options(${target} PRIVATE -Wl,--gc-sections)
+        # Full legacy declarations compile the original TU. Unselected code is
+        # discarded; unsupported APIs receive no implementations or stubs.
+        target_include_directories(${target} BEFORE PRIVATE ../../include)
+        string(TOUPPER ${example} upper)
+        target_compile_definitions(${target} PRIVATE C3DGL_OLD_${upper}=1)
+        if(backend STREQUAL native)
+            target_compile_definitions(${target} PRIVATE C3DGL_COMPARE_NATIVE=1)
+            target_link_libraries(${target} PRIVATE c3dgl::native PNG::PNG)
+        else()
+            target_link_libraries(${target} PRIVATE c3dgl::c3dgl citro3d PNG::PNG)
+        endif()
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy
+                "${CMAKE_CURRENT_BINARY_DIR}/old_${example}_source.json"
+                "${CMAKE_CURRENT_BINARY_DIR}/${target}_source.json")
+        ctr_create_3dsx(${target})
+    endforeach()
+endforeach()

@@ -124,3 +124,18 @@ plus float/color/UV vector calls and validated u32 index inputs. All 24 host tes
 and C/C++/rust3ds builds pass. One native C Azahar run passes 32 checks, including
 complete cell comparisons and memory recovery; see `native-results/primitive-step/`.
 Independent consumer comparisons and performance gates remain separate.
+
+
+## Original-example acceptance
+
+Use existing `examples/*/main.*` scene functions and inputs as the primary oracle
+for further compatibility work, with a common capture entry point for C and Rust.
+Do not replace missing original features with stubs or modified inputs. Extend
+shared selection as the port grows and make full original pages runnable. Separate
+whole-program support from selected-scene comparisons and keep every mismatch.
+
+`native/compare/` and `native/scripts/compare_old_examples.py` now provide this path.
+The first three one-run pairs are in `native-results/old-examples/`: exact F-texture
+match, primitive channel differences of at most one, and an NPOT failure in the
+original 12x12 cube texture. Address these real-example gaps before claiming full
+compatibility; new isolated examples alone do not provide equivalent evidence.
