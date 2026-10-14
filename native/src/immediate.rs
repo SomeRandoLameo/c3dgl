@@ -144,6 +144,9 @@ impl Immediate {
 
 #[no_mangle]
 pub unsafe extern "C" fn glBegin(mode: u32) {
+    if crate::lists::record(crate::lists::Cmd::Begin(mode)) {
+        return;
+    }
     with_immediate(|r| {
         if let Err(e) = r.immediate.begin(mode) {
             r.matrices.fail(e);
@@ -153,11 +156,17 @@ pub unsafe extern "C" fn glBegin(mode: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glEnd() {
+    if crate::lists::record(crate::lists::Cmd::End) {
+        return;
+    }
     crate::renderer::end_immediate();
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn glVertex4f(x: f32, y: f32, z: f32, w: f32) {
+    if crate::lists::record(crate::lists::Cmd::Vertex([x, y, z, w])) {
+        return;
+    }
     with_immediate(|r| crate::renderer::emit_vertex(r, [x, y, z, w], None, None));
 }
 
@@ -189,6 +198,9 @@ pub(crate) fn color_component(value: f32) -> f32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn glColor4f(r: f32, g: f32, b: f32, a: f32) {
+    if crate::lists::record(crate::lists::Cmd::Color([r, g, b, a])) {
+        return;
+    }
     with_immediate(|s| {
         s.immediate.color = [r, g, b, a].map(color_component);
     });
@@ -201,6 +213,9 @@ pub unsafe extern "C" fn glColor3f(r: f32, g: f32, b: f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glColor4ub(r: u8, g: u8, b: u8, a: u8) {
+    if crate::lists::record(crate::lists::Cmd::Color4ub([r, g, b, a])) {
+        return;
+    }
     with_immediate(|s| {
         s.immediate.color = [r, g, b, a].map(|v| v as f32 * (1. / 255.));
     });
@@ -300,6 +315,9 @@ mod tests {
 
 #[no_mangle]
 pub unsafe extern "C" fn glNormal3f(x: f32, y: f32, z: f32) {
+    if crate::lists::record(crate::lists::Cmd::Normal([x, y, z])) {
+        return;
+    }
     with_immediate(|r| r.immediate.normal = [x, y, z]);
 }
 
@@ -336,6 +354,9 @@ pub unsafe extern "C" fn glNormal3i(x: i32, y: i32, z: i32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glEdgeFlag(flag: u8) {
+    if crate::lists::record(crate::lists::Cmd::EdgeFlag(flag)) {
+        return;
+    }
     with_immediate(|r| r.immediate.edge = flag != 0);
 }
 
@@ -385,7 +406,7 @@ pub unsafe extern "C" fn glRectfv(v1: *const f32, v2: *const f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glTexCoord2f(s: f32, t: f32) {
-    with_immediate(|r| r.immediate.texcoord = [s, t, 0., 1.]);
+    glTexCoord4f(s, t, 0., 1.);
 }
 
 #[no_mangle]
@@ -394,6 +415,9 @@ pub unsafe extern "C" fn glTexCoord3f(s: f32, t: f32, r: f32) {
 }
 #[no_mangle]
 pub unsafe extern "C" fn glTexCoord4f(s: f32, t: f32, r: f32, q: f32) {
+    if crate::lists::record(crate::lists::Cmd::TexCoord([s, t, r, q])) {
+        return;
+    }
     with_immediate(|state| {
         state.immediate.texcoord = [s, t, r, q];
         if q != 1. {
@@ -416,6 +440,9 @@ pub unsafe extern "C" fn glTexCoord4fv(v: *const f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glMultiTexCoord4f(unit: u32, s: f32, t: f32, r: f32, q: f32) {
+    if crate::lists::record(crate::lists::Cmd::MultiTexCoord(unit, [s, t, r, q])) {
+        return;
+    }
     with_immediate(|state| match unit {
         0x84c0 => {
             state.immediate.texcoord = [s, t, r, q];

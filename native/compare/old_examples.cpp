@@ -35,6 +35,9 @@
 #else
 #define CASE "fragment"
 #endif
+#elif defined(C3DGL_OLD_LISTS)
+#include "../../examples/lists/main.cpp"
+#define CASE "lists"
 #elif defined(C3DGL_OLD_CLIPPLANE)
 #include "../../examples/clipplane/main.cpp"
 #define CASE "clipplane"
@@ -110,6 +113,14 @@ int main() {
     const GLuint tex=createF(16);drawTexcoordPage(tex);
 #elif defined(C3DGL_OLD_TEXTURE)
     const GLuint tex=createF(16);drawCell(0,0,tex);
+#elif defined(C3DGL_OLD_LISTS)
+    // The first frame of the original main loop through display lists (angle 0, view 20/30)
+    const GLuint lists=createLists();
+    setupScene();
+    const GLuint tex=0;
+    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+    drawScene(lists,true,0.0f,20.0f,30.0f);
+    glDeleteLists(lists,3);
 #elif defined(C3DGL_OLD_CLIPPLANE)
     // The cells of the original main loop, call for call
     createChecker();const GLuint tex=checkerTexture;

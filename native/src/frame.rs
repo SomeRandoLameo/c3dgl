@@ -18,6 +18,7 @@ pub struct PolyState {
 }
 
 pub struct FrameState {
+    pub lists: crate::lists::Lists,
     pub clip: crate::clip::ClipState,
     pub fog: crate::fog::Fog,
     pub texgen: crate::texgen::TexGen,
@@ -41,6 +42,7 @@ pub struct FrameState {
 impl FrameState {
     pub fn new() -> Self {
         Self {
+            lists: crate::lists::Lists::new(),
             clip: crate::clip::ClipState::new(),
             fog: crate::fog::Fog::new(),
             texgen: crate::texgen::TexGen::new(),
@@ -83,6 +85,9 @@ pub(crate) fn offset_index(cap: u32) -> usize {
 
 #[no_mangle]
 pub unsafe extern "C" fn glShadeModel(mode: u32) {
+    if crate::lists::record(crate::lists::Cmd::ShadeModel(mode)) {
+        return;
+    }
     with_frame(|s, m| match mode {
         0x1d00 | 0x1d01 => s.poly.flat = mode == 0x1d00,
         _ => m.fail(0x0500),
@@ -91,6 +96,9 @@ pub unsafe extern "C" fn glShadeModel(mode: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glPolygonMode(face: u32, mode: u32) {
+    if crate::lists::record(crate::lists::Cmd::PolygonMode(face, mode)) {
+        return;
+    }
     with_frame(|s, m| {
         if !matches!(face, 0x0404 | 0x0405 | 0x0408) || !matches!(mode, 0x1b00..=0x1b02) {
             m.fail(0x0500);
@@ -107,6 +115,9 @@ pub unsafe extern "C" fn glPolygonMode(face: u32, mode: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glPolygonOffset(factor: f32, units: f32) {
+    if crate::lists::record(crate::lists::Cmd::PolygonOffset(factor, units)) {
+        return;
+    }
     with_frame(|s, _| {
         s.poly.factor = factor;
         s.poly.units = units;
@@ -125,16 +136,25 @@ fn byte(x: f32) -> u32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn glClearColor(r: f32, g: f32, b: f32, a: f32) {
+    if crate::lists::record(crate::lists::Cmd::ClearColor([r, g, b, a])) {
+        return;
+    }
     with_frame(|s, _| s.clear_color = (byte(r) << 24) | (byte(g) << 16) | (byte(b) << 8) | byte(a));
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn glClearDepth(depth: f64) {
+    if crate::lists::record(crate::lists::Cmd::ClearDepth(depth)) {
+        return;
+    }
     with_frame(|s, _| s.clear_depth = depth.clamp(0., 1.) as f32);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn glClearStencil(s: i32) {
+    if crate::lists::record(crate::lists::Cmd::ClearStencil(s)) {
+        return;
+    }
     with_frame(|f, _| f.clear_stencil = s as u8);
 }
 
@@ -145,6 +165,9 @@ pub unsafe extern "C" fn glClearDepthf(depth: f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glViewport(x: i32, y: i32, w: i32, h: i32) {
+    if crate::lists::record(crate::lists::Cmd::Viewport([x, y, w, h])) {
+        return;
+    }
     with_frame(|s, m| {
         if w < 0 || h < 0 {
             m.fail(0x0501);
@@ -162,6 +185,9 @@ pub unsafe extern "C" fn glViewport(x: i32, y: i32, w: i32, h: i32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glLineWidth(width: f32) {
+    if crate::lists::record(crate::lists::Cmd::LineWidth(width)) {
+        return;
+    }
     with_frame(|s, m| {
         if !(width > 0.) {
             m.fail(0x0501);
@@ -173,6 +199,9 @@ pub unsafe extern "C" fn glLineWidth(width: f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glPointSize(size: f32) {
+    if crate::lists::record(crate::lists::Cmd::PointSize(size)) {
+        return;
+    }
     with_frame(|s, m| {
         if !(size > 0.) {
             m.fail(0x0501);
@@ -184,12 +213,20 @@ pub unsafe extern "C" fn glPointSize(size: f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glClear(mask: u32) {
+    if crate::lists::record(crate::lists::Cmd::Clear(mask)) {
+        return;
+    }
     clear_gl(mask);
 }
 
 fn query(s: &FrameState, m: &Matrices, pname: u32) -> Option<([f64; 16], usize)> {
     if let Some(v) = s.light.query(pname) {
         return Some(v);
+    }
+    if let Some(x) = s.lists.query(pname) {
+        let mut v = [0.; 16];
+        v[0] = x;
+        return Some((v, 1));
     }
     if let Some(v) = s.fog.query(pname) {
         return Some(v);

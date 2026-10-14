@@ -329,7 +329,10 @@ fn param_count(pname: u32) -> usize {
     }
 }
 
-unsafe fn set_tex_gen(coord: u32, pname: u32, p: &[f32; 4], scalar: bool) {
+pub(crate) unsafe fn set_tex_gen(coord: u32, pname: u32, p: &[f32; 4], scalar: bool) {
+    if crate::lists::record(crate::lists::Cmd::TexGen(coord, pname, *p, scalar)) {
+        return;
+    }
     with_immediate(|r| {
         if r.immediate.active {
             r.matrices.fail(0x0502);

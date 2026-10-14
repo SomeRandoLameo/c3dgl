@@ -431,7 +431,10 @@ fn light_param_count(pname: u32) -> usize {
     }
 }
 
-unsafe fn set_light(light: u32, pname: u32, p: &[f32; 4]) {
+pub(crate) unsafe fn set_light(light: u32, pname: u32, p: &[f32; 4]) {
+    if crate::lists::record(crate::lists::Cmd::Light(light, pname, *p)) {
+        return;
+    }
     with_frame(|s, m| {
         if !(0x4000..0x4000 + MAX_LIGHTS as u32).contains(&light) {
             m.fail(0x0500);
@@ -536,7 +539,10 @@ fn light_model_count(pname: u32) -> usize {
     }
 }
 
-unsafe fn set_light_model(pname: u32, p: &[f32; 4]) {
+pub(crate) unsafe fn set_light_model(pname: u32, p: &[f32; 4]) {
+    if crate::lists::record(crate::lists::Cmd::LightModel(pname, *p)) {
+        return;
+    }
     with_frame(|s, m| match pname {
         0x0b53 => s.light.model_ambient = *p,
         0x0b51 => s.light.local_viewer = p[0] != 0.,
@@ -603,7 +609,10 @@ fn face_valid(face: u32) -> bool {
 }
 
 /// Also allowed between glBegin and glEnd: the next vertices are lit with the new material.
-unsafe fn set_material(face: u32, pname: u32, p: &[f32; 4]) {
+pub(crate) unsafe fn set_material(face: u32, pname: u32, p: &[f32; 4]) {
+    if crate::lists::record(crate::lists::Cmd::Material(face, pname, *p)) {
+        return;
+    }
     with_immediate(|r| {
         if !face_valid(face) || material_count(pname) == 0 {
             r.matrices.fail(0x0500);
@@ -679,6 +688,9 @@ pub unsafe extern "C" fn glMateriali(face: u32, pname: u32, param: i32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glColorMaterial(face: u32, mode: u32) {
+    if crate::lists::record(crate::lists::Cmd::ColorMaterial(face, mode)) {
+        return;
+    }
     with_immediate(|r| {
         let mode_valid = matches!(mode, 0x1600 | 0x1200 | 0x1201 | 0x1202 | 0x1602);
         if !face_valid(face) || !mode_valid {

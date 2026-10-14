@@ -153,6 +153,9 @@ fn plane_valid(plane: u32) -> Option<usize> {
 }
 
 unsafe fn set_plane(plane: u32, e: [f64; 4]) {
+    if crate::lists::record(crate::lists::Cmd::ClipPlane(plane, e)) {
+        return;
+    }
     with_immediate(|r| {
         if r.immediate.active {
             r.matrices.fail(0x0502);

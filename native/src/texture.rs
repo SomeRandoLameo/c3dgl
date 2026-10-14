@@ -931,6 +931,37 @@ unsafe fn upload(
     }
 }
 
+/// The texels of a client image copied tightly packed (rows without padding), for display lists.
+unsafe fn capture(pixels: *const c_void, w: i32, h: i32, f: u32, ty: u32) -> Option<Vec<u8>> {
+    let bpp = format(f, ty).ok()?;
+    if pixels.is_null() || !(0..=1024).contains(&w) || !(0..=1024).contains(&h) {
+        return None;
+    }
+    let mut alignment = 4;
+    crate::renderer::with_immediate(|r| alignment = r.frame.textures.alignment());
+    let (w, h) = (w as usize, h as usize);
+    let stride = (w * bpp + alignment - 1) & !(alignment - 1);
+    let mut out = Vec::new();
+    out.try_reserve_exact(w * h * bpp).ok()?;
+    for y in 0..h {
+        out.extend_from_slice(core::slice::from_raw_parts(
+            pixels.cast::<u8>().add(y * stride),
+            w * bpp,
+        ));
+    }
+    Some(out)
+}
+
+/// Set the unpack alignment; returns the previous one (display list execution).
+pub(crate) unsafe fn set_alignment(alignment: usize) -> usize {
+    let mut old = 4;
+    crate::renderer::with_immediate(|r| {
+        old = r.frame.textures.alignment();
+        r.frame.textures.set_alignment(alignment);
+    });
+    old
+}
+
 macro_rules! api {
     ($body:expr) => {
         with_frame(|s, m| {
@@ -943,6 +974,9 @@ macro_rules! api {
 
 #[no_mangle]
 pub unsafe extern "C" fn glActiveTexture(unit: u32) {
+    if crate::lists::record(crate::lists::Cmd::ActiveTexture(unit)) {
+        return;
+    }
     with_frame(|s, m| {
         if !(0x84c0..=0x84c2).contains(&unit) {
             m.fail(0x0500);
@@ -980,6 +1014,9 @@ pub unsafe extern "C" fn glGenTextures(n: i32, out: *mut u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glBindTexture(kind: u32, name: u32) {
+    if crate::lists::record(crate::lists::Cmd::BindTexture(kind, name)) {
+        return;
+    }
     api!(|t: &mut Textures| {
         target(kind)?;
         let i = if let Some(i) = t.objects.iter().position(|o| o.name == name) {
@@ -1094,6 +1131,9 @@ fn define_generated(o: &mut Object) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glTexParameteri(kind: u32, pname: u32, value: i32) {
+    if crate::lists::record(crate::lists::Cmd::TexParameter(kind, pname, value)) {
+        return;
+    }
     api!(|t: &mut Textures| {
         target(kind)?;
         let value = value as u32;
@@ -1408,6 +1448,25 @@ pub unsafe extern "C" fn glTexImage2D(
     ty: u32,
     pixels: *const c_void,
 ) {
+    if crate::lists::compiling() {
+        let cmd = crate::lists::Cmd::TexImage {
+            sub: false,
+            target: kind,
+            level,
+            internal,
+            x: 0,
+            y: 0,
+            w,
+            h,
+            border,
+            f,
+            ty,
+            pixels: capture(pixels, w, h, f, ty),
+        };
+        if crate::lists::record(cmd) {
+            return;
+        }
+    }
     api!(|t: &mut Textures| {
         target(kind)?;
         let bpp = format(f, ty)?;
@@ -1464,6 +1523,22 @@ pub unsafe extern "C" fn glCompressedTexImage2D(
     size: i32,
     data: *const c_void,
 ) {
+    if crate::lists::compiling() {
+        let copy = (!data.is_null() && (0..=2 * 1024 * 1024).contains(&size))
+            .then(|| core::slice::from_raw_parts(data.cast::<u8>(), size as usize).to_vec());
+        let cmd = crate::lists::Cmd::CompressedTexImage {
+            target: kind,
+            level,
+            internal,
+            w,
+            h,
+            border,
+            data: copy,
+        };
+        if crate::lists::record(cmd) {
+            return;
+        }
+    }
     api!(|t: &mut Textures| {
         target(kind)?;
         let palette = palette_entry(internal);
@@ -1577,6 +1652,25 @@ pub unsafe extern "C" fn glTexSubImage2D(
     ty: u32,
     pixels: *const c_void,
 ) {
+    if crate::lists::compiling() {
+        let cmd = crate::lists::Cmd::TexImage {
+            sub: true,
+            target: kind,
+            level,
+            internal: 0,
+            x,
+            y,
+            w,
+            h,
+            border: 0,
+            f,
+            ty,
+            pixels: capture(pixels, w, h, f, ty),
+        };
+        if crate::lists::record(cmd) {
+            return;
+        }
+    }
     api!(|t: &mut Textures| {
         target(kind)?;
         let bpp = format(f, ty)?;
@@ -1833,6 +1927,9 @@ mod tests {
 
 #[no_mangle]
 pub unsafe extern "C" fn glTexEnvi(target: u32, pname: u32, value: i32) {
+    if crate::lists::record(crate::lists::Cmd::TexEnvi(target, pname, value)) {
+        return;
+    }
     api!(|t: &mut Textures| {
         if target != 0x2300 {
             return Err(0x0500);
@@ -1894,6 +1991,18 @@ pub unsafe extern "C" fn glTexEnvfv(target: u32, pname: u32, values: *const f32)
     if pname != 0x2201 {
         glTexEnvf(target, pname, ptr::read_unaligned(values));
         return;
+    }
+    if crate::lists::compiling() {
+        let cmd = if target != 0x2300 {
+            crate::lists::Cmd::Raise(0x0500)
+        } else {
+            crate::lists::Cmd::TexEnvColor(core::array::from_fn(|i| {
+                ptr::read_unaligned(values.add(i))
+            }))
+        };
+        if crate::lists::record(cmd) {
+            return;
+        }
     }
     api!(|t: &mut Textures| {
         if target != 0x2300 {

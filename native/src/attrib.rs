@@ -29,6 +29,7 @@ const COLOR_BUFFER: u32 = 0x4000;
 const EVAL: u32 = 0x10000;
 const TEXTURE: u32 = 0x40000;
 const SCISSOR: u32 = 0x80000;
+const LIST: u32 = 0x20000;
 
 const CLIENT_PIXEL_STORE: u32 = 0x1;
 const CLIENT_VERTEX_ARRAY: u32 = 0x2;
@@ -54,6 +55,7 @@ pub(crate) struct Saved {
     texgen: crate::texgen::TexGen,
     fog: crate::fog::Fog,
     clip: crate::clip::ClipState,
+    list_base: u32,
     mode: usize,
 }
 
@@ -71,6 +73,9 @@ pub(crate) struct Stacks {
 
 #[no_mangle]
 pub unsafe extern "C" fn glPushAttrib(mask: u32) {
+    if crate::lists::record(crate::lists::Cmd::PushAttrib(mask)) {
+        return;
+    }
     with_immediate(|r| {
         if r.immediate.active {
             r.matrices.fail(0x0502);
@@ -106,6 +111,7 @@ pub unsafe extern "C" fn glPushAttrib(mask: u32) {
             texgen: f.texgen.clone(),
             fog: f.fog,
             clip: f.clip,
+            list_base: f.lists.base,
             mode: r.matrices.mode(),
         };
         r.stacks.attribs.push(saved);
@@ -204,6 +210,9 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         f.eval.restore_enables(&a.eval);
         f.eval.restore_grids(&a.eval);
     }
+    if mask & LIST != 0 {
+        f.lists.base = a.list_base;
+    }
     if mask & SCISSOR != 0 {
         f.raster.scissor = a.raster.scissor;
         f.raster.scissor_box = a.raster.scissor_box;
@@ -213,6 +222,9 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glPopAttrib() {
+    if crate::lists::record(crate::lists::Cmd::PopAttrib) {
+        return;
+    }
     with_immediate(|r| {
         if r.immediate.active {
             r.matrices.fail(0x0502);

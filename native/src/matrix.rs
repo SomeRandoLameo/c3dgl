@@ -163,6 +163,9 @@ pub unsafe extern "C" fn glGetError() -> u32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn glMatrixMode(mode: u32) {
+    if crate::lists::record(crate::lists::Cmd::MatrixMode(mode)) {
+        return;
+    }
     with_matrices(|m| match mode {
         0x1700 => m.mode = 0,
         0x1701 => m.mode = 1,
@@ -173,11 +176,24 @@ pub unsafe extern "C" fn glMatrixMode(mode: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glLoadIdentity() {
+    if crate::lists::record(crate::lists::Cmd::LoadIdentity) {
+        return;
+    }
     with_matrices(|m| m.load(IDENTITY));
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn glLoadMatrixf(value: *const f32) {
+    if crate::lists::compiling() {
+        let cmd = if value.is_null() {
+            crate::lists::Cmd::Raise(0x0501)
+        } else {
+            crate::lists::Cmd::LoadMatrix(value.cast::<[f32; 16]>().read_unaligned())
+        };
+        if crate::lists::record(cmd) {
+            return;
+        }
+    }
     with_matrices(|m| {
         if value.is_null() {
             m.fail(INVALID_VALUE);
@@ -189,6 +205,16 @@ pub unsafe extern "C" fn glLoadMatrixf(value: *const f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glMultMatrixf(value: *const f32) {
+    if crate::lists::compiling() {
+        let cmd = if value.is_null() {
+            crate::lists::Cmd::Raise(0x0501)
+        } else {
+            crate::lists::Cmd::MultMatrix(value.cast::<[f32; 16]>().read_unaligned())
+        };
+        if crate::lists::record(cmd) {
+            return;
+        }
+    }
     with_matrices(|m| {
         if value.is_null() {
             m.fail(INVALID_VALUE);
@@ -200,6 +226,9 @@ pub unsafe extern "C" fn glMultMatrixf(value: *const f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glPushMatrix() {
+    if crate::lists::record(crate::lists::Cmd::PushMatrix) {
+        return;
+    }
     with_matrices(|m| {
         let d = m.depths[m.mode];
         let limit = if m.mode == 0 { 32 } else { 2 };
@@ -214,6 +243,9 @@ pub unsafe extern "C" fn glPushMatrix() {
 
 #[no_mangle]
 pub unsafe extern "C" fn glPopMatrix() {
+    if crate::lists::record(crate::lists::Cmd::PopMatrix) {
+        return;
+    }
     with_matrices(|m| {
         if m.depths[m.mode] == 0 {
             m.fail(0x0504);
@@ -226,6 +258,9 @@ pub unsafe extern "C" fn glPopMatrix() {
 
 #[no_mangle]
 pub unsafe extern "C" fn glTranslatef(x: f32, y: f32, z: f32) {
+    if crate::lists::record(crate::lists::Cmd::Translate([x, y, z])) {
+        return;
+    }
     let mut a = IDENTITY;
     a[12] = x;
     a[13] = y;
@@ -235,6 +270,9 @@ pub unsafe extern "C" fn glTranslatef(x: f32, y: f32, z: f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glScalef(x: f32, y: f32, z: f32) {
+    if crate::lists::record(crate::lists::Cmd::Scale([x, y, z])) {
+        return;
+    }
     let mut a = IDENTITY;
     a[0] = x;
     a[5] = y;
@@ -250,6 +288,9 @@ extern "C" {
 
 #[no_mangle]
 pub unsafe extern "C" fn glRotatef(angle: f32, x: f32, y: f32, z: f32) {
+    if crate::lists::record(crate::lists::Cmd::Rotate([angle, x, y, z])) {
+        return;
+    }
     let length = sqrtf(x * x + y * y + z * z);
     if length == 0. {
         return;
@@ -282,6 +323,9 @@ pub unsafe extern "C" fn glRotatef(angle: f32, x: f32, y: f32, z: f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glOrtho(l: f64, r: f64, b: f64, t: f64, n: f64, f: f64) {
+    if crate::lists::record(crate::lists::Cmd::Ortho([l, r, b, t, n, f])) {
+        return;
+    }
     with_matrices(|m| {
         if l == r || b == t || n == f {
             m.fail(INVALID_VALUE);
@@ -311,6 +355,9 @@ pub unsafe extern "C" fn glOrtho(l: f64, r: f64, b: f64, t: f64, n: f64, f: f64)
 
 #[no_mangle]
 pub unsafe extern "C" fn glFrustum(l: f64, r: f64, b: f64, t: f64, n: f64, f: f64) {
+    if crate::lists::record(crate::lists::Cmd::Frustum([l, r, b, t, n, f])) {
+        return;
+    }
     with_matrices(|m| {
         if l == r || b == t || n == f || n <= 0. || f <= 0. {
             m.fail(INVALID_VALUE);

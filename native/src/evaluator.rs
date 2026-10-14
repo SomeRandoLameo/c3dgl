@@ -225,6 +225,9 @@ unsafe fn submit(r: &mut crate::renderer::Renderer, e: Evaluated) {
 }
 
 unsafe fn eval_coord1(u: f32) {
+    if crate::lists::record(crate::lists::Cmd::EvalCoord1(u)) {
+        return;
+    }
     with_immediate(|r| {
         if !r.immediate.active {
             return;
@@ -236,6 +239,9 @@ unsafe fn eval_coord1(u: f32) {
 }
 
 unsafe fn eval_coord2(u: f32, v: f32) {
+    if crate::lists::record(crate::lists::Cmd::EvalCoord2(u, v)) {
+        return;
+    }
     with_immediate(|r| {
         if !r.immediate.active {
             return;
@@ -311,6 +317,48 @@ unsafe fn define_map(
     vorder: i32,
     points: Source,
 ) {
+    if crate::lists::compiling() {
+        let base = if two_d { 0x0db0 } else { 0x0d90 };
+        let cmd = if !(base..=base + 8).contains(&target) {
+            crate::lists::Cmd::Raise(0x0500)
+        } else {
+            let k = COMPONENTS[(target - base) as usize];
+            let bad_order = |n: i32| n < 1 || n as usize > MAX_ORDER;
+            if bad_order(uorder)
+                || bad_order(vorder)
+                || u[0] == u[1]
+                || (two_d && v[0] == v[1])
+                || ustride < 0
+                || vstride < 0
+                || (ustride as usize) < k
+                || (two_d && (vstride as usize) < k)
+            {
+                crate::lists::Cmd::Raise(0x0501)
+            } else {
+                // Packed like the call glMap uses at execution: u stride vorder * k, v stride k.
+                let mut data = Vec::new();
+                for i in 0..uorder as usize {
+                    for j in 0..vorder as usize {
+                        for c in 0..k {
+                            data.push(points.at(i * ustride as usize + j * vstride as usize + c));
+                        }
+                    }
+                }
+                crate::lists::Cmd::Map {
+                    target,
+                    two_d,
+                    u,
+                    v,
+                    uorder,
+                    vorder,
+                    points: data,
+                }
+            }
+        };
+        if crate::lists::record(cmd) {
+            return;
+        }
+    }
     with_immediate(|r| {
         let base = if two_d { 0x0db0 } else { 0x0d90 };
         if !(base..=base + 8).contains(&target) {
@@ -461,6 +509,9 @@ pub unsafe extern "C" fn glMap2d(
 
 #[no_mangle]
 pub unsafe extern "C" fn glMapGrid1f(un: i32, u1: f32, u2: f32) {
+    if crate::lists::record(crate::lists::Cmd::MapGrid1(un, u1, u2)) {
+        return;
+    }
     with_immediate(|r| {
         if un <= 0 {
             r.matrices.fail(0x0501);
@@ -477,6 +528,9 @@ pub unsafe extern "C" fn glMapGrid1d(un: i32, u1: f64, u2: f64) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glMapGrid2f(un: i32, u1: f32, u2: f32, vn: i32, v1: f32, v2: f32) {
+    if crate::lists::record(crate::lists::Cmd::MapGrid2(un, u1, u2, vn, v1, v2)) {
+        return;
+    }
     with_immediate(|r| {
         if un <= 0 || vn <= 0 {
             r.matrices.fail(0x0501);
@@ -503,6 +557,9 @@ fn grid_point2(e: &Evaluators, i: i32, j: i32) -> (f32, f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glEvalPoint1(i: i32) {
+    if crate::lists::record(crate::lists::Cmd::EvalPoint1(i)) {
+        return;
+    }
     let mut u = 0.;
     with_immediate(|r| u = grid_point1(&r.frame.eval, i));
     eval_coord1(u);
@@ -510,6 +567,9 @@ pub unsafe extern "C" fn glEvalPoint1(i: i32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glEvalPoint2(i: i32, j: i32) {
+    if crate::lists::record(crate::lists::Cmd::EvalPoint2(i, j)) {
+        return;
+    }
     let mut uv = (0., 0.);
     with_immediate(|r| uv = grid_point2(&r.frame.eval, i, j));
     eval_coord2(uv.0, uv.1);
@@ -523,6 +583,9 @@ unsafe fn in_begin() -> bool {
 
 #[no_mangle]
 pub unsafe extern "C" fn glEvalMesh1(mode: u32, i1: i32, i2: i32) {
+    if crate::lists::record(crate::lists::Cmd::EvalMesh1(mode, i1, i2)) {
+        return;
+    }
     if !matches!(mode, 0x1b00 | 0x1b01) {
         with_immediate(|r| r.matrices.fail(0x0500));
         return;
@@ -540,6 +603,9 @@ pub unsafe extern "C" fn glEvalMesh1(mode: u32, i1: i32, i2: i32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glEvalMesh2(mode: u32, i1: i32, i2: i32, j1: i32, j2: i32) {
+    if crate::lists::record(crate::lists::Cmd::EvalMesh2(mode, i1, i2, j1, j2)) {
+        return;
+    }
     use crate::immediate::{glBegin, glEnd};
     if !matches!(mode, 0x1b00..=0x1b02) {
         with_immediate(|r| r.matrices.fail(0x0500));

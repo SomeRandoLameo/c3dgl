@@ -153,21 +153,7 @@ void printStats() {
 
 }  // namespace
 
-int main() {
-    gfxInitDefault();
-    consoleInit(GFX_BOTTOM, nullptr);
-
-    if (!c3dglInit()) {
-        std::printf("c3dglInit failed\n");
-        while (aptMainLoop()) {
-            hidScanInput();
-            if (hidKeysDown() & KEY_START) break;
-            gspWaitForVBlank();
-        }
-        gfxExit();
-        return 1;
-    }
-
+GLuint createLists() {
     // One list per gear, compiled once
     const GLuint lists = glGenLists(3);
     for (int i = 0; i < 3; i++) {
@@ -175,7 +161,10 @@ int main() {
         drawGear(i);
         glEndList();
     }
+    return lists;
+}
 
+void setupScene() {
     const GLfloat lightPos[4] = {5.0f, 5.0f, 10.0f, 0.0f};
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
@@ -191,6 +180,26 @@ int main() {
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_NORMALIZE);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+}
+
+int main() {
+    gfxInitDefault();
+    consoleInit(GFX_BOTTOM, nullptr);
+
+    if (!c3dglInit()) {
+        std::printf("c3dglInit failed\n");
+        while (aptMainLoop()) {
+            hidScanInput();
+            if (hidKeysDown() & KEY_START) break;
+            gspWaitForVBlank();
+        }
+        gfxExit();
+        return 1;
+    }
+
+    const GLuint lists = createLists();
+
+    setupScene();
 
     std::printf("c3dgl display lists\n\n\n\n\n"
                 "Three gears, each one a display\n"

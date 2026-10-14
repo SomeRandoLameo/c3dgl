@@ -196,8 +196,11 @@ pub(crate) fn table(key: &Key) -> [u32; 128] {
     })
 }
 
-fn set_fog(pname: u32, p: &[f32; 4]) {
+pub(crate) fn set_fog(pname: u32, p: &[f32; 4]) {
     unsafe {
+        if crate::lists::record(crate::lists::Cmd::Fog(pname, *p)) {
+            return;
+        }
         with_frame(|s, m| {
             let f = &mut s.fog;
             match pname {

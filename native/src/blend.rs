@@ -95,6 +95,9 @@ impl Blend {
 
 #[no_mangle]
 pub unsafe extern "C" fn glBlendFuncSeparate(sr: u32, dr: u32, sa: u32, da: u32) {
+    if crate::lists::record(crate::lists::Cmd::BlendFuncSeparate([sr, dr, sa, da])) {
+        return;
+    }
     with_frame(|s, m| {
         let factors = [sr, dr, sa, da];
         if factors.iter().any(|f| factor(*f).is_none()) || dr == 0x0308 || da == 0x0308 {
@@ -116,6 +119,9 @@ pub unsafe extern "C" fn glBlendFunc(src: u32, dst: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glBlendEquationSeparate(rgb: u32, alpha: u32) {
+    if crate::lists::record(crate::lists::Cmd::BlendEquationSeparate(rgb, alpha)) {
+        return;
+    }
     with_frame(|s, m| {
         if equation(rgb).is_none() || equation(alpha).is_none() {
             m.fail(0x0500);
@@ -136,6 +142,9 @@ pub unsafe extern "C" fn glBlendEquation(mode: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glBlendColor(r: f32, g: f32, b: f32, a: f32) {
+    if crate::lists::record(crate::lists::Cmd::BlendColor([r, g, b, a])) {
+        return;
+    }
     with_frame(|s, m| {
         if [r, g, b, a].iter().any(|v| !v.is_finite()) {
             m.fail(0x0501);

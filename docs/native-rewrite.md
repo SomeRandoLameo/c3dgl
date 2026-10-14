@@ -355,3 +355,19 @@ attribute stack (GL_TRANSFORM_BIT and GL_ENABLE_BIT). All eight cells of the ori
 clipplane main loop (gradient, transformed plane, six planes, lines and points, outlines,
 sphere, textured hexagon, floor) match the C framebuffer exactly, as do all earlier scenes
 (`native-results/clipplane-step/`, one run each). Host tests: 50 pass.
+
+
+## Display list checkpoint
+
+`glNewList/glEndList/glCallList/glCallLists/glListBase/glGenLists/glDeleteLists/glIsList`
+are implemented. The base GL functions of every compiled command record themselves while
+a list is compiled (state, matrices, immediate mode, lighting, fog, texgen, clip planes,
+textures with tightly packed copies of client images, evaluators with packed control
+points, attributes, nested calls) and a list executes through the same functions, so it does
+exactly what the calls would do; GL_COMPILE_AND_EXECUTE records and executes. Calls that
+cannot be recorded as given record their error for execution. Nesting is limited to 64. The
+list base joins GL_LIST_BIT. The original lists example keeps `createLists()` and
+`setupScene()` (extracted from main unchanged); its first frame through display lists matches
+the C framebuffer exactly, as do all earlier scenes (`native-results/lists-step/`). New GL
+functions that GL compiles (pixel operations, accumulation, ...) must add their hook. Host
+tests: 52 pass.

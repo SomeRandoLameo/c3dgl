@@ -24,6 +24,8 @@ mod lighting;
 #[cfg(any(target_os = "horizon", test))]
 mod lines;
 #[cfg(any(target_os = "horizon", test))]
+mod lists;
+#[cfg(any(target_os = "horizon", test))]
 mod matrix;
 mod platform;
 #[cfg(any(target_os = "horizon", test))]

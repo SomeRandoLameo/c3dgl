@@ -227,6 +227,9 @@ impl Raster {
 }
 
 unsafe fn enable(cap: u32, on: bool) {
+    if crate::lists::record(crate::lists::Cmd::Enable(cap, on)) {
+        return;
+    }
     if cap == 0x0de1 {
         with_frame(|s, _| {
             s.textures.set_enabled(on);
@@ -359,6 +362,9 @@ pub unsafe extern "C" fn glIsEnabled(cap: u32) -> u8 {
 
 #[no_mangle]
 pub unsafe extern "C" fn glScissor(x: i32, y: i32, w: i32, h: i32) {
+    if crate::lists::record(crate::lists::Cmd::Scissor([x, y, w, h])) {
+        return;
+    }
     with_frame(|s, m| {
         if w < 0 || h < 0 {
             m.fail(0x0501);
@@ -377,6 +383,9 @@ pub unsafe extern "C" fn glScissor(x: i32, y: i32, w: i32, h: i32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glStencilFunc(function: u32, reference: i32, mask: u32) {
+    if crate::lists::record(crate::lists::Cmd::StencilFunc(function, reference, mask)) {
+        return;
+    }
     with_frame(|s, m| {
         if !(0x0200..=0x0207).contains(&function) {
             m.fail(0x0500);
@@ -392,6 +401,9 @@ pub unsafe extern "C" fn glStencilFunc(function: u32, reference: i32, mask: u32)
 
 #[no_mangle]
 pub unsafe extern "C" fn glStencilOp(fail: u32, zfail: u32, zpass: u32) {
+    if crate::lists::record(crate::lists::Cmd::StencilOp(fail, zfail, zpass)) {
+        return;
+    }
     with_frame(|s, m| {
         let valid = |op: u32| matches!(op, 0x1e00..=0x1e03 | 0x150a | 0x8507 | 0x8508 | 0);
         if !valid(fail) || !valid(zfail) || !valid(zpass) {
@@ -405,6 +417,9 @@ pub unsafe extern "C" fn glStencilOp(fail: u32, zfail: u32, zpass: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glStencilMask(mask: u32) {
+    if crate::lists::record(crate::lists::Cmd::StencilMask(mask)) {
+        return;
+    }
     with_frame(|s, _| {
         s.raster.stencil_write_mask = mask as u8;
         s.raster.dirty = true;
@@ -413,6 +428,9 @@ pub unsafe extern "C" fn glStencilMask(mask: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glColorMask(red: u8, green: u8, blue: u8, alpha: u8) {
+    if crate::lists::record(crate::lists::Cmd::ColorMask([red, green, blue, alpha])) {
+        return;
+    }
     with_frame(|s, _| {
         s.raster.color_mask = (red != 0) as u8
             | ((green != 0) as u8) << 1
@@ -424,6 +442,9 @@ pub unsafe extern "C" fn glColorMask(red: u8, green: u8, blue: u8, alpha: u8) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glAlphaFunc(function: u32, reference: f32) {
+    if crate::lists::record(crate::lists::Cmd::AlphaFunc(function, reference)) {
+        return;
+    }
     with_frame(|s, m| {
         if !(0x0200..=0x0207).contains(&function) {
             m.fail(0x0500);
@@ -448,6 +469,9 @@ pub unsafe extern "C" fn glAlphaFunc(function: u32, reference: f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glDepthMask(flag: u8) {
+    if crate::lists::record(crate::lists::Cmd::DepthMask(flag)) {
+        return;
+    }
     with_frame(|s, _| {
         let r = &mut s.raster;
         if r.depth_mask != (flag != 0) {
@@ -459,6 +483,9 @@ pub unsafe extern "C" fn glDepthMask(flag: u8) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glDepthFunc(function: u32) {
+    if crate::lists::record(crate::lists::Cmd::DepthFunc(function)) {
+        return;
+    }
     with_frame(|s, m| {
         if !(0x0200..=0x0207).contains(&function) {
             m.fail(0x0500);
@@ -475,6 +502,9 @@ pub unsafe extern "C" fn glDepthFunc(function: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glCullFace(face: u32) {
+    if crate::lists::record(crate::lists::Cmd::CullFace(face)) {
+        return;
+    }
     with_frame(|s, m| {
         if !matches!(face, 0x0404 | 0x0405 | 0x0408) {
             m.fail(0x0500);
@@ -491,6 +521,9 @@ pub unsafe extern "C" fn glCullFace(face: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glFrontFace(front: u32) {
+    if crate::lists::record(crate::lists::Cmd::FrontFace(front)) {
+        return;
+    }
     with_frame(|s, m| {
         if !matches!(front, 0x0900 | 0x0901) {
             m.fail(0x0500);
@@ -507,6 +540,9 @@ pub unsafe extern "C" fn glFrontFace(front: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glDepthRange(near: f64, far: f64) {
+    if crate::lists::record(crate::lists::Cmd::DepthRange(near, far)) {
+        return;
+    }
     with_frame(|s, m| {
         if !near.is_finite() || !far.is_finite() {
             m.fail(0x0501);

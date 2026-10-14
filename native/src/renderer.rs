@@ -1148,6 +1148,7 @@ mod lifecycle_tests {
                 glDrawElements(4, 3, 0x1401, ptr::null());
                 assert_eq!(MOCK.lock().unwrap().allocations, allocations + 1);
                 assert_eq!(glGetError(), 0);
+                crate::lists::lifecycle();
                 crate::matrix::texture_stack_lifecycle();
                 crate::arrays::uv_lifecycle();
                 crate::texture::lifecycle(|| {
