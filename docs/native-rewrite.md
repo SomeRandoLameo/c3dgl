@@ -139,3 +139,25 @@ The first three one-run pairs are in `native-results/old-examples/`: exact F-tex
 match, primitive channel differences of at most one, and an NPOT failure in the
 original 12x12 cube texture. Address these real-example gaps before claiming full
 compatibility; new isolated examples alone do not provide equivalent evidence.
+
+
+## NPOT texture checkpoint
+
+Level-zero RGB/RGBA images now accept dimensions 1..1024, with power-of-two
+GPU storage (minimum 8x8), shader UV scaling and wrap-dependent padding matching
+the C renderer. Subimage and wrap updates refresh padding with copy-on-write;
+allocation failure preserves the previous texture and parameters. The original
+12x12 cube scene now matches the C image exactly. See `native-results/npot-step/`.
+The earlier failed capture remains in `native-results/old-examples/`.
+
+
+## Primitive color parity checkpoint
+
+The original primitive scene now matches the C framebuffer exactly, with zero
+GL errors. Rust GL colors use reference byte rounding, byte-valued GPU attributes
+and the same float24 GPU normalization constant. CPU quantization alone left one
+pixel mismatch; its evidence is retained separately. The unchanged texture and
+cube scenes are included as regression comparisons. See
+`native-results/color-parity-step/`; 26 host tests and all consumer builds/audits
+pass. This does not complete full original programs, repeated performance or
+hardware gates.

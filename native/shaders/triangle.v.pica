@@ -6,12 +6,13 @@
 .alias inclr v1
 .alias intex v2
 .alias matrix c0-c3
+.constf color_scale(0.00392156862745, 0.0, 0.0, 0.0)
 .proc main
     dp4 outpos.x, matrix[0], inpos
     dp4 outpos.y, matrix[1], inpos
     dp4 outpos.z, matrix[2], inpos
     dp4 outpos.w, matrix[3], inpos
-    mov outclr, inclr
-    mov outtex.xy, intex
+    mul outclr, color_scale.xxxx, inclr
+    mul outtex.xy, c4, intex
     end
 .end

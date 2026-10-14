@@ -36,19 +36,19 @@ impl Plan {
             }
             _ => return Err(0x0500),
         };
-        
+
         let output = triangles
             .checked_mul(3)
             .filter(|n| *n <= u32::MAX as usize)
             .ok_or(0x0501u32)?;
-        
+
         Ok(Self {
             mode,
             consumed,
             output,
         })
     }
-    
+
     pub fn triangles(self, mut emit: impl FnMut([usize; 3])) {
         match self.mode {
             4 => {
@@ -85,12 +85,12 @@ impl Plan {
             _ => {}
         }
     }
-    
+
     pub fn indices(self, mut map: impl FnMut(usize) -> u16) -> Result<Vec<u16>, u32> {
         let mut out = Vec::new();
         out.try_reserve_exact(self.output).map_err(|_| 0x0505u32)?;
         self.triangles(|t| out.extend(t.map(&mut map)));
-        
+
         Ok(out)
     }
 }
@@ -98,14 +98,14 @@ impl Plan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn sequence(mode: u32, count: usize) -> Vec<u16> {
         Plan::new(mode, count)
             .unwrap()
             .indices(|i| i as u16)
             .unwrap()
     }
-    
+
     #[test]
     fn topology_order_and_incomplete_tails() {
         assert_eq!(sequence(4, 7), [0, 1, 2, 3, 4, 5]);
@@ -124,7 +124,7 @@ mod tests {
         assert!(Plan::new(1, 3).is_err());
         assert!(Plan::new(5, usize::MAX).is_err());
     }
-    
+
     #[test]
     fn strip_faces_keep_winding_and_degenerate_parity() {
         let v = [[0i32, 0], [1, 0], [0, 1], [1, 1], [0, 2], [1, 2]];
@@ -140,7 +140,7 @@ mod tests {
             [0, 1, 2, 2, 1, 2, 2, 2, 3, 3, 2, 4]
         );
     }
-    
+
     #[test]
     fn output_matches_consumed_indices_at_limit() {
         for mode in 4..=9 {

@@ -28,12 +28,28 @@ with tempfile.TemporaryDirectory(prefix='c3dgl-shader-') as directory:
     code_offset = program + words[program+2]//4
     code = list(words[code_offset:code_offset+words[program+3]])
     descriptors = [words[program+words[program+4]//4+i*2] for i in range(words[program+5])]
+    constants = []
+    for i in range(words[entry+7]):
+        at = entry + words[entry+6]//4 + i*5
+        kind, register = words[at] & 0xffff, words[at] >> 16
+        if kind != 2:
+            raise ValueError('Only float shader constants are supported')
+        values = []
+        for value in words[at+1:at+5]:
+            if value & 0x7fffff == 0:
+                bits = (value & 0x800000) << 8
+            else:
+                bits = ((value & 0x800000) << 8) | (((value >> 16 & 0x7f) + 64) << 23) | ((value & 0xffff) << 7)
+            values.append(bits)
+        constants.append((register, list(reversed(values))))
     generated = ('// Generated from shaders/triangle.v.pica with devkitPro picasso.\n'
                  f'pub const ENTRY: u32 = {words[entry+2]};\n'
                  f'#[rustfmt::skip]\n'
                  f'pub const CODE: &[u32] = &{code};\n'
                  f'#[rustfmt::skip]\n'
-                 f'pub const DESCRIPTORS: &[u32] = &{descriptors};\n')
+                 f'pub const DESCRIPTORS: &[u32] = &{descriptors};\n'
+                 f'#[rustfmt::skip]\n'
+                 f'pub const CONSTANTS: &[(u32, [u32; 4])] = &{constants};\n')
     source = root/'src/shader.rs'
     if args.check:
         if source.read_text() != generated:

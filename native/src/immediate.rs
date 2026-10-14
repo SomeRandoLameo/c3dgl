@@ -55,7 +55,7 @@ impl Immediate {
 
         self.vertices.push(GpuVertex {
             position,
-            color: self.color,
+            color: self.color.map(gpu_color_component),
             texcoord: self.texcoord,
         });
 
@@ -117,10 +117,26 @@ pub unsafe extern "C" fn glVertex2f(x: f32, y: f32) {
     glVertex4f(x, y, 0., 1.);
 }
 
+pub(crate) fn gpu_color_component(value: f32) -> f32 {
+    (value.clamp(0., 1.) * 255. + 0.5) as u8 as f32
+}
+
+// Match the reference's byte storage followed by float GPU expansion.
+pub(crate) fn color_component(value: f32) -> f32 {
+    let byte = if value <= 0. {
+        0
+    } else if value >= 1. {
+        255
+    } else {
+        (value * 255. + 0.5) as u8
+    };
+    byte as f32 * (1. / 255.)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn glColor4f(r: f32, g: f32, b: f32, a: f32) {
     with_immediate(|s| {
-        s.immediate.color = [r, g, b, a].map(|v| v.clamp(0., 1.));
+        s.immediate.color = [r, g, b, a].map(color_component);
     });
 }
 
@@ -131,17 +147,37 @@ pub unsafe extern "C" fn glColor3f(r: f32, g: f32, b: f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glColor4ub(r: u8, g: u8, b: u8, a: u8) {
-    glColor4f(
-        r as f32 / 255.,
-        g as f32 / 255.,
-        b as f32 / 255.,
-        a as f32 / 255.,
-    );
+    with_immediate(|s| {
+        s.immediate.color = [r, g, b, a].map(|v| v as f32 * (1. / 255.));
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reference_byte_color_rounding_and_expansion() {
+        assert_eq!(color_component(-1.), 0.);
+        assert_eq!(color_component(2.), 1.);
+        assert_eq!(color_component(0.3), 77. * (1. / 255.));
+        assert_eq!(color_component(0.5), 128. * (1. / 255.));
+        for byte in 0..=255 {
+            let input = byte as f32 / 255.;
+            assert_eq!(color_component(input), byte as f32 * (1. / 255.));
+        }
+        for byte in 0..255 {
+            let threshold = (byte as f32 + 0.5) / 255.;
+            assert_eq!(
+                color_component(threshold - 0.00001),
+                byte as f32 * (1. / 255.)
+            );
+            assert_eq!(
+                color_component(threshold + 0.00001),
+                (byte + 1) as f32 * (1. / 255.)
+            );
+        }
+    }
 
     #[test]
     fn assembled_indices_preserve_vertex_attributes_and_current_state() {
@@ -160,7 +196,7 @@ mod tests {
             for i in batch.indices {
                 let v = batch.vertices[i as usize];
                 assert_eq!(v.position[0], i as f32);
-                assert_eq!(v.color[0], i as f32);
+                assert_eq!(v.color[0], if i == 0 { 0. } else { 255. });
                 assert_eq!(v.texcoord[0], i as f32);
             }
             assert_eq!(s.color[0], 4.);
@@ -197,7 +233,7 @@ mod tests {
         assert_eq!(v.vertices.len(), 3);
         assert_eq!(v.count, 3);
         assert!(v.indices.is_empty());
-        assert_eq!(v.vertices[0].color, [0., 1., 0., 1.]);
+        assert_eq!(v.vertices[0].color, [0., 255., 0., 255.]);
         assert!(s.end().is_err());
         s.begin(4).unwrap();
         assert_eq!(s.color, [0., 1., 0., 1.]);

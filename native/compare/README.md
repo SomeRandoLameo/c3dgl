@@ -14,8 +14,8 @@ The interactive original main and unsupported pages are not run yet. This is a
 | Example | Exact original functions currently selected | Remaining full-example gaps |
 |---|---|---|
 | primitives | `beginCell`, `drawTriangleStrip`, `drawTriangleFan`, `drawQuadStrip`, `drawPolygon` | points/lines, flat/polygon modes, edge flags, polygon offset, evaluators |
-| texture | `createF(16)`, `drawCell(0,0,texture)` | texture matrix, NPOT, projective coordinates, more coordinate types, multitexturing/combine, mipmaps, compression |
-| cube | `createCheckerTexture()`, `drawCube(texture,0,0,0,200,240,true)` | 12x12 NPOT image currently rejected; full main also uses PNG/ROMFS, scissor, lines and Citro3D statistics |
+| texture | `createF(16)`, `drawCell(0,0,texture)` | texture matrix, projective coordinates, more coordinate types, multitexturing/combine, mipmaps, compression |
+| cube | `createCheckerTexture()`, `drawCube(texture,0,0,0,200,240,true)` | full main also uses PNG/ROMFS, scissor, lines and Citro3D statistics |
 
 The C renderer uses `C3DGL_W_DEPTH=0` to select the same Z-depth convention as Rust.
 The common entry point supplies initialization, deterministic inputs/capture,

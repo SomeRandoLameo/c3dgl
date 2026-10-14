@@ -254,8 +254,9 @@ impl Arrays {
                 position: self.value(key.vertex, if kind == 0 { first + i } else { i }, false)?,
                 color: if let Some(a) = key.color {
                     self.value(a, if kind == 0 { first + i } else { i }, true)?
+                        .map(crate::immediate::gpu_color_component)
                 } else {
-                    current_color
+                    current_color.map(crate::immediate::gpu_color_component)
                 },
                 texcoord: if let Some(a) = key.texcoord {
                     self.value(a, if kind == 0 { first + i } else { i }, false)?

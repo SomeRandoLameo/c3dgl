@@ -75,6 +75,7 @@ impl Raster {
         if let Some(v) = self.blend.query(pname) {
             return Some(v);
         }
+
         let mut values = [0.; 16];
         values[0] = match pname {
             0x0b71 => self.depth as u8 as f64,
@@ -104,6 +105,7 @@ unsafe fn enable(cap: u32, on: bool) {
         });
         return;
     }
+
     with_frame(|s, m| {
         let r = &mut s.raster;
         let value = match cap {

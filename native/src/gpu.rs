@@ -113,6 +113,10 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
     one(c, r::VSH_CODETRANSFER_END, 1)?;
     one(c, r::VSH_OPDESCS_CONFIG, 0)?;
     write(c, r::VSH_OPDESCS_DATA, 15, shader::DESCRIPTORS, false)?;
+    for (register, values) in shader::CONSTANTS {
+        one(c, r::VSH_FLOATUNIFORM_CONFIG, 0x80000000 | register)?;
+        write(c, r::VSH_FLOATUNIFORM_DATA, 15, values, false)?;
+    }
     one(c, r::VSH_ENTRYPOINT, 0x7fff0000 | shader::ENTRY)?;
     one(c, r::VSH_OUTMAP_MASK, 7)?;
     one(c, r::VSH_OUTMAP_TOTAL1, 2)?;
@@ -287,6 +291,7 @@ mod tests {
             dimensions: 0x00100008,
             parameters: 0x2206,
             replace: false,
+            scale: [1.; 2],
         };
         texture(&mut c, t).unwrap();
         assert_eq!(c.used, TEXTURE_WORDS);
@@ -453,7 +458,7 @@ pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster) -> Result<(
     )
 }
 
-pub const TEXTURE_WORDS: usize = 18;
+pub const TEXTURE_WORDS: usize = 26;
 pub(crate) fn texture(c: &mut Commands<'_>, t: crate::texture::Packet) -> Result<(), ()> {
     if c.words.len() - c.used < TEXTURE_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
         return Err(());
@@ -489,5 +494,18 @@ pub(crate) fn texture(c: &mut Commands<'_>, t: crate::texture::Packet) -> Result
         0
     };
     // Incomplete level-zero textures (including default mip filters) sample black, alpha one.
-    seq(c, r::TEXENV0_SOURCE, &[source, 0, combine, 0xff000000, 0])
+    seq(c, r::TEXENV0_SOURCE, &[source, 0, combine, 0xff000000, 0])?;
+    one(c, r::VSH_FLOATUNIFORM_CONFIG, 0x80000004)?;
+    write(
+        c,
+        r::VSH_FLOATUNIFORM_DATA,
+        15,
+        &[
+            1f32.to_bits(),
+            0,
+            t.scale[1].to_bits(),
+            t.scale[0].to_bits(),
+        ],
+        false,
+    )
 }

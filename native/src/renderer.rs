@@ -22,6 +22,7 @@ pub(crate) struct GpuVertex {
     pub color: [f32; 4],
     pub texcoord: [f32; 4],
 }
+
 const VERTEX_BYTES: usize = core::mem::size_of::<GpuVertex>();
 
 #[repr(C)]
@@ -105,6 +106,7 @@ pub unsafe fn with_matrices(f: impl FnOnce(&mut Matrices)) {
             r.matrices.fail(0x0502);
             return;
         }
+
         f(&mut r.matrices);
     }
 }
@@ -115,35 +117,44 @@ pub unsafe fn with_frame(f: impl FnOnce(&mut FrameState, &mut Matrices)) {
             r.matrices.fail(0x0502);
             return;
         }
+
         f(&mut r.frame, &mut r.matrices);
     }
 }
+
 pub unsafe fn clear_gl(mask: u32) {
     if mask & !(crate::frame::COLOR | crate::frame::DEPTH) != 0 {
         with_matrices(|m| m.fail(0x0501));
         return;
     }
+
     if mask == 0 {
         return;
     }
+
     let Some(r) = (&mut *ptr::addr_of_mut!(CONTEXT)).as_mut() else {
         return;
     };
+
     if r.immediate.active {
         r.matrices.fail(0x0502);
         return;
     }
+
     let mask = if r.frame.raster.depth_mask {
         mask
     } else {
         mask & !crate::frame::DEPTH
     };
+
     if mask == 0 {
         return;
     }
+
     if !r.active {
         if begin_frame(r, true, None) != 0 {
             r.matrices.fail(0x0502);
+
             return;
         }
     } else {
@@ -153,12 +164,14 @@ pub unsafe fn clear_gl(mask: u32) {
             r.matrices.fail(0x0505);
             return;
         }
+
         r.used = commands.used;
         let wait = p::c3dglPlatformTick();
         if p::c3dglPlatformSubmit(r.commands.pointer, (r.used * 4) as u32, ptr::null_mut()) < 0 {
             r.matrices.fail(0x0502);
             return;
         }
+
         r.work_gpu_ticks += p::c3dglPlatformWait();
         r.submitted_bytes += (r.used * 4) as u32;
         r.work_wait_ticks += p::c3dglPlatformTick() - wait;
@@ -168,8 +181,10 @@ pub unsafe fn clear_gl(mask: u32) {
             r.matrices.fail(0x0505);
             return;
         }
+
         r.used = commands.used;
     }
+
     let depth = ((1. - r.frame.clear_depth) * 16777215.) as u32;
     if p::c3dglPlatformClearMasked(
         r.color.pointer,
@@ -336,7 +351,7 @@ pub unsafe extern "C" fn c3dglNativeUpload(vertices: *const Vertex, count: usize
     for (out, v) in output.iter_mut().zip(input) {
         *out = GpuVertex {
             position: v.position,
-            color: v.color,
+            color: v.color.map(|c| c * 255.),
             texcoord: [0., 0., 0., 1.],
         };
     }
@@ -360,6 +375,7 @@ pub unsafe extern "C" fn c3dglNativeBegin(clear: u32, sync: bool) -> i32 {
 
     begin_frame(r, sync, Some(clear))
 }
+
 unsafe fn begin_frame(r: &mut Renderer, sync: bool, clear: Option<u32>) -> i32 {
     if r.active {
         return -2;
@@ -480,6 +496,7 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
     {
         return Err(());
     }
+
     if let Some(s) = raster {
         gpu::raster(&mut commands, s)?;
     }
@@ -505,6 +522,7 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
     r.frame.viewport_dirty = false;
     r.frame.raster.dirty = false;
     r.frame.textures.dirty = false;
+
     Ok(())
 }
 
@@ -1004,11 +1022,11 @@ mod lifecycle_tests {
                         assert_eq!(r.transient.len(), 1);
                         let v =
                             slice::from_raw_parts(r.transient[0].pointer.cast::<GpuVertex>(), 3);
-                        assert_eq!(v[0].color, [1., 0., 0., 1.]);
+                        assert_eq!(v[0].color, [255., 0., 0., 255.]);
                         assert_eq!(v[0].texcoord, [0.25, 0.75, 0., 1.]);
                         assert_eq!(v[1].texcoord, [0.5, 1., 0., 1.]);
                         assert_eq!(v[1].position, [1., -1., 0., 1.]);
-                        assert_eq!(v[2].color, [0., 0., 1., 1.]);
+                        assert_eq!(v[2].color, [0., 0., 255., 255.]);
                     });
                     assert_eq!(c3dglNativePresent(), 0);
                     with_immediate(|r| assert_eq!(r.transient.len(), 1));
@@ -1057,12 +1075,15 @@ pub(crate) unsafe fn end_immediate() {
             if batch.count == 0 {
                 return Ok(());
             }
+
             if !r.active && begin_frame(r, true, None) != 0 {
                 return Err(0x0502);
             }
+
             if !r.frame.drawable || !r.frame.raster.drawable() {
                 return Ok(());
             }
+
             r.transient.try_reserve(1).map_err(|_| 0x0505u32)?;
             let bytes = vertices.len() * core::mem::size_of::<GpuVertex>();
             let total = bytes + batch.indices.len() * 2;
@@ -1073,9 +1094,11 @@ pub(crate) unsafe fn end_immediate() {
                 storage.pointer.add(bytes),
                 batch.indices.len() * 2,
             );
+
             if p::c3dglPlatformFlush(storage.pointer, total as u32) < 0 {
                 return Err(0x0502);
             }
+
             update_draw_state(r).map_err(|_| 0x0505u32)?;
             let mut c = r.commands();
             gpu::geometry(
@@ -1086,12 +1109,15 @@ pub(crate) unsafe fn end_immediate() {
                 (!batch.indices.is_empty()).then_some(bytes as u32 | 0x80000000),
             )
             .map_err(|_| 0x0505u32)?;
+
             r.used = c.used;
             r.transient.push(storage);
             r.frame.textures.sampled();
             r.draws += 1;
+
             Ok(())
         })();
+
         if let Err(e) = result {
             r.matrices.fail(e);
         }
@@ -1132,6 +1158,7 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                 r.immediate.color,
                 r.immediate.texcoord,
             )?;
+
             update_draw_state(r).map_err(|_| 0x0505u32)?;
             let mut c = r.commands();
             gpu::geometry(&mut c, address, 0, draw_count, index).map_err(|_| 0x0505u32)?;

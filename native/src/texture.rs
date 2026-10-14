@@ -51,6 +51,7 @@ pub(crate) struct Packet {
     pub dimensions: u32,
     pub parameters: u32,
     pub replace: bool,
+    pub scale: [f32; 2],
 }
 
 pub(crate) struct Textures {
@@ -110,13 +111,16 @@ impl Textures {
             dimensions: 0,
             parameters: 0,
             replace: self.env_replace,
+            scale: [1.; 2],
         };
 
         if let Some(o) = self.objects.iter().find(|o| o.name == self.bound) {
             s.complete = o.complete();
             if s.complete {
                 s.address = o.storage.as_ref().unwrap().physical();
-                s.dimensions = (o.width as u32) << 16 | o.height as u32;
+                let (tw, th) = (stored(o.width), stored(o.height));
+                s.dimensions = (tw as u32) << 16 | th as u32;
+                s.scale = [o.width as f32 / tw as f32, o.height as f32 / th as f32];
                 let wrap = |v| match v {
                     0x812f => 0,
                     0x2901 => 2,
@@ -206,7 +210,48 @@ fn format(f: u32, t: u32) -> Result<usize, u32> {
 }
 
 fn dimension(v: i32) -> bool {
-    v == 0 || (8..=1024).contains(&v) && (v as u32).is_power_of_two()
+    (0..=1024).contains(&v)
+}
+
+fn stored(size: usize) -> usize {
+    size.max(8).next_power_of_two()
+}
+
+fn padding_source(x: usize, size: usize, padded: usize, wrap: u32) -> usize {
+    let pad = x - size;
+    let back = padded - x;
+    match wrap {
+        0x2901 if pad < back => pad % size,
+        0x2901 => size - 1 - (back - 1) % size,
+        0x8370 => size - 1 - pad % size,
+        _ => size - 1,
+    }
+}
+
+unsafe fn padding(out: *mut u8, w: usize, h: usize, wrap: [u32; 2]) {
+    let (tw, th) = (stored(w), stored(h));
+    for y in 0..th {
+        for x in 0..tw {
+            if x < w && y < h {
+                continue;
+            }
+            let sx = if x < w {
+                x
+            } else {
+                padding_source(x, w, tw, wrap[0])
+            };
+            let sy = if y < h {
+                y
+            } else {
+                padding_source(y, h, th, wrap[1])
+            };
+            ptr::copy_nonoverlapping(
+                out.add(offset(tw, th, sx, sy)),
+                out.add(offset(tw, th, x, y)),
+                4,
+            );
+        }
+    }
 }
 
 /// GL bottom row first; PICA's tiled image runs top to bottom and stores A,B,G,R.
@@ -381,15 +426,41 @@ pub unsafe extern "C" fn glTexParameteri(kind: u32, pname: u32, value: i32) {
             return Err(0x0500);
         }
         let i = t.index()?;
-        let o = &mut t.objects[i];
-        let field = match pname {
-            0x2801 => &mut o.min,
-            0x2800 => &mut o.mag,
-            0x2802 => &mut o.wrap[0],
-            _ => &mut o.wrap[1],
+        let o = &t.objects[i];
+        let current = match pname {
+            0x2801 => o.min,
+            0x2800 => o.mag,
+            0x2802 => o.wrap[0],
+            _ => o.wrap[1],
         };
-        if *field != value {
-            *field = value;
+        if current != value {
+            if matches!(pname, 0x2802 | 0x2803)
+                && o.storage.is_some()
+                && (o.width != stored(o.width) || o.height != stored(o.height))
+            {
+                let mut wrap = o.wrap;
+                wrap[(pname == 0x2803) as usize] = value;
+                let (w, h) = (o.width, o.height);
+                let bytes = stored(w) * stored(h) * 4;
+                let storage = Buffer::new(bytes, false).ok_or(0x0505u32)?;
+                ptr::copy_nonoverlapping(
+                    o.storage.as_ref().unwrap().pointer,
+                    storage.pointer,
+                    bytes,
+                );
+                padding(storage.pointer, w, h, wrap);
+                if p::c3dglPlatformFlush(storage.pointer, bytes as u32) < 0 {
+                    return Err(0x0502);
+                }
+                t.replace(i, Some(storage), w, h)?;
+            }
+            let o = &mut t.objects[i];
+            match pname {
+                0x2801 => o.min = value,
+                0x2800 => o.mag = value,
+                0x2802 => o.wrap[0] = value,
+                _ => o.wrap[1] = value,
+            }
             t.dirty = true;
         }
         Ok(())
@@ -445,14 +516,15 @@ pub unsafe extern "C" fn glTexImage2D(
         if w == 0 || h == 0 {
             return t.replace(i, None, w, h);
         }
-        let bytes = w * h * 4;
+        let (tw, th) = (stored(w), stored(h));
+        let bytes = tw * th * 4;
         let storage = Buffer::new(bytes, false).ok_or(0x0505u32)?;
         ptr::write_bytes(storage.pointer, 0, bytes);
         if !pixels.is_null() {
             upload(
                 storage.pointer,
-                w,
-                h,
+                tw,
+                th,
                 0,
                 0,
                 w,
@@ -463,10 +535,11 @@ pub unsafe extern "C" fn glTexImage2D(
             );
         }
         if internal == 0x1907 {
-            for i in 0..w * h {
+            for i in 0..tw * th {
                 storage.pointer.add(i * 4).write(255);
             }
         }
+        padding(storage.pointer, w, h, t.objects[i].wrap);
         if p::c3dglPlatformFlush(storage.pointer, bytes as u32) < 0 {
             return Err(0x0502);
         }
@@ -512,7 +585,8 @@ pub unsafe extern "C" fn glTexSubImage2D(
         }
 
         // Copy on update: queued draws retain their previous texture image.
-        let (tw, th) = (o.width, o.height);
+        let (iw, ih) = (o.width, o.height);
+        let (tw, th) = (stored(iw), stored(ih));
         let bytes = tw * th * 4;
         let storage = Buffer::new(bytes, false).ok_or(0x0505u32)?;
         ptr::copy_nonoverlapping(old.pointer, storage.pointer, bytes);
@@ -537,17 +611,59 @@ pub unsafe extern "C" fn glTexSubImage2D(
             }
         }
 
+        padding(storage.pointer, iw, ih, o.wrap);
         if p::c3dglPlatformFlush(storage.pointer, bytes as u32) < 0 {
             return Err(0x0502);
         }
 
-        t.replace(i, Some(storage), tw, th)
+        t.replace(i, Some(storage), iw, ih)
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn npot_padding_matches_reference_wrap_and_preserves_image() {
+        for wrap in [0x2901, 0x8370, 0x812f] {
+            for (w, h) in [(12, 12), (1, 3), (9, 17)] {
+                let (tw, th) = (stored(w), stored(h));
+                let mut image = alloc::vec![0; tw * th * 4];
+                for y in 0..h {
+                    for x in 0..w {
+                        image[offset(tw, th, x, y)..][..4]
+                            .copy_from_slice(&[255, x as u8, y as u8, 17]);
+                    }
+                }
+                unsafe {
+                    padding(image.as_mut_ptr(), w, h, [wrap; 2]);
+                }
+                for y in 0..th {
+                    for x in 0..tw {
+                        let sx = if x < w {
+                            x
+                        } else {
+                            padding_source(x, w, tw, wrap)
+                        };
+                        let sy = if y < h {
+                            y
+                        } else {
+                            padding_source(y, h, th, wrap)
+                        };
+                        assert_eq!(
+                            &image[offset(tw, th, x, y)..][..4],
+                            &[255, sx as u8, sy as u8, 17]
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(padding_source(12, 12, 16, 0x2901), 0);
+        assert_eq!(padding_source(15, 12, 16, 0x2901), 11);
+        assert_eq!(padding_source(12, 12, 16, 0x8370), 11);
+        assert_eq!(padding_source(15, 12, 16, 0x8370), 8);
+    }
 
     #[test]
     fn tiled_layout_channels_orientation_and_unpack_stride() {
@@ -573,11 +689,11 @@ mod tests {
         assert_eq!(&image[offset(16, 8, 9, 2)..][..4], &[255, 3, 2, 1]);
         assert_eq!(&image[offset(16, 8, 9, 3)..][..4], &[255, 6, 5, 4]);
 
-        for v in [0, 8, 16, 1024] {
+        for v in [0, 1, 7, 8, 9, 12, 16, 1024] {
             assert!(dimension(v));
         }
 
-        for v in [-1, 1, 7, 9, 2048] {
+        for v in [-1, 1025, 2048] {
             assert!(!dimension(v));
         }
     }
@@ -739,6 +855,64 @@ pub(crate) unsafe fn lifecycle(mut fail_next: impl FnMut()) {
         let o = t.objects.iter().find(|o| o.name == names[1]).unwrap();
         let p = o.storage.as_ref().unwrap().pointer.add(offset(8, 8, 0, 0));
         assert_eq!(core::slice::from_raw_parts(p, 4), &[255, 3, 2, 1]);
+    });
+    let npot = [23u8; 12 * 12 * 4];
+    glTexImage2D(
+        TARGET,
+        0,
+        0x1908,
+        12,
+        12,
+        0,
+        0x1908,
+        0x1401,
+        npot.as_ptr().cast(),
+    );
+    glTexParameteri(TARGET, 0x2801, 0x2600);
+    with_frame(|s, _| {
+        let packet = s.textures.packet();
+        assert_eq!(packet.dimensions, 0x00100010);
+        assert_eq!(packet.scale, [0.75; 2]);
+        s.textures.sampled();
+    });
+    glTexSubImage2D(TARGET, 0, 0, 0, 1, 1, 0x1908, 0x1401, patch.as_ptr().cast());
+    with_frame(|s, _| {
+        let o = s
+            .textures
+            .objects
+            .iter()
+            .find(|o| o.name == names[1])
+            .unwrap();
+        assert_eq!((o.width, o.height), (12, 12));
+        let p = o
+            .storage
+            .as_ref()
+            .unwrap()
+            .pointer
+            .add(offset(16, 16, 12, 12));
+        assert_eq!(core::slice::from_raw_parts(p, 4), &[4, 3, 2, 1]);
+        s.textures.sampled();
+    });
+    fail_next();
+    glTexParameteri(TARGET, 0x2802, 0x812f);
+    assert_eq!(glGetError(), 0x0505);
+    glGetTexParameteriv(TARGET, 0x2802, &mut value);
+    assert_eq!(value, 0x2901);
+    glTexParameteri(TARGET, 0x2802, 0x812f);
+    with_frame(|s, _| {
+        let o = s
+            .textures
+            .objects
+            .iter()
+            .find(|o| o.name == names[1])
+            .unwrap();
+        let p = o
+            .storage
+            .as_ref()
+            .unwrap()
+            .pointer
+            .add(offset(16, 16, 12, 12));
+        assert_eq!(core::slice::from_raw_parts(p, 4), &[23; 4]);
     });
     glDeleteTextures(2, names.as_ptr());
     glDisable(TARGET);

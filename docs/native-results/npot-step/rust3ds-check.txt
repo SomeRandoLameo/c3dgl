@@ -1,0 +1,9 @@
+   Compiling c3dgl-rust3ds-triangle v0.1.0 (/Users/elias/Documents/projekte/c3dgl/native/rust3ds)
+    Finished `release` profile [optimized] target(s) in 2.82s
+Building smdh: /Users/elias/Documents/projekte/c3dgl/build-native-rust3ds/armv6k-nintendo-3ds/release/textured.smdh
+Building 3dsx: /Users/elias/Documents/projekte/c3dgl/build-native-rust3ds/armv6k-nintendo-3ds/release/textured.3dsx
+Building smdh: /Users/elias/Documents/projekte/c3dgl/build-native-rust3ds/armv6k-nintendo-3ds/release/primitives.smdh
+Building 3dsx: /Users/elias/Documents/projekte/c3dgl/build-native-rust3ds/armv6k-nintendo-3ds/release/primitives.3dsx
+Building smdh: /Users/elias/Documents/projekte/c3dgl/build-native-rust3ds/armv6k-nintendo-3ds/release/c3dgl-rust3ds-triangle.smdh
+Building 3dsx: /Users/elias/Documents/projekte/c3dgl/build-native-rust3ds/armv6k-nintendo-3ds/release/c3dgl-rust3ds-triangle.3dsx
+PASS: rust3ds Cargo dependency, ctru-rs std runtime, 3DSX build and symbol audit.
