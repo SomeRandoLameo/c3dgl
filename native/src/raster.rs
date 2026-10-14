@@ -98,10 +98,7 @@ impl Raster {
 unsafe fn enable(cap: u32, on: bool) {
     if cap == 0x0de1 {
         with_frame(|s, _| {
-            if s.textures.enabled != on {
-                s.textures.enabled = on;
-                s.textures.dirty = true;
-            }
+            s.textures.set_enabled(on);
         });
         return;
     }
@@ -143,7 +140,7 @@ pub unsafe extern "C" fn glIsEnabled(cap: u32) -> u8 {
             0x0b71 => s.raster.depth as u8,
             0x0b44 => s.raster.cull as u8,
             0x0be2 => s.raster.blend.enabled as u8,
-            0x0de1 => s.textures.enabled as u8,
+            0x0de1 => s.textures.enabled() as u8,
             _ => {
                 m.fail(0x0500);
                 0

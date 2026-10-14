@@ -12,6 +12,7 @@ pub(crate) struct Immediate {
     pub active: bool,
     pub color: [f32; 4],
     pub texcoord: [f32; 4],
+    pub extra_texcoords: [[f32; 4]; 2],
     mode: u32,
     vertices: Vec<GpuVertex>,
 }
@@ -22,6 +23,7 @@ impl Immediate {
             active: false,
             color: [1.; 4],
             texcoord: [0., 0., 0., 1.],
+            extra_texcoords: [[0., 0., 0., 1.]; 2],
             mode: 4,
             vertices: Vec::new(),
         }
@@ -57,6 +59,7 @@ impl Immediate {
             position,
             color: self.color.map(gpu_color_component),
             texcoord: self.texcoord,
+            extra_texcoords: self.extra_texcoords,
         });
 
         Ok(())
@@ -76,6 +79,7 @@ impl Immediate {
         } else {
             plan.indices(|i| i as u16)?
         };
+
         Ok(Batch {
             vertices,
             indices,
@@ -268,6 +272,23 @@ pub unsafe extern "C" fn glTexCoord4fv(v: *const f32) {
     if let Some([s, t, r, q]) = vector(v) {
         glTexCoord4f(s, t, r, q);
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glMultiTexCoord4f(unit: u32, s: f32, t: f32, r: f32, q: f32) {
+    with_immediate(|state| match unit {
+        0x84c0 => state.immediate.texcoord = [s, t, r, q],
+        0x84c1..=0x84c2 => state.immediate.extra_texcoords[(unit - 0x84c1) as usize] = [s, t, r, q],
+        _ => state.matrices.fail(0x0500),
+    });
+}
+#[no_mangle]
+pub unsafe extern "C" fn glMultiTexCoord2f(unit: u32, s: f32, t: f32) {
+    glMultiTexCoord4f(unit, s, t, 0., 1.);
+}
+#[no_mangle]
+pub unsafe extern "C" fn glMultiTexCoord3f(unit: u32, s: f32, t: f32, r: f32) {
+    glMultiTexCoord4f(unit, s, t, r, 1.);
 }
 
 unsafe fn vector<T: Copy, const N: usize>(values: *const T) -> Option<[T; N]> {

@@ -24,7 +24,7 @@ cmake -S native/benchmark -B build-native-reference -DCMAKE_TOOLCHAIN_FILE="$DEV
 cmake --build build-native-reference
 for consumer in c3dgl_native_triangle c3dgl_native_triangle_cpp c3dgl_native_cube c3dgl_native_immediate c3dgl_native_textured c3dgl_native_textured_cpp c3dgl_native_texture_smoke c3dgl_native_primitives c3dgl_native_primitive_smoke c3dgl_native_primitives_cpp; do
     "$DEVKITPRO/devkitARM/bin/arm-none-eabi-nm" "build-native/$consumer.elf" > "build-native-host/$consumer-symbols.txt"
-    if rg '(C3D_|GPUCMD_|DVLB_|shaderProgram)' "build-native-host/$consumer-symbols.txt"; then
+    if grep -E '(C3D_|GPUCMD_|DVLB_|shaderProgram)' "build-native-host/$consumer-symbols.txt"; then
         echo "Unexpected Citro3D/libctru GPU encoder or shader helper in $consumer" >&2
         exit 1
     fi

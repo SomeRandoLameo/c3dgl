@@ -19,6 +19,10 @@ typedef float GLfloat;
 typedef double GLdouble;
 #define GL_DOUBLE 0x140a
 #define GL_FIXED 0x140c
+#define GL_TEXTURE 0x1702
+#define GL_TEXTURE_MATRIX 0x0ba8
+#define GL_TEXTURE_STACK_DEPTH 0x0ba5
+#define GL_MAX_TEXTURE_STACK_DEPTH 0x0d39
 #define GL_FALSE 0
 #define GL_TRUE 1
 #define GL_TEXTURE_2D 0x0de1

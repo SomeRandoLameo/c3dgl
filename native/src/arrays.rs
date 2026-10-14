@@ -26,6 +26,8 @@ struct Key {
     current_color: [u32; 4],
     texcoord: Option<Array>,
     current_texcoord: [u32; 4],
+    extra_texcoords: [Option<Array>; 2],
+    extra_current: [[u32; 4]; 2],
     first: usize,
     count: usize,
     kind: u32,
@@ -43,7 +45,9 @@ pub(crate) struct Arrays {
     vertex: Array,
     color: Array,
     texcoord: Array,
-    enabled: [bool; 3],
+    extra_texcoords: [Array; 2],
+    pub client_active: usize,
+    enabled: [bool; 5],
     bound: [u32; 2],
     next: u32,
     objects: Vec<Object>,
@@ -57,7 +61,9 @@ impl Arrays {
             vertex: Array::default(),
             color: Array::default(),
             texcoord: Array::default(),
-            enabled: [false; 3],
+            extra_texcoords: [Array::default(); 2],
+            client_active: 0,
+            enabled: [false; 5],
             bound: [0; 2],
             next: 1,
             objects: Vec::new(),
@@ -77,6 +83,7 @@ impl Arrays {
             if k.vertex.buffer == name
                 || k.color.is_some_and(|a| a.buffer == name)
                 || k.texcoord.is_some_and(|a| a.buffer == name)
+                || k.extra_texcoords.iter().flatten().any(|a| a.buffer == name)
                 || k.element == name
             {
                 self.retired.push(self.cache.swap_remove(i));
@@ -163,6 +170,7 @@ impl Arrays {
         indices: usize,
         current_color: [f32; 4],
         current_texcoord: [f32; 4],
+        extra_current: [[f32; 4]; 2],
     ) -> Result<(u32, Option<u32>, u32), u32> {
         if !self.enabled[0] {
             return Err(0x0502);
@@ -186,6 +194,16 @@ impl Arrays {
             } else {
                 current_texcoord.map(f32::to_bits)
             },
+            extra_texcoords: core::array::from_fn(|i| {
+                self.enabled[3 + i].then_some(self.extra_texcoords[i])
+            }),
+            extra_current: core::array::from_fn(|i| {
+                if self.enabled[3 + i] {
+                    [0; 4]
+                } else {
+                    extra_current[i].map(f32::to_bits)
+                }
+            }),
             first,
             count,
             kind,
@@ -196,6 +214,7 @@ impl Arrays {
         let persistent = key.vertex.buffer != 0
             && key.color.is_none_or(|a| a.buffer != 0)
             && key.texcoord.is_none_or(|a| a.buffer != 0)
+            && key.extra_texcoords.iter().flatten().all(|a| a.buffer != 0)
             && (kind == 0 || key.element != 0);
         if persistent {
             if let Some(m) = self.cache.iter().find(|m| m.key == key) {
@@ -252,6 +271,12 @@ impl Arrays {
         let offset = vertex_count * core::mem::size_of::<GpuVertex>();
         let storage = Buffer::new(offset + index_data.len() * 2, false).ok_or(0x0505u32)?;
         for i in 0..vertex_count {
+            let mut extra = extra_current;
+            for unit in 0..2 {
+                if let Some(a) = key.extra_texcoords[unit] {
+                    extra[unit] = self.value(a, if kind == 0 { first + i } else { i }, false)?;
+                }
+            }
             storage.pointer.cast::<GpuVertex>().add(i).write(GpuVertex {
                 position: self.value(key.vertex, if kind == 0 { first + i } else { i }, false)?,
                 color: if let Some(a) = key.color {
@@ -260,6 +285,7 @@ impl Arrays {
                 } else {
                     current_color.map(crate::immediate::gpu_color_component)
                 },
+                extra_texcoords: extra,
                 texcoord: if let Some(a) = key.texcoord {
                     self.value(a, if kind == 0 { first + i } else { i }, false)?
                 } else {
@@ -376,7 +402,7 @@ unsafe fn enable(state: u32, on: bool) {
         let i = match state {
             0x8074 => 0,
             0x8076 => 1,
-            0x8078 => 2,
+            0x8078 => 2 + a.client_active,
             _ => return Err(0x0500),
         };
 
@@ -538,6 +564,11 @@ pub unsafe extern "C" fn glDeleteBuffers(n: i32, names: *const u32) {
                 a.color = Array::default();
             }
 
+            for coord in &mut a.extra_texcoords {
+                if coord.buffer == name {
+                    *coord = Array::default();
+                }
+            }
             if a.texcoord.buffer == name {
                 a.texcoord = Array::default();
             }
@@ -561,6 +592,17 @@ pub unsafe extern "C" fn glDrawElements(mode: u32, count: i32, kind: u32, indice
     }
 
     crate::renderer::draw_arrays(mode, 0, count, kind, indices as usize);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glClientActiveTexture(unit: u32) {
+    api!(|a: &mut Arrays| {
+        if !(0x84c0..=0x84c2).contains(&unit) {
+            return Err(0x0500);
+        }
+        a.client_active = (unit - 0x84c0) as usize;
+        Ok(())
+    });
 }
 
 #[cfg(test)]
@@ -662,7 +704,7 @@ pub unsafe extern "C" fn glTexCoordPointer(
             return Err(0x0501);
         }
 
-        a.texcoord = Array {
+        let coordinate = Array {
             size: size as usize,
             kind,
             stride: stride as usize,
@@ -670,6 +712,11 @@ pub unsafe extern "C" fn glTexCoordPointer(
             buffer: a.bound[0],
         };
 
+        if a.client_active == 0 {
+            a.texcoord = coordinate;
+        } else {
+            a.extra_texcoords[a.client_active - 1] = coordinate;
+        }
         Ok(())
     });
 }
@@ -765,7 +812,10 @@ pub(crate) unsafe fn topology_lifecycle() {
         old = m.storage.pointer;
         assert_eq!((*old.cast::<GpuVertex>()).position, [-1., -1., 0., 1.]);
         assert_eq!(
-            core::slice::from_raw_parts(old.add(4 * 48).cast::<u16>(), 6),
+            core::slice::from_raw_parts(
+                old.add(4 * core::mem::size_of::<GpuVertex>()).cast::<u16>(),
+                6
+            ),
             &[0, 1, 2, 0, 2, 3]
         );
     });
@@ -793,7 +843,13 @@ pub(crate) unsafe fn topology_lifecycle() {
             .unwrap();
         assert_ne!(m.storage.pointer, old);
         assert_eq!(
-            core::slice::from_raw_parts(m.storage.pointer.add(4 * 48).cast::<u16>(), 6),
+            core::slice::from_raw_parts(
+                m.storage
+                    .pointer
+                    .add(4 * core::mem::size_of::<GpuVertex>())
+                    .cast::<u16>(),
+                6
+            ),
             &[0, 1, 2, 2, 1, 3]
         );
     });
@@ -810,9 +866,17 @@ pub(crate) unsafe fn topology_lifecycle() {
             .find(|m| m.key.vertex.buffer == names[0] && m.key.kind == 0x1405)
             .unwrap();
         indexed = m.storage.pointer;
-        assert_eq!(m.index_offset, Some(5 * 48 | 0x80000000));
         assert_eq!(
-            core::slice::from_raw_parts(indexed.add(5 * 48).cast::<u16>(), 6),
+            m.index_offset,
+            Some((5 * core::mem::size_of::<GpuVertex>()) as u32 | 0x80000000)
+        );
+        assert_eq!(
+            core::slice::from_raw_parts(
+                indexed
+                    .add(5 * core::mem::size_of::<GpuVertex>())
+                    .cast::<u16>(),
+                6
+            ),
             &[1, 2, 3, 1, 3, 4]
         );
     });
@@ -828,7 +892,13 @@ pub(crate) unsafe fn topology_lifecycle() {
             .unwrap();
         assert_ne!(m.storage.pointer, indexed);
         assert_eq!(
-            core::slice::from_raw_parts(m.storage.pointer.add(5 * 48).cast::<u16>(), 6),
+            core::slice::from_raw_parts(
+                m.storage
+                    .pointer
+                    .add(5 * core::mem::size_of::<GpuVertex>())
+                    .cast::<u16>(),
+                6
+            ),
             &[4, 3, 2, 4, 2, 1]
         );
         assert!(r

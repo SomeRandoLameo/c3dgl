@@ -19,7 +19,7 @@ struct Object {
     mag: u32,
     wrap: [u32; 2],
     used: bool,
-    rgb: bool,
+    base: u32,
 }
 
 impl Object {
@@ -34,7 +34,7 @@ impl Object {
             mag: 0x2601,
             wrap: [0x2901; 2],
             used: false,
-            rgb: false,
+            base: 0x1908,
         }
     }
 
@@ -52,14 +52,127 @@ pub(crate) struct Packet {
     pub parameters: u32,
     pub replace: bool,
     pub scale: [f32; 2],
+    pub tev: [u32; 5],
+}
+
+#[derive(Clone, Copy)]
+struct Unit {
+    enabled: bool,
+    bound: u32,
+    env: Environment,
+}
+impl Unit {
+    fn new() -> Self {
+        Self {
+            enabled: false,
+            bound: 0,
+            env: Environment::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Environment {
+    mode: u32,
+    color: u32,
+    functions: [u32; 2],
+    sources: [[u32; 3]; 2],
+    operands: [[u32; 3]; 2],
+    scale: [u32; 2],
+}
+impl Environment {
+    fn new() -> Self {
+        Self {
+            mode: 0x2100,
+            color: 0,
+            functions: [0x2100; 2],
+            sources: [[0x1702, 0x8578, 0x8576]; 2],
+            operands: [[0x300, 0x300, 0x302], [0x302; 3]],
+            scale: [1; 2],
+        }
+    }
+    pub(crate) fn words(self, unit: usize, enabled: bool, complete: bool, base: u32) -> [u32; 5] {
+        let prev = if unit == 0 { 0 } else { 15 };
+        let tex = if complete { 3 + unit as u32 } else { 14 };
+        let color = if complete { self.color } else { 0xff000000 };
+        let pack = |v: [u32; 3]| v[0] | v[1] << 4 | v[2] << 8;
+        if !enabled {
+            return [prev | prev << 16, 0, 0, color, 0];
+        }
+        let function = |f| match f {
+            0x1e01 => 0,
+            0x2100 => 1,
+            0x104 => 2,
+            0x8574 => 3,
+            0x8575 => 4,
+            0x84e7 => 5,
+            0x86ae => 6,
+            0x86af => 7,
+            _ => unreachable!(),
+        };
+        if self.mode == 0x8570 {
+            let source = |src| match src {
+                0x1702 => tex,
+                0x84c0..=0x84c2 => 3 + src - 0x84c0,
+                0x8576 => 14,
+                0x8577 => 0,
+                _ => prev,
+            };
+            let rgb = self.operands[0].map(|op| match op {
+                0x301 => 1,
+                0x302 => 2,
+                0x303 => 3,
+                _ => 0,
+            });
+            let alpha = self.operands[1].map(|op| (op == 0x303) as u32);
+            let scale = self.scale.map(|v| match v {
+                2 => 1,
+                4 => 2,
+                _ => 0,
+            });
+            return [
+                pack(self.sources[0].map(source)) | pack(self.sources[1].map(source)) << 16,
+                pack(rgb) | pack(alpha) << 12,
+                function(self.functions[0]) | function(self.functions[1]) << 16,
+                color,
+                scale[0] | scale[1] << 16,
+            ];
+        }
+        let has_color = base != 0x1906;
+        let has_alpha = matches!(base, 0x1906 | 0x1908 | 0x190a);
+        let (rgb_src, rgb_func, operands) = if !has_color {
+            ([prev; 3], 0, 0)
+        } else {
+            match self.mode {
+                0x1e01 => ([tex, prev, prev], 0, 0),
+                0x2101 => ([tex, prev, tex], 4, 2 << 8),
+                0x0be2 => ([14, prev, tex], 4, 0),
+                0x104 => ([prev, tex, prev], 2, 0),
+                _ => ([tex, prev, prev], 1, 0),
+            }
+        };
+        let (alpha_src, alpha_func) = if self.mode == 0x2101 || self.mode == 0x1e01 && !has_alpha {
+            ([prev; 3], 0)
+        } else if self.mode == 0x1e01 {
+            ([tex, prev, prev], 0)
+        } else {
+            ([tex, prev, prev], 1)
+        };
+        [
+            pack(rgb_src) | pack(alpha_src) << 16,
+            operands,
+            rgb_func | alpha_func << 16,
+            color,
+            0,
+        ]
+    }
 }
 
 pub(crate) struct Textures {
-    pub enabled: bool,
+    units: [Unit; 3],
+    pub active: usize,
     pub dirty: bool,
-    bound: u32,
     alignment: usize,
-    env_replace: bool,
     objects: Vec<Object>,
     retired: Vec<Buffer>,
 }
@@ -67,11 +180,10 @@ pub(crate) struct Textures {
 impl Textures {
     pub fn new() -> Self {
         Self {
-            enabled: false,
+            units: [Unit::new(); 3],
+            active: 0,
             dirty: false,
-            bound: 0,
             alignment: 4,
-            env_replace: false,
             objects: Vec::new(),
             retired: Vec::new(),
         }
@@ -85,11 +197,15 @@ impl Textures {
     }
 
     fn index(&mut self) -> Result<usize, u32> {
-        if let Some(i) = self.objects.iter().position(|o| o.name == self.bound) {
+        if let Some(i) = self
+            .objects
+            .iter()
+            .position(|o| o.name == self.units[self.active].bound)
+        {
             return Ok(i);
         }
 
-        self.insert(self.bound, true)
+        self.insert(self.units[self.active].bound, true)
     }
 
     fn insert(&mut self, name: u32, instantiated: bool) -> Result<usize, u32> {
@@ -104,17 +220,39 @@ impl Textures {
     }
 
     pub unsafe fn packet(&self) -> Packet {
+        self.packet_for(self.active)
+    }
+
+    pub unsafe fn packets(&self) -> [Packet; 3] {
+        core::array::from_fn(|unit| self.packet_for(unit))
+    }
+    pub fn enabled(&self) -> bool {
+        self.units[self.active].enabled
+    }
+    pub fn set_enabled(&mut self, on: bool) {
+        if self.enabled() != on {
+            self.units[self.active].enabled = on;
+            self.dirty = true;
+        }
+    }
+
+    unsafe fn packet_for(&self, unit: usize) -> Packet {
         let mut s = Packet {
-            enabled: self.enabled,
+            enabled: self.units[unit].enabled,
             complete: false,
             address: 0,
             dimensions: 0,
             parameters: 0,
-            replace: self.env_replace,
+            replace: self.units[unit].env.mode == 0x1e01,
             scale: [1.; 2],
+            tev: [0; 5],
         };
 
-        if let Some(o) = self.objects.iter().find(|o| o.name == self.bound) {
+        if let Some(o) = self
+            .objects
+            .iter()
+            .find(|o| o.name == self.units[unit].bound)
+        {
             s.complete = o.complete();
             if s.complete {
                 s.address = o.storage.as_ref().unwrap().physical();
@@ -133,17 +271,27 @@ impl Textures {
             }
         }
 
+        let base = self
+            .objects
+            .iter()
+            .find(|o| o.name == self.units[unit].bound)
+            .map_or(0x1908, |o| o.base);
+        s.tev = self.units[unit]
+            .env
+            .words(unit, s.enabled, s.complete, base);
         s
     }
 
     pub fn sampled(&mut self) {
-        if self.enabled {
-            if let Some(o) = self
-                .objects
-                .iter_mut()
-                .find(|o| o.name == self.bound && o.complete())
-            {
-                o.used = true;
+        for unit in &self.units {
+            if unit.enabled {
+                if let Some(o) = self
+                    .objects
+                    .iter_mut()
+                    .find(|o| o.name == unit.bound && o.complete())
+                {
+                    o.used = true;
+                }
             }
         }
     }
@@ -151,11 +299,12 @@ impl Textures {
     pub fn query(&self, pname: u32) -> Option<([f64; 16], usize)> {
         let mut v = [0.; 16];
         v[0] = match pname {
-            0x0de1 => self.enabled as u8 as f64,
-            0x8069 => self.bound as f64,
+            0x0de1 => self.units[self.active].enabled as u8 as f64,
+            0x8069 => self.units[self.active].bound as f64,
             0x0cf5 => self.alignment as f64,
             0x0d33 => 1024.,
-            0x84e0 => 0x84c0 as f64,
+            0x84e0 => (0x84c0 + self.active) as f64,
+            0x84e2 => 3.,
             _ => return None,
         };
 
@@ -205,6 +354,8 @@ fn format(f: u32, t: u32) -> Result<usize, u32> {
     match f {
         0x1907 => Ok(3),
         0x1908 => Ok(4),
+        0x1909 | 0x1906 => Ok(1),
+        0x190a => Ok(2),
         _ => Err(0x0500),
     }
 }
@@ -267,6 +418,36 @@ fn offset(width: usize, height: usize, x: usize, y: usize) -> usize {
     (tile * 64 + morton) * 4
 }
 
+unsafe fn convert_base(
+    out: *mut u8,
+    tw: usize,
+    th: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    base: u32,
+) {
+    for row in y..y + h {
+        for col in x..x + w {
+            let d = out.add(offset(tw, th, col, row));
+            if matches!(base, 0x1907 | 0x1909) {
+                d.write(255);
+            }
+            if matches!(base, 0x1909 | 0x190a) {
+                let l = d.add(3).read();
+                d.add(1).write(l);
+                d.add(2).write(l);
+            }
+            if base == 0x1906 {
+                d.add(1).write(0);
+                d.add(2).write(0);
+                d.add(3).write(0);
+            }
+        }
+    }
+}
+
 unsafe fn upload(
     out: *mut u8,
     tw: usize,
@@ -278,16 +459,29 @@ unsafe fn upload(
     pixels: *const u8,
     bpp: usize,
     alignment: usize,
+    alpha_only: bool,
 ) {
     let stride = (w * bpp + alignment - 1) & !(alignment - 1);
     for y in 0..h {
         for x in 0..w {
             let s = pixels.add(y * stride + x * bpp);
             let d = out.add(offset(tw, th, x0 + x, y0 + y));
-            d.write(if bpp == 4 { s.add(3).read() } else { 255 });
-            d.add(1).write(s.add(2).read());
-            d.add(2).write(s.add(1).read());
+            d.write(match bpp {
+                4 => s.add(3).read(),
+                2 => s.add(1).read(),
+                _ => 255,
+            });
+            d.add(1)
+                .write(if bpp >= 3 { s.add(2).read() } else { s.read() });
+            d.add(2)
+                .write(if bpp >= 3 { s.add(1).read() } else { s.read() });
             d.add(3).write(s.read());
+            if alpha_only {
+                d.write(s.read());
+                d.add(1).write(0);
+                d.add(2).write(0);
+                d.add(3).write(0);
+            }
         }
     }
 }
@@ -304,10 +498,13 @@ macro_rules! api {
 
 #[no_mangle]
 pub unsafe extern "C" fn glActiveTexture(unit: u32) {
-    with_frame(|_, m| {
-        if unit != 0x84c0 {
+    with_frame(|s, m| {
+        if !(0x84c0..=0x84c2).contains(&unit) {
             m.fail(0x0500);
+            return;
         }
+        s.textures.active = (unit - 0x84c0) as usize;
+        m.active_texture(s.textures.active);
     });
 }
 
@@ -347,8 +544,8 @@ pub unsafe extern "C" fn glBindTexture(kind: u32, name: u32) {
         };
 
         t.objects[i].instantiated = true;
-        if t.bound != name {
-            t.bound = name;
+        if t.units[t.active].bound != name {
+            t.units[t.active].bound = name;
             t.dirty = true;
         }
 
@@ -377,9 +574,11 @@ pub unsafe extern "C" fn glDeleteTextures(n: i32, names: *const u32) {
                         t.retired.push(b);
                     }
                 }
-                if t.bound == name {
-                    t.bound = 0;
-                    t.dirty = true;
+                for unit in &mut t.units {
+                    if unit.bound == name {
+                        unit.bound = 0;
+                        t.dirty = true;
+                    }
                 }
             }
         }
@@ -504,7 +703,7 @@ pub unsafe extern "C" fn glTexImage2D(
     api!(|t: &mut Textures| {
         target(kind)?;
         let bpp = format(f, ty)?;
-        if !matches!(internal, 0x1907 | 0x1908) {
+        if !matches!(internal, 0x1906..=0x190a) {
             return Err(0x0501);
         }
         if level != 0 || border != 0 || !dimension(w) || !dimension(h) {
@@ -532,19 +731,16 @@ pub unsafe extern "C" fn glTexImage2D(
                 pixels.cast(),
                 bpp,
                 t.alignment,
+                f == 0x1906,
             );
         }
-        if internal == 0x1907 {
-            for i in 0..tw * th {
-                storage.pointer.add(i * 4).write(255);
-            }
-        }
+        convert_base(storage.pointer, tw, th, 0, 0, w, h, internal as u32);
         padding(storage.pointer, w, h, t.objects[i].wrap);
         if p::c3dglPlatformFlush(storage.pointer, bytes as u32) < 0 {
             return Err(0x0502);
         }
         t.replace(i, Some(storage), w, h)?;
-        t.objects[i].rgb = internal == 0x1907;
+        t.objects[i].base = internal as u32;
         Ok(())
     });
 }
@@ -601,15 +797,10 @@ pub unsafe extern "C" fn glTexSubImage2D(
             pixels.cast(),
             bpp,
             t.alignment,
+            f == 0x1906,
         );
 
-        if o.rgb {
-            for row in y..y + h {
-                for col in x..x + w {
-                    storage.pointer.add(offset(tw, th, col, row)).write(255);
-                }
-            }
-        }
+        convert_base(storage.pointer, tw, th, x, y, w, h, o.base);
 
         padding(storage.pointer, iw, ih, o.wrap);
         if p::c3dglPlatformFlush(storage.pointer, bytes as u32) < 0 {
@@ -683,7 +874,19 @@ mod tests {
 
         let pixels = [1, 2, 3, 99, 4, 5, 6, 99];
         unsafe {
-            upload(image.as_mut_ptr(), 16, 8, 9, 2, 1, 2, pixels.as_ptr(), 3, 4);
+            upload(
+                image.as_mut_ptr(),
+                16,
+                8,
+                9,
+                2,
+                1,
+                2,
+                pixels.as_ptr(),
+                3,
+                4,
+                false,
+            );
         }
 
         assert_eq!(&image[offset(16, 8, 9, 2)..][..4], &[255, 3, 2, 1]);
@@ -702,16 +905,107 @@ mod tests {
 #[no_mangle]
 pub unsafe extern "C" fn glTexEnvi(target: u32, pname: u32, value: i32) {
     api!(|t: &mut Textures| {
-        if target != 0x2300 || pname != 0x2200 || !matches!(value, 0x2100 | 0x1e01) {
+        if target != 0x2300 {
             return Err(0x0500);
         }
-
-        let replace = value == 0x1e01;
-        if t.env_replace != replace {
-            t.env_replace = replace;
-            t.dirty = true;
+        let value = value as u32;
+        let env = &mut t.units[t.active].env;
+        match pname {
+            0x2200 if matches!(value, 0x2100 | 0x1e01 | 0x104 | 0x2101 | 0xbe2 | 0x8570) => {
+                env.mode = value
+            }
+            0x8571
+                if matches!(
+                    value,
+                    0x1e01 | 0x2100 | 0x104 | 0x8574 | 0x8575 | 0x84e7 | 0x86ae | 0x86af
+                ) =>
+            {
+                env.functions[0] = value
+            }
+            0x8572 if matches!(value, 0x1e01 | 0x2100 | 0x104 | 0x8574 | 0x8575 | 0x84e7) => {
+                env.functions[1] = value
+            }
+            0x8580..=0x8582 | 0x8588..=0x858a
+                if matches!(value, 0x1702 | 0x8576 | 0x8577 | 0x8578 | 0x84c0..=0x84c2) =>
+            {
+                env.sources[(pname >= 0x8588) as usize][(pname & 3) as usize] = value;
+            }
+            0x8590..=0x8592 if matches!(value, 0x300..=0x303) => {
+                env.operands[0][(pname & 3) as usize] = value
+            }
+            0x8598..=0x859a if matches!(value, 0x302 | 0x303) => {
+                env.operands[1][(pname & 3) as usize] = value
+            }
+            0x8573 | 0x0d1c => {
+                if !matches!(value, 1 | 2 | 4) {
+                    return Err(0x0501);
+                }
+                env.scale[(pname == 0x0d1c) as usize] = value;
+            }
+            _ => return Err(0x0500),
         }
-
+        t.dirty = true;
+        Ok(())
+    });
+}
+#[no_mangle]
+pub unsafe extern "C" fn glTexEnvf(target: u32, pname: u32, value: f32) {
+    if matches!(pname, 0x8573 | 0x0d1c) && !matches!(value, 1. | 2. | 4.) {
+        with_frame(|_, m| m.fail(0x0501));
+        return;
+    }
+    glTexEnvi(target, pname, value as i32);
+}
+#[no_mangle]
+pub unsafe extern "C" fn glTexEnvfv(target: u32, pname: u32, values: *const f32) {
+    if values.is_null() {
+        with_frame(|_, m| m.fail(0x0501));
+        return;
+    }
+    if pname != 0x2201 {
+        glTexEnvf(target, pname, ptr::read_unaligned(values));
+        return;
+    }
+    api!(|t: &mut Textures| {
+        if target != 0x2300 {
+            return Err(0x0500);
+        }
+        let mut color = 0;
+        for i in 0..4 {
+            color |= (crate::immediate::gpu_color_component(ptr::read_unaligned(values.add(i)))
+                as u32)
+                << (i * 8);
+        }
+        t.units[t.active].env.color = color;
+        t.dirty = true;
+        Ok(())
+    });
+}
+#[no_mangle]
+pub unsafe extern "C" fn glGetTexEnviv(target: u32, pname: u32, out: *mut i32) {
+    api!(|t: &mut Textures| {
+        if target != 0x2300 {
+            return Err(0x0500);
+        }
+        if out.is_null() {
+            return Err(0x0501);
+        }
+        let e = t.units[t.active].env;
+        let v = match pname {
+            0x2200 => e.mode,
+            0x8571 => e.functions[0],
+            0x8572 => e.functions[1],
+            0x8580..=0x8582 | 0x8588..=0x858a => {
+                e.sources[(pname >= 0x8588) as usize][(pname & 3) as usize]
+            }
+            0x8590..=0x8592 | 0x8598..=0x859a => {
+                e.operands[(pname >= 0x8598) as usize][(pname & 3) as usize]
+            }
+            0x8573 => e.scale[0],
+            0x0d1c => e.scale[1],
+            _ => return Err(0x0500),
+        };
+        out.write(v as i32);
         Ok(())
     });
 }
@@ -829,7 +1123,7 @@ pub(crate) unsafe fn lifecycle(mut fail_next: impl FnMut()) {
     glDeleteTextures(1, names.as_ptr());
     assert_eq!(glIsTexture(names[0]), 0);
     with_frame(|s, _| {
-        assert_eq!(s.textures.bound, 0);
+        assert_eq!(s.textures.units[s.textures.active].bound, 0);
         assert_eq!(s.textures.retired.len(), 2);
     });
     assert_eq!(c3dglNativePresent(), 0);

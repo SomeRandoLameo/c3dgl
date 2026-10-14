@@ -281,6 +281,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn texture_matrix_scales_rows_without_scaling_projective_q() {
+        let mut words = [0; 128];
+        let mut commands = Commands::new(&mut words);
+        let mut matrix = crate::matrix::IDENTITY;
+        matrix[12] = 0.25;
+        matrix[3] = 1.;
+        texture_matrix(&mut commands, &matrix, [0.75, 0.5]).unwrap();
+        let packet = commands.as_slice();
+        assert_eq!(packet[0], 0x80000005);
+        let data: alloc::vec::Vec<_> = core::iter::once(packet[2])
+            .chain(packet[4..15].iter().copied())
+            .collect();
+        assert_eq!(data[0..4], [0.1875f32.to_bits(), 0, 0, 0.75f32.to_bits()]);
+        assert_eq!(data[4..8], [0, 0, 0.5f32.to_bits(), 0]);
+        assert_eq!(data[8..12], [1f32.to_bits(), 0, 0, 1f32.to_bits()]);
+        let mut small = [7; 16 + DRAW_WORDS + 8 + FINISH_WORDS - 1];
+        let mut commands = Commands::new(&mut small);
+        assert!(texture_matrix(&mut commands, &matrix, [1.; 2]).is_err());
+        assert_eq!(commands.used, 0);
+        assert!(small.iter().all(|word| *word == 7));
+    }
+
+    #[test]
     fn texture_binding_modulation_incompleteness_and_overflow() {
         let mut words = [0; 128];
         let mut c = Commands::new(&mut words);
@@ -292,6 +315,7 @@ mod tests {
             parameters: 0x2206,
             replace: false,
             scale: [1.; 2],
+            tev: [0; 5],
         };
         texture(&mut c, t).unwrap();
         assert_eq!(c.used, TEXTURE_WORDS);
@@ -514,4 +538,24 @@ pub(crate) fn texture(c: &mut Commands<'_>, t: crate::texture::Packet) -> Result
         ],
         false,
     )
+}
+
+pub(crate) fn texture_matrix(
+    c: &mut Commands<'_>,
+    matrix: &[f32; 16],
+    scale: [f32; 2],
+) -> Result<(), ()> {
+    if c.words.len() - c.used < 16 + DRAW_WORDS + 8 + FINISH_WORDS {
+        return Err(());
+    }
+    let mut data = [0; 12];
+    for row in 0..3 {
+        let component = if row == 2 { 3 } else { row };
+        for col in 0..4 {
+            let value = matrix[col * 4 + component] * if row == 2 { 1. } else { scale[row] };
+            data[row * 4 + 3 - col] = value.to_bits();
+        }
+    }
+    one(c, r::VSH_FLOATUNIFORM_CONFIG, 0x80000005)?;
+    write(c, r::VSH_FLOATUNIFORM_DATA, 15, &data, false)
 }

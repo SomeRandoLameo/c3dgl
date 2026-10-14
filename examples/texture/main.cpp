@@ -767,6 +767,50 @@ static void printStats() {
     std::printf("\x1b[u");
 }
 
+void drawTextureMatrixPage(GLuint texPot, GLuint texNpot, float time) {
+    resetTextureMatrix();
+    drawCell(0, 0, texPot);
+
+    textureMatrix([] { glTranslatef(0.25f, 0.0f, 0.0f); });
+    drawCell(1, 0, texPot);
+
+    textureMatrix([] { glScalef(2.0f, 2.0f, 1.0f); });
+    drawCell(2, 0, texPot);
+
+    // Rotating the texcoords by -90 around the center turns the image by +90 (counter-clockwise) on screen
+    textureMatrix([] {
+        glTranslatef(0.5f, 0.5f, 0.0f);
+        glRotatef(-90.0f, 0.0f, 0.0f, 1.0f);
+        glTranslatef(-0.5f, -0.5f, 0.0f);
+    });
+    drawCell(3, 0, texPot);
+
+    textureMatrix([time] { glTranslatef(time, time * 0.5f, 0.0f); });
+    drawCell(0, 1, texPot);
+
+    // q = 2 everywhere: (s, t) / 2
+    textureMatrix([] {
+        const GLfloat m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2};
+        glLoadMatrixf(m);
+    });
+    drawCell(1, 1, texPot);
+
+    // q = 1 + s: s / (1 + s) runs 0..0.5, slower on the right
+    textureMatrix([] {
+        const GLfloat m[16] = {1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        glLoadMatrixf(m);
+    });
+    drawCell(2, 1, texPot);
+
+    textureMatrix([] {
+        glTranslatef(0.0f, 1.0f, 0.0f);
+        glScalef(1.0f, -1.0f, 1.0f);
+    });
+    drawCell(3, 1, texNpot);
+
+    resetTextureMatrix();
+}
+
 int main() {
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, nullptr);
@@ -823,47 +867,7 @@ int main() {
             continue;
         }
 
-        resetTextureMatrix();
-        drawCell(0, 0, texPot);
-
-        textureMatrix([] { glTranslatef(0.25f, 0.0f, 0.0f); });
-        drawCell(1, 0, texPot);
-
-        textureMatrix([] { glScalef(2.0f, 2.0f, 1.0f); });
-        drawCell(2, 0, texPot);
-
-        // Rotating the texcoords by -90 around the center turns the image by +90 (counter-clockwise) on screen
-        textureMatrix([] {
-            glTranslatef(0.5f, 0.5f, 0.0f);
-            glRotatef(-90.0f, 0.0f, 0.0f, 1.0f);
-            glTranslatef(-0.5f, -0.5f, 0.0f);
-        });
-        drawCell(3, 0, texPot);
-
-        textureMatrix([time] { glTranslatef(time, time * 0.5f, 0.0f); });
-        drawCell(0, 1, texPot);
-
-        // q = 2 everywhere: (s, t) / 2
-        textureMatrix([] {
-            const GLfloat m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2};
-            glLoadMatrixf(m);
-        });
-        drawCell(1, 1, texPot);
-
-        // q = 1 + s: s / (1 + s) runs 0..0.5, slower on the right
-        textureMatrix([] {
-            const GLfloat m[16] = {1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-            glLoadMatrixf(m);
-        });
-        drawCell(2, 1, texPot);
-
-        textureMatrix([] {
-            glTranslatef(0.0f, 1.0f, 0.0f);
-            glScalef(1.0f, -1.0f, 1.0f);
-        });
-        drawCell(3, 1, texNpot);
-
-        resetTextureMatrix();
+        drawTextureMatrixPage(texPot, texNpot, time);
         c3dglSwapBuffers();
         time += 1.0f / 240.0f;
     }

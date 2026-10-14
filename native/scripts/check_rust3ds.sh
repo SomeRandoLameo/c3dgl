@@ -11,7 +11,7 @@ cargo 3ds build --release --locked --offline
 for consumer in c3dgl-rust3ds-triangle textured primitives; do
     elf="$CARGO_TARGET_DIR/armv6k-nintendo-3ds/release/$consumer.elf"
     "$DEVKITARM/bin/arm-none-eabi-nm" "$elf" > "$CARGO_TARGET_DIR/$consumer-symbols.txt"
-    if rg '(C3D_|GPUCMD_|DVLB_|shaderProgram)' "$CARGO_TARGET_DIR/$consumer-symbols.txt"; then
+    if grep -E '(C3D_|GPUCMD_|DVLB_|shaderProgram)' "$CARGO_TARGET_DIR/$consumer-symbols.txt"; then
         echo "Unexpected Citro3D/GPU encoder dependency in rust3ds $consumer" >&2
         exit 1
     fi

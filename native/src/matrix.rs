@@ -22,20 +22,24 @@ pub fn multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
 }
 
 pub struct Matrices {
-    stacks: [[[f32; 16]; 32]; 2],
-    depths: [usize; 2],
+    stacks: [[[f32; 16]; 32]; 5],
+    depths: [usize; 5],
     mode: usize,
+    active: usize,
     pub dirty: bool,
+    pub texture_dirty: bool,
     error: u32,
 }
 
 impl Matrices {
     pub fn new() -> Self {
         Self {
-            stacks: [[IDENTITY; 32]; 2],
-            depths: [0; 2],
+            stacks: [[IDENTITY; 32]; 5],
+            depths: [0; 5],
             mode: 0,
+            active: 0,
             dirty: true,
+            texture_dirty: true,
             error: 0,
         }
     }
@@ -50,8 +54,29 @@ impl Matrices {
         let old = &mut self.stacks[self.mode][self.depths[self.mode]];
         if *old != value {
             *old = value;
+            self.changed();
+        }
+    }
+
+    fn changed(&mut self) {
+        if self.mode >= 2 {
+            self.texture_dirty = true;
+        } else {
             self.dirty = true;
         }
+    }
+
+    pub fn active_texture(&mut self, unit: usize) {
+        self.active = unit;
+        if self.mode >= 2 {
+            self.mode = 2 + unit;
+        }
+    }
+    pub fn texture(&self) -> [f32; 16] {
+        self.texture_for(self.active)
+    }
+    pub fn texture_for(&self, unit: usize) -> [f32; 16] {
+        self.stacks[2 + unit][self.depths[2 + unit]]
     }
 
     fn mult(&mut self, value: [f32; 16]) {
@@ -64,14 +89,24 @@ impl Matrices {
     pub(crate) fn query(&self, pname: u32) -> Option<([f32; 16], usize)> {
         let mut out = [0.; 16];
         match pname {
-            0x0ba6 | 0x0ba7 => {
-                let mode = (pname - 0x0ba6) as usize;
+            0x0ba6..=0x0ba8 => {
+                let mode = if pname == 0x0ba8 {
+                    2 + self.active
+                } else {
+                    (pname - 0x0ba6) as usize
+                };
                 return Some((self.stacks[mode][self.depths[mode]], 16));
             }
-            0x0ba0 => out[0] = (0x1700 + self.mode) as f32,
-            0x0ba3 | 0x0ba4 => out[0] = (self.depths[(pname - 0x0ba3) as usize] + 1) as f32,
+            0x0ba0 => out[0] = (0x1700 + self.mode.min(2)) as f32,
+            0x0ba3..=0x0ba5 => {
+                out[0] = (self.depths[if pname == 0x0ba5 {
+                    2 + self.active
+                } else {
+                    (pname - 0x0ba3) as usize
+                }] + 1) as f32
+            }
             0x0d36 => out[0] = 32.,
-            0x0d38 => out[0] = 2.,
+            0x0d38 | 0x0d39 => out[0] = 2.,
             _ => return None,
         }
         Some((out, 1))
@@ -101,6 +136,7 @@ pub unsafe extern "C" fn glMatrixMode(mode: u32) {
     with_matrices(|m| match mode {
         0x1700 => m.mode = 0,
         0x1701 => m.mode = 1,
+        0x1702 => m.mode = 2 + m.active,
         _ => m.fail(INVALID_ENUM),
     });
 }
@@ -153,7 +189,7 @@ pub unsafe extern "C" fn glPopMatrix() {
             m.fail(0x0504);
         } else {
             m.depths[m.mode] -= 1;
-            m.dirty = true;
+            m.changed();
         }
     });
 }
@@ -275,6 +311,35 @@ pub unsafe extern "C" fn glFrustum(l: f64, r: f64, b: f64, t: f64, n: f64, f: f6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn texture_transform_queries_and_independent_dirty_state() {
+        let mut m = Matrices::new();
+        m.dirty = false;
+        m.texture_dirty = false;
+        m.mode = 2;
+        let mut translate = IDENTITY;
+        translate[12] = 0.25;
+        m.mult(translate);
+        let mut scale = IDENTITY;
+        scale[0] = 2.;
+        scale[5] = -1.;
+        m.mult(scale);
+        assert_eq!(m.texture()[0], 2.);
+        assert_eq!(m.texture()[12], 0.25);
+        assert_eq!(m.combined(), IDENTITY);
+        assert!(!m.dirty);
+        assert!(m.texture_dirty);
+        assert_eq!(m.query(0x0ba8), Some((m.texture(), 16)));
+        assert_eq!(m.query(0x0ba5).unwrap().0[0], 1.);
+        assert_eq!(m.query(0x0d39).unwrap().0[0], 2.);
+        assert_eq!(m.query(0x0ba0).unwrap().0[0], 0x1702 as f32);
+        let mut projective = IDENTITY;
+        projective[3] = 1.;
+        m.load(projective);
+        assert_eq!(m.texture()[3], 1.);
+    }
+
     #[test]
     fn multiplication_order_and_first_error() {
         let mut m = Matrices::new();
@@ -294,4 +359,33 @@ mod tests {
         m.fail(INVALID_VALUE);
         assert_eq!(m.error, INVALID_ENUM);
     }
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn texture_stack_lifecycle() {
+    use crate::frame::glGetFloatv;
+    glMatrixMode(0x1702);
+    glLoadIdentity();
+    glTranslatef(0.25, 0.5, 0.);
+    glPushMatrix();
+    glScalef(2., 3., 1.);
+    let mut matrix = [0.; 16];
+    glGetFloatv(0x0ba8, matrix.as_mut_ptr());
+    assert_eq!(matrix[0], 2.);
+    assert_eq!(matrix[5], 3.);
+    assert_eq!(matrix[12], 0.25);
+    let mut depth = 0.;
+    glGetFloatv(0x0ba5, &mut depth);
+    assert_eq!(depth, 2.);
+    glPushMatrix();
+    assert_eq!(glGetError(), 0x0503);
+    glPopMatrix();
+    glGetFloatv(0x0ba8, matrix.as_mut_ptr());
+    assert_eq!(matrix[0], 1.);
+    assert_eq!(matrix[12], 0.25);
+    glPopMatrix();
+    assert_eq!(glGetError(), 0x0504);
+    glLoadIdentity();
+    glMatrixMode(0x1700);
+    assert_eq!(glGetError(), 0);
 }

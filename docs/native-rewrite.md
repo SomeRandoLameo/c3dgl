@@ -175,3 +175,15 @@ texture matrices and other texture units remain pending. See
 `native-results/texcoord-step/`; 27 host tests and all existing consumer
 builds/audits pass. These are one-run emulator comparisons, not repeated
 performance or hardware validation.
+
+
+## Original texture matrix page checkpoint
+
+GL_TEXTURE has its own matrix stack, queries and dirty state. Shader texture
+rows apply the matrix before NPOT scaling and per-fragment q division. The first
+original texture page is extracted into a shared function with its body unchanged
+except indentation, and matches the C image exactly at the original time=0.
+The texcoord, texture and cube scenes also match. An initial primitives timeout
+is retained separately from its retry; see `native-results/texmatrix-step/`.
+29 host tests and existing C/C++/rust3ds builds/audits pass. Multitexturing,
+mipmaps, compression, repeated CPU measurements and hardware gates remain open.

@@ -21,6 +21,7 @@ pub(crate) struct GpuVertex {
     pub position: [f32; 4],
     pub color: [f32; 4],
     pub texcoord: [f32; 4],
+    pub extra_texcoords: [[f32; 4]; 2],
 }
 
 const VERTEX_BYTES: usize = core::mem::size_of::<GpuVertex>();
@@ -271,6 +272,7 @@ impl Renderer {
         self.frame.viewport_dirty = true;
         self.frame.raster.dirty = true;
         self.frame.textures.dirty = true;
+        self.matrices.texture_dirty = true;
 
         true
     }
@@ -353,6 +355,7 @@ pub unsafe extern "C" fn c3dglNativeUpload(vertices: *const Vertex, count: usize
             position: v.position,
             color: v.color.map(|c| c * 255.),
             texcoord: [0., 0., 0., 1.],
+            extra_texcoords: [[0., 0., 0., 1.]; 2],
         };
     }
 
@@ -447,6 +450,7 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
 
     if (r.frame.viewport_dirty
         || r.matrices.dirty
+        || r.matrices.texture_dirty
         || r.frame.raster.dirty
         || r.frame.textures.dirty)
         && update_draw_state(r).is_err()
@@ -486,7 +490,10 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
 
     let raster = r.frame.raster.dirty.then_some(r.frame.raster);
     let texture = r.frame.textures.dirty.then(|| r.frame.textures.packet());
-    let needed = viewport.map_or(0, |_| 8)
+    let texmatrix = (r.matrices.texture_dirty || texture.is_some())
+        .then(|| (r.matrices.texture(), r.frame.textures.packet().scale));
+    let needed = texmatrix.map_or(0, |_| 16)
+        + viewport.map_or(0, |_| 8)
         + update.map_or(0, |_| 20)
         + raster.map_or(0, |_| gpu::RASTER_WORDS)
         + texture.map_or(0, |_| gpu::TEXTURE_WORDS);
@@ -505,6 +512,9 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
         gpu::texture(&mut commands, t)?;
     }
 
+    if let Some((matrix, scale)) = texmatrix {
+        gpu::texture_matrix(&mut commands, &matrix, scale)?;
+    }
     if let Some(v) = viewport {
         if gpu::viewport(&mut commands, v).is_err() {
             return Err(());
@@ -519,6 +529,7 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
 
     r.used = commands.used;
     r.matrices.dirty = false;
+    r.matrices.texture_dirty = false;
     r.frame.viewport_dirty = false;
     r.frame.raster.dirty = false;
     r.frame.textures.dirty = false;
@@ -981,6 +992,7 @@ mod lifecycle_tests {
                 glDrawElements(4, 3, 0x1401, ptr::null());
                 assert_eq!(MOCK.lock().unwrap().allocations, allocations + 1);
                 assert_eq!(glGetError(), 0);
+                crate::matrix::texture_stack_lifecycle();
                 crate::arrays::uv_lifecycle();
                 crate::texture::lifecycle(|| {
                     let mut m = MOCK.lock().unwrap();
@@ -1157,6 +1169,7 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                 indices,
                 r.immediate.color,
                 r.immediate.texcoord,
+                r.immediate.extra_texcoords,
             )?;
 
             update_draw_state(r).map_err(|_| 0x0505u32)?;

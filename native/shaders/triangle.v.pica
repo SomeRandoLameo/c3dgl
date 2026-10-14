@@ -14,8 +14,9 @@
     dp4 outpos.z, matrix[2], inpos
     dp4 outpos.w, matrix[3], inpos
     mul outclr, color_scale.xxxx, inclr
-    mul outtex.xy, c4, intex
-    mov outtex.z, intex.w
+    dp4 outtex.x, c5, intex
+    dp4 outtex.y, c6, intex
+    dp4 outtex.z, c7, intex
     mov outtex.w, c4.w
     end
 .end
