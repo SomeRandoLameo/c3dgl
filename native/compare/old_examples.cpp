@@ -28,6 +28,9 @@
 #elif defined(C3DGL_OLD_LIGHTING)
 #include "../../examples/lighting/main.cpp"
 #define CASE "lighting"
+#elif defined(C3DGL_OLD_FOG)
+#include "../../examples/fog/main.cpp"
+#define CASE "fog"
 #elif defined(C3DGL_OLD_TEXGEN)
 #include "../../examples/texgen/main.cpp"
 #define CASE "texgen"
@@ -97,6 +100,17 @@ int main() {
     const GLuint tex=createF(16);drawTexcoordPage(tex);
 #elif defined(C3DGL_OLD_TEXTURE)
     const GLuint tex=createF(16);drawCell(0,0,tex);
+#elif defined(C3DGL_OLD_FOG)
+    // The cells of the original main loop, call for call
+    const GLuint tex=0;glEnable(GL_DEPTH_TEST);
+    beginCell(0,0);drawLinear();endCell();
+    beginCell(1,0);drawExp();endCell();
+    beginCell(2,0);drawExp2();endCell();
+    beginCell(3,0);drawOrtho();endCell();
+    beginCell(0,1);drawFloor();endCell();
+    beginCell(1,1);drawDepthRange();endCell();
+    beginCell(2,1);drawLinesPoints();endCell();
+    beginCell(3,1);drawAlpha();endCell();
 #elif defined(C3DGL_OLD_TEXGEN)
     // The first frame of the original main loop: initial angle, scroll offset and tilt
     setupScene();

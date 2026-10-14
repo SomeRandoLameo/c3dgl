@@ -316,3 +316,15 @@ accepted as a wrap mode (clamp to edge). The original `examples/texgen/main.cpp`
 its scene setup and one frame in `setupScene()` and `drawFrame()` (bodies unchanged apart
 from indentation; `main` calls them): the first frame matches the C framebuffer exactly,
 as do the twelve earlier scenes (`native-results/texgen-step/`, one run each). Host tests: 47 pass.
+
+
+## Fog checkpoint
+
+`glFog*`, `GL_FOG` and the fog queries are implemented. The GL factor (linear, exp, exp2
+of the eye distance) is sampled into the PICA fog table indexed by window depth through the
+projection's z and w rows and the depth range, packed like Citro3D's `FogLut_FromArray`, and
+emitted only when its inputs change (uses libm `expf`). Fog applies to filled polygons, lines
+and points. The eight cells of the original fog main loop (linear, exp, exp2, ortho, floor,
+depth range, lines and points, alpha) match the C framebuffer exactly
+(`native-results/fog-step/`, one run). The fog state joins the attribute stack (GL_FOG_BIT and
+GL_ENABLE_BIT). W-buffer depth is not used (`C3DGL_W_DEPTH=0` in both builds).

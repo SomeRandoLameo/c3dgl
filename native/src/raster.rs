@@ -162,6 +162,11 @@ unsafe fn enable(cap: u32, on: bool) {
         return;
     }
 
+    if cap == 0x0b60 {
+        with_frame(|s, _| s.fog.enabled = on);
+        return;
+    }
+
     if matches!(cap, 0x0c60..=0x0c63) {
         crate::renderer::with_immediate(|r| {
             if r.immediate.active {

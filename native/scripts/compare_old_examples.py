@@ -13,11 +13,11 @@ parser.add_argument('--emulator', required=True)
 parser.add_argument('--sdmc', required=True, type=Path)
 parser.add_argument('--build', type=Path, default=Path('build-native-old-examples'))
 parser.add_argument('--output', type=Path, default=Path('docs/native-results/old-examples'))
-parser.add_argument('--case', action='append', choices=['primitives','texture','cube','texcoords','texmatrix','multitexture','mipmap','compressed','overlay','primitives2','primitives3','lighting','texgen'])
+parser.add_argument('--case', action='append', choices=['primitives','texture','cube','texcoords','texmatrix','multitexture','mipmap','compressed','overlay','primitives2','primitives3','lighting','texgen','fog'])
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[2]
 args.output.mkdir(parents=True, exist_ok=True)
-cases = args.case or ['primitives','texture','cube','texcoords','texmatrix','multitexture','mipmap','compressed','overlay','primitives2','primitives3','lighting','texgen']
+cases = args.case or ['primitives','texture','cube','texcoords','texmatrix','multitexture','mipmap','compressed','overlay','primitives2','primitives3','lighting','texgen','fog']
 if len(cases) != len(set(cases)):
     parser.error('--case must not repeat')
 summary = dict(repetitions=1, cases={}, whole_original_programs=False)

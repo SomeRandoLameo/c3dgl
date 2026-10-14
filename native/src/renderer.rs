@@ -99,6 +99,8 @@ pub(crate) struct Renderer {
     error: i32,
     /// The GPU currently holds the clip-space state (identity matrix, no culling).
     pub(crate) stacks: crate::attrib::Stacks,
+    /// The fog state the GPU holds (None: no fog).
+    fog_key: Option<crate::fog::Key>,
     clip_applied: bool,
     /// Polygon offset folded into the uploaded matrix.
     bias_applied: f32,
@@ -257,6 +259,7 @@ impl Renderer {
         core::ptr::addr_of_mut!((*slot).stats).write(Stats::default());
         core::ptr::addr_of_mut!((*slot).error).write(0);
         core::ptr::addr_of_mut!((*slot).stacks).write(crate::attrib::Stacks::default());
+        core::ptr::addr_of_mut!((*slot).fog_key).write(None);
         core::ptr::addr_of_mut!((*slot).clip_applied).write(false);
         core::ptr::addr_of_mut!((*slot).bias_applied).write(0.);
         Some(alloc::boxed::Box::from_raw(slot))
@@ -282,6 +285,7 @@ impl Renderer {
 
         self.generation = generation;
         self.clip_applied = false;
+        self.fog_key = None;
         self.bias_applied = 0.;
         self.matrices.dirty = true;
         self.frame.viewport_dirty = true;
@@ -539,7 +543,13 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
         )
     });
 
-    let needed = texmatrix.map_or(0, |_| gpu::TEXMATRIX_WORDS)
+    let fog_key = r
+        .frame
+        .fog
+        .key(&r.matrices.projection(), r.frame.raster.range);
+    let fog = (fog_key != r.fog_key).then_some(fog_key);
+    let needed = fog.map_or(0, |_| gpu::FOG_WORDS)
+        + texmatrix.map_or(0, |_| gpu::TEXMATRIX_WORDS)
         + viewport.map_or(0, |_| 8)
         + update.map_or(0, |_| 20)
         + raster.map_or(0, |_| gpu::RASTER_WORDS)
@@ -553,6 +563,13 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
 
     if let Some(s) = raster {
         gpu::raster(&mut commands, s, clip)?;
+    }
+
+    if let Some(key) = fog {
+        match key {
+            Some(k) => gpu::fog(&mut commands, Some((k.color(), &crate::fog::table(&k))))?,
+            None => gpu::fog(&mut commands, None)?,
+        }
     }
 
     if let Some(t) = texture {
@@ -575,6 +592,7 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
     }
 
     r.used = commands.used;
+    r.fog_key = fog_key;
     r.clip_applied = clip;
     if clip {
         r.bias_applied = 0.;

@@ -18,6 +18,7 @@ pub struct PolyState {
 }
 
 pub struct FrameState {
+    pub fog: crate::fog::Fog,
     pub texgen: crate::texgen::TexGen,
     pub light: crate::lighting::Lighting,
     pub eval: crate::evaluator::Evaluators,
@@ -36,6 +37,7 @@ pub struct FrameState {
 impl FrameState {
     pub fn new() -> Self {
         Self {
+            fog: crate::fog::Fog::new(),
             texgen: crate::texgen::TexGen::new(),
             light: crate::lighting::Lighting::new(),
             eval: crate::evaluator::Evaluators::new(),
@@ -175,6 +177,9 @@ pub unsafe extern "C" fn glClear(mask: u32) {
 
 fn query(s: &FrameState, m: &Matrices, pname: u32) -> Option<([f64; 16], usize)> {
     if let Some(v) = s.light.query(pname) {
+        return Some(v);
+    }
+    if let Some(v) = s.fog.query(pname) {
         return Some(v);
     }
     if let Some(v) = s.textures.query(pname) {

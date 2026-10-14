@@ -94,6 +94,10 @@ impl Matrices {
         self.mode = mode;
     }
 
+    pub fn projection(&self) -> [f32; 16] {
+        self.stacks[1][self.depths[1]]
+    }
+
     pub fn modelview(&self) -> [f32; 16] {
         self.stacks[0][self.depths[0]]
     }

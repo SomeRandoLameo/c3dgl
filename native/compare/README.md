@@ -21,6 +21,7 @@ The interactive original main and unsupported pages are not run yet. This is a
 | overlay | complete original `drawOverlay` (scissor, GL_LINES) | rest of the cube program (PNG, stats, input) |
 | lighting | the eight cells of the original main loop (diffuse, specular, point and spot light, three lights, color material, two-sided, flat+scaled) | the parameter, error and attribute self-tests (need GLES fixed-point calls) |
 | texgen | the first frame of the original loop (`setupScene()` and `drawFrame()`, extracted from main unchanged) | scrolling, input and statistics |
+| fog | the eight cells of the original main loop | API self-test (needs GLES fixed-point calls) |
 | texcoords | complete original `drawTexcoordPage(createF(16))`, all eight cells | subsequent multitexture, mipmap and compression pages remain separate |
 | texmatrix | complete original first-page body in `drawTextureMatrixPage`, eight cells at time=0 | subsequent pages remain separate |
 | cube | `createCheckerTexture()`, `drawCube(texture,0,0,0,200,240,true)` | full main also uses PNG/ROMFS, scissor, lines and Citro3D statistics |

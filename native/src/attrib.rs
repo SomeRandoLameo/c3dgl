@@ -19,6 +19,7 @@ const POINT: u32 = 0x2;
 const LINE: u32 = 0x4;
 const POLYGON: u32 = 0x8;
 const LIGHTING: u32 = 0x40;
+const FOG: u32 = 0x80;
 const DEPTH_BUFFER: u32 = 0x100;
 const VIEWPORT: u32 = 0x800;
 const TRANSFORM: u32 = 0x1000;
@@ -49,6 +50,7 @@ pub(crate) struct Saved {
     eval: EvalSave,
     textures: TexSave,
     texgen: crate::texgen::TexGen,
+    fog: crate::fog::Fog,
     mode: usize,
 }
 
@@ -98,6 +100,7 @@ pub unsafe extern "C" fn glPushAttrib(mask: u32) {
             eval: f.eval.save(),
             textures: f.textures.save(),
             texgen: f.texgen.clone(),
+            fog: f.fog,
             mode: r.matrices.mode(),
         };
         r.stacks.attribs.push(saved);
@@ -134,6 +137,9 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         f.poly.flat = a.poly.flat;
         f.light = a.light.clone();
     }
+    if mask & FOG != 0 {
+        f.fog.restore_all(&a.fog);
+    }
     if mask & DEPTH_BUFFER != 0 {
         f.raster.depth = a.raster.depth;
         f.raster.function = a.raster.function;
@@ -158,6 +164,7 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         f.raster.scissor = a.raster.scissor;
         f.poly.offset = a.poly.offset;
         f.light.restore_enables(&a.light);
+        f.fog.enabled = a.fog.enabled;
         f.eval.restore_enables(&a.eval);
         f.texgen.restore_enables(&a.texgen);
     }

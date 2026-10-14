@@ -500,6 +500,27 @@ pub fn geometry(
     draw_index(c, first, count, index)
 }
 
+pub const FOG_WORDS: usize = 140;
+/// Fog mode and color, and with fog the 128-entry table (indexed by flipped window depth).
+pub(crate) fn fog(c: &mut Commands<'_>, state: Option<(u32, &[u32; 128])>) -> Result<(), ()> {
+    if c.words.len() - c.used < FOG_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
+        return Err(());
+    }
+    match state {
+        Some((color, table)) => {
+            // GPU_FOG with a flipped z: the table is indexed by window depth.
+            masked(c, r::TEXENV_UPDATE_BUFFER, 7, 5 | (1 << 16))?;
+            one(c, r::FOG_COLOR, color)?;
+            one(c, r::FOG_LUT_INDEX, 0)?;
+            write(c, r::FOG_LUT_DATA0, 15, table, false)
+        }
+        None => {
+            masked(c, r::TEXENV_UPDATE_BUFFER, 7, 0)?;
+            one(c, r::FOG_COLOR, 0)
+        }
+    }
+}
+
 pub const RASTER_WORDS: usize = 20;
 pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster, clip: bool) -> Result<(), ()> {
     if c.words.len() - c.used < RASTER_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
