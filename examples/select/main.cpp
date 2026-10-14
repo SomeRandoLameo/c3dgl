@@ -17,6 +17,9 @@ namespace {
 constexpr int CUBES = 6;
 constexpr int SELECT_SIZE = 256, FEEDBACK_SIZE = 4096;
 
+GLuint selectBuffer[SELECT_SIZE];
+GLfloat feedbackBuffer[FEEDBACK_SIZE];
+
 void cube() {
     static const float faces[6][4][3] = {
         {{-1, -1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1}},       {{1, -1, -1}, {-1, -1, -1}, {-1, 1, -1}, {1, 1, -1}},
@@ -101,6 +104,86 @@ void printStats() {
 
 }  // namespace
 
+void setupScene() {
+    glSelectBuffer(SELECT_SIZE, selectBuffer);
+    glFeedbackBuffer(FEEDBACK_SIZE, GL_2D, feedbackBuffer);
+    glClearColor(0.08f, 0.08f, 0.15f, 1.0f);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+}
+
+void drawFrame(float angle, float cursorX, float cursorY, int& picked) {
+    // Selection: a 5x5 pixel pick region around the cursor, the hit with the smallest depth wins
+    GLint viewport[4];
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    glRenderMode(GL_SELECT);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluPickMatrix(cursorX, cursorY, 5.0, 5.0, viewport);
+    projection();
+    scene(angle, 0);
+    const int hits = glRenderMode(GL_RENDER);
+    picked = 0;
+    GLuint nearest = 0xFFFFFFFF;
+    std::printf("\x1b[15;1HHits: %i\x1b[K\n", hits);
+    const GLuint *record = selectBuffer;
+    for (int h = 0; h < hits; h++) {
+        const GLuint names = record[0], zmin = record[1];
+        if (h < 6)
+            std::printf("  cube %lu  z %.4f .. %.4f\x1b[K\n", static_cast<unsigned long>(record[3]),
+                        zmin / 4294967295.0, record[2] / 4294967295.0);
+        if ((names > 0) && (zmin < nearest)) {
+            nearest = zmin;
+            picked = static_cast<int>(record[2 + names]);
+        }
+        record += 3 + names;
+    }
+    for (int h = hits < 0 ? 0 : hits; h < 6; h++) std::printf("\x1b[K\n");
+
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    projection();
+    scene(angle, picked);
+
+    // Feedback: the window coordinates of the picked cube's front faces
+    int values = 0;
+    if (picked > 0) {
+        glRenderMode(GL_FEEDBACK);
+        transformCube(angle, picked - 1);
+        cube();
+        values = glRenderMode(GL_RENDER);
+    }
+    std::printf("\x1b[23;1HPicked: %i, feedback values: %i\x1b[K", picked, values);
+
+    // Outlines and cursor in window coordinates
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, C3DGL_TOP_SCREEN_WIDTH, 0.0, C3DGL_SCREEN_HEIGHT, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glLineWidth(2.0f);
+    glColor3f(1.0f, 0.9f, 0.2f);
+    for (int i = 0; i < values;) {
+        const GLenum token = static_cast<GLenum>(feedbackBuffer[i++]);
+        if (token != GL_POLYGON_TOKEN) break;       // Only polygons are fed back here
+        const int n = static_cast<int>(feedbackBuffer[i++]);
+        glBegin(GL_LINE_LOOP);
+        for (int k = 0; k < n; k++, i += 2) glVertex2f(feedbackBuffer[i], feedbackBuffer[i + 1]);
+        glEnd();
+    }
+    glLineWidth(1.0f);
+    glColor3f(1.0f, 1.0f, 1.0f);
+    glBegin(GL_LINES);
+    glVertex2f(cursorX - 8.0f, cursorY); glVertex2f(cursorX - 2.0f, cursorY);
+    glVertex2f(cursorX + 2.0f, cursorY); glVertex2f(cursorX + 8.0f, cursorY);
+    glVertex2f(cursorX, cursorY - 8.0f); glVertex2f(cursorX, cursorY - 2.0f);
+    glVertex2f(cursorX, cursorY + 2.0f); glVertex2f(cursorX, cursorY + 8.0f);
+    glEnd();
+    glEnable(GL_DEPTH_TEST);
+}
+
 int main() {
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, nullptr);
@@ -116,13 +199,7 @@ int main() {
         return 1;
     }
 
-    static GLuint selectBuffer[SELECT_SIZE];
-    static GLfloat feedbackBuffer[FEEDBACK_SIZE];
-    glSelectBuffer(SELECT_SIZE, selectBuffer);
-    glFeedbackBuffer(FEEDBACK_SIZE, GL_2D, feedbackBuffer);
-    glClearColor(0.08f, 0.08f, 0.15f, 1.0f);
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
+    setupScene();
 
     std::printf("c3dgl select\n\n\n\n\n"
                 "Cursor: circle pad / D-pad.\n"
@@ -151,75 +228,7 @@ int main() {
         cursorX = std::fmin(std::fmax(cursorX, 0.0f), C3DGL_TOP_SCREEN_WIDTH - 1.0f);
         cursorY = std::fmin(std::fmax(cursorY, 0.0f), C3DGL_SCREEN_HEIGHT - 1.0f);
 
-        // Selection: a 5x5 pixel pick region around the cursor, the hit with the smallest depth wins
-        GLint viewport[4];
-        glGetIntegerv(GL_VIEWPORT, viewport);
-        glRenderMode(GL_SELECT);
-        glMatrixMode(GL_PROJECTION);
-        glLoadIdentity();
-        gluPickMatrix(cursorX, cursorY, 5.0, 5.0, viewport);
-        projection();
-        scene(angle, 0);
-        const int hits = glRenderMode(GL_RENDER);
-        picked = 0;
-        GLuint nearest = 0xFFFFFFFF;
-        std::printf("\x1b[15;1HHits: %i\x1b[K\n", hits);
-        const GLuint *record = selectBuffer;
-        for (int h = 0; h < hits; h++) {
-            const GLuint names = record[0], zmin = record[1];
-            if (h < 6)
-                std::printf("  cube %lu  z %.4f .. %.4f\x1b[K\n", static_cast<unsigned long>(record[3]),
-                            zmin / 4294967295.0, record[2] / 4294967295.0);
-            if ((names > 0) && (zmin < nearest)) {
-                nearest = zmin;
-                picked = static_cast<int>(record[2 + names]);
-            }
-            record += 3 + names;
-        }
-        for (int h = hits < 0 ? 0 : hits; h < 6; h++) std::printf("\x1b[K\n");
-
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glMatrixMode(GL_PROJECTION);
-        glLoadIdentity();
-        projection();
-        scene(angle, picked);
-
-        // Feedback: the window coordinates of the picked cube's front faces
-        int values = 0;
-        if (picked > 0) {
-            glRenderMode(GL_FEEDBACK);
-            transformCube(angle, picked - 1);
-            cube();
-            values = glRenderMode(GL_RENDER);
-        }
-        std::printf("\x1b[23;1HPicked: %i, feedback values: %i\x1b[K", picked, values);
-
-        // Outlines and cursor in window coordinates
-        glMatrixMode(GL_PROJECTION);
-        glLoadIdentity();
-        glOrtho(0.0, C3DGL_TOP_SCREEN_WIDTH, 0.0, C3DGL_SCREEN_HEIGHT, -1.0, 1.0);
-        glMatrixMode(GL_MODELVIEW);
-        glLoadIdentity();
-        glDisable(GL_DEPTH_TEST);
-        glLineWidth(2.0f);
-        glColor3f(1.0f, 0.9f, 0.2f);
-        for (int i = 0; i < values;) {
-            const GLenum token = static_cast<GLenum>(feedbackBuffer[i++]);
-            if (token != GL_POLYGON_TOKEN) break;       // Only polygons are fed back here
-            const int n = static_cast<int>(feedbackBuffer[i++]);
-            glBegin(GL_LINE_LOOP);
-            for (int k = 0; k < n; k++, i += 2) glVertex2f(feedbackBuffer[i], feedbackBuffer[i + 1]);
-            glEnd();
-        }
-        glLineWidth(1.0f);
-        glColor3f(1.0f, 1.0f, 1.0f);
-        glBegin(GL_LINES);
-        glVertex2f(cursorX - 8.0f, cursorY); glVertex2f(cursorX - 2.0f, cursorY);
-        glVertex2f(cursorX + 2.0f, cursorY); glVertex2f(cursorX + 8.0f, cursorY);
-        glVertex2f(cursorX, cursorY - 8.0f); glVertex2f(cursorX, cursorY - 2.0f);
-        glVertex2f(cursorX, cursorY + 2.0f); glVertex2f(cursorX, cursorY + 8.0f);
-        glEnd();
-        glEnable(GL_DEPTH_TEST);
+        drawFrame(angle, cursorX, cursorY, picked);
 
         c3dglSwapBuffers();
     }

@@ -371,3 +371,22 @@ list base joins GL_LIST_BIT. The original lists example keeps `createLists()` an
 the C framebuffer exactly, as do all earlier scenes (`native-results/lists-step/`). New GL
 functions that GL compiles (pixel operations, accumulation, ...) must add their hook. Host
 tests: 52 pass.
+
+
+## Selection, feedback and GLU checkpoint
+
+`glRenderMode`, `glSelectBuffer`, `glFeedbackBuffer`, the name stack and `glPassThrough` are
+implemented (compiled into display lists like in GL). In GL_SELECT and GL_FEEDBACK nothing
+is drawn: after lighting, texture generation, user clip planes, culling and polygon mode the
+primitives are clipped against the view volume and written as hit records (window depth range
+scaled to 2^32 - 1) or as feedback tokens in every type, with GL_LINE_RESET_TOKEN semantics
+and a polygon fed back as one n-gon. `glClear` is ignored in these modes (as in Mesa). The
+polygon assembly of `polygon.rs` is now a visitor shared with feedback. `glGet*` report the
+current color, normal, texture coordinates and edge flag. Mesa GLU (unmodified, as
+`c3dgl::glu` for the C renderer) is built a second time against the native renderer
+(`c3dgl_native_glu` in the comparison); `gluPickMatrix` works. The Rust build depends on all
+`src/*.rs` files now (a fixed list missed new modules). The original select example keeps
+`setupScene()` and `drawFrame()` (extracted from main unchanged) and the comparison walks
+the cursor until a cube is picked: its highlighted frame with the feedback outline matches
+the C framebuffer exactly, as do all earlier scenes (`native-results/select-step/`). Host
+tests: 54 pass.

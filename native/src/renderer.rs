@@ -151,6 +151,11 @@ pub unsafe fn clear_gl(mask: u32) {
         return;
     }
 
+    // Like Mesa: feedback and selection draw nothing.
+    if r.frame.select.active() {
+        return;
+    }
+
     // Write masks apply to clears.
     let raster = r.frame.raster;
     let color = mask & crate::frame::COLOR != 0 && raster.color_mask != 0;
@@ -1305,6 +1310,26 @@ unsafe fn texgen_vertex(
     );
 }
 
+/// Texture coordinate generation for every vertex of a draw in place.
+unsafe fn texgen_vertices(r: &mut Renderer, vertices: &mut [GpuVertex], normals: &[[f32; 3]]) {
+    if !r.frame.texgen.active() {
+        return;
+    }
+    let mv = r.matrices.modelview();
+    for (v, n) in vertices.iter_mut().zip(normals) {
+        let p = if v.position[3] != 1. && v.position[3] != 0. {
+            let w = v.position[3];
+            [v.position[0] / w, v.position[1] / w, v.position[2] / w, 1.]
+        } else {
+            v.position
+        };
+        let (mut tex, mut extra) = (v.texcoord, v.extra_texcoords);
+        texgen_vertex(r, &mv, p, *n, &mut tex, &mut extra);
+        v.texcoord = tex;
+        v.extra_texcoords = extra;
+    }
+}
+
 /// Light every vertex of a draw in place; the back colors with two-sided lighting (else empty).
 unsafe fn light_vertices(
     r: &mut Renderer,
@@ -1423,6 +1448,17 @@ pub(crate) unsafe fn end_immediate() {
                 return Ok(());
             }
 
+            if r.frame.select.active() {
+                crate::feedback::draw(
+                    r,
+                    batch.primitive,
+                    &batch.vertices,
+                    &batch.backs,
+                    &batch.edges,
+                );
+                return Ok(());
+            }
+
             if !r.active && begin_frame(r, true, None) != 0 {
                 return Err(0x0502);
             }
@@ -1486,6 +1522,28 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                 return Ok(());
             }
 
+            if r.arrays.texcoord0_has_q() {
+                r.frame.textures.mark_q();
+            }
+            if r.frame.select.active() {
+                // Feedback and selection draw nothing: the primitives go to their buffers.
+                let (mut source, normals) = r.arrays.gather(
+                    first as usize,
+                    count,
+                    kind,
+                    indices,
+                    r.immediate.color,
+                    r.immediate.texcoord,
+                    r.immediate.extra_texcoords,
+                    r.immediate.normal,
+                )?;
+                texgen_vertices(r, &mut source, &normals);
+                let backs = light_vertices(r, &mut source, &normals);
+                let edges = alloc::vec![true; source.len()];
+                crate::feedback::draw(r, mode, &source, &backs, &edges);
+                return Ok(());
+            }
+
             if !r.active && begin_frame(r, true, None) != 0 {
                 return Err(0x0502);
             }
@@ -1513,19 +1571,7 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                     r.immediate.normal,
                 )?;
                 if generated {
-                    let mv = r.matrices.modelview();
-                    for (v, n) in source.iter_mut().zip(&normals) {
-                        let p = if v.position[3] != 1. && v.position[3] != 0. {
-                            let w = v.position[3];
-                            [v.position[0] / w, v.position[1] / w, v.position[2] / w, 1.]
-                        } else {
-                            v.position
-                        };
-                        let (mut tex, mut extra) = (v.texcoord, v.extra_texcoords);
-                        texgen_vertex(r, &mv, p, *n, &mut tex, &mut extra);
-                        v.texcoord = tex;
-                        v.extra_texcoords = extra;
-                    }
+                    texgen_vertices(r, &mut source, &normals);
                 }
                 let backs = light_vertices(r, &mut source, &normals);
                 if mode < 4 {

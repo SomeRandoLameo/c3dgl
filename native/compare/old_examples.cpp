@@ -35,6 +35,9 @@
 #else
 #define CASE "fragment"
 #endif
+#elif defined(C3DGL_OLD_SELECT)
+#include "../../examples/select/main.cpp"
+#define CASE "select"
 #elif defined(C3DGL_OLD_LISTS)
 #include "../../examples/lists/main.cpp"
 #define CASE "lists"
@@ -113,6 +116,16 @@ int main() {
     const GLuint tex=createF(16);drawTexcoordPage(tex);
 #elif defined(C3DGL_OLD_TEXTURE)
     const GLuint tex=createF(16);drawCell(0,0,tex);
+#elif defined(C3DGL_OLD_SELECT)
+    // The first frame of the original main loop: initial angle and cursor, GL_SELECT then GL_FEEDBACK
+    setupScene();
+    const GLuint tex=0;
+    int picked=0;
+    // Walk the cursor over the screen until a cube is picked: the frame then shows the highlighted cube and
+    // its feedback outline (both backends must pick the same cube at the same position)
+    static const int spots[][2]={{150,100},{250,100},{120,120},{280,120},{160,150},{240,150},{140,90},{260,90},{110,150},{290,150}};
+    for(const auto &spot:spots){ if(picked) break; drawFrame(0.0f,(float)spot[0],(float)spot[1],picked); }
+    if(!picked) drawFrame(0.0f,200.0f,120.0f,picked);
 #elif defined(C3DGL_OLD_LISTS)
     // The first frame of the original main loop through display lists (angle 0, view 20/30)
     const GLuint lists=createLists();

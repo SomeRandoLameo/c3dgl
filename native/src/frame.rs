@@ -1,7 +1,7 @@
 //! GL frame state. Top-screen landscape viewport and whole-buffer clears.
 use crate::{
     matrix::Matrices,
-    renderer::{clear_gl, with_frame},
+    renderer::{clear_gl, with_frame, with_renderer},
 };
 
 pub const COLOR: u32 = 0x4000;
@@ -18,6 +18,7 @@ pub struct PolyState {
 }
 
 pub struct FrameState {
+    pub select: crate::feedback::Select,
     pub lists: crate::lists::Lists,
     pub clip: crate::clip::ClipState,
     pub fog: crate::fog::Fog,
@@ -42,6 +43,7 @@ pub struct FrameState {
 impl FrameState {
     pub fn new() -> Self {
         Self {
+            select: crate::feedback::Select::new(),
             lists: crate::lists::Lists::new(),
             clip: crate::clip::ClipState::new(),
             fog: crate::fog::Fog::new(),
@@ -122,6 +124,37 @@ pub unsafe extern "C" fn glPolygonOffset(factor: f32, units: f32) {
         s.poly.factor = factor;
         s.poly.units = units;
     });
+}
+
+/// The current vertex attributes: color, normal, texture coordinates and edge flag.
+fn current_query(i: &crate::immediate::Immediate, pname: u32) -> Option<([f64; 16], usize)> {
+    let mut v = [0.; 16];
+    let n = match pname {
+        0x0b00 => {
+            for (o, c) in v.iter_mut().zip(i.color) {
+                *o = c as f64;
+            }
+            4
+        }
+        0x0b02 => {
+            for (o, c) in v.iter_mut().zip(i.normal) {
+                *o = c as f64;
+            }
+            3
+        }
+        0x0b03 => {
+            for (o, c) in v.iter_mut().zip(i.texcoord) {
+                *o = c as f64;
+            }
+            4
+        }
+        0x0b43 => {
+            v[0] = i.edge as u8 as f64;
+            1
+        }
+        _ => return None,
+    };
+    Some((v, n))
 }
 
 fn byte(x: f32) -> u32 {
@@ -219,11 +252,19 @@ pub unsafe extern "C" fn glClear(mask: u32) {
     clear_gl(mask);
 }
 
-fn query(s: &FrameState, m: &Matrices, pname: u32) -> Option<([f64; 16], usize)> {
+fn query(
+    s: &FrameState,
+    m: &Matrices,
+    imm: &crate::immediate::Immediate,
+    pname: u32,
+) -> Option<([f64; 16], usize)> {
+    if let Some(v) = current_query(imm, pname) {
+        return Some(v);
+    }
     if let Some(v) = s.light.query(pname) {
         return Some(v);
     }
-    if let Some(x) = s.lists.query(pname) {
+    if let Some(x) = s.select.query(pname).or_else(|| s.lists.query(pname)) {
         let mut v = [0.; 16];
         v[0] = x;
         return Some((v, 1));
@@ -328,13 +369,14 @@ fn query(s: &FrameState, m: &Matrices, pname: u32) -> Option<([f64; 16], usize)>
 
 #[no_mangle]
 pub unsafe extern "C" fn glGetFloatv(pname: u32, out: *mut f32) {
-    with_frame(|s, m| {
+    with_renderer(|r| {
+        let (s, m, imm) = (&r.frame, &mut r.matrices, &r.immediate);
         if out.is_null() {
             m.fail(0x0501);
             return;
         }
 
-        match query(s, m, pname) {
+        match query(s, m, imm, pname) {
             Some((v, n)) => {
                 for (i, value) in v[..n].iter().enumerate() {
                     out.add(i).write(*value as f32);
@@ -348,13 +390,14 @@ pub unsafe extern "C" fn glGetFloatv(pname: u32, out: *mut f32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glGetIntegerv(pname: u32, out: *mut i32) {
-    with_frame(|s, m| {
+    with_renderer(|r| {
+        let (s, m, imm) = (&r.frame, &mut r.matrices, &r.immediate);
         if out.is_null() {
             m.fail(0x0501);
             return;
         }
 
-        match query(s, m, pname) {
+        match query(s, m, imm, pname) {
             Some((v, n)) => {
                 for (i, value) in v[..n].iter().enumerate() {
                     let integer = if pname == 0x0c22
@@ -405,13 +448,14 @@ mod tests {
 
 #[no_mangle]
 pub unsafe extern "C" fn glGetBooleanv(pname: u32, out: *mut u8) {
-    with_frame(|s, m| {
+    with_renderer(|r| {
+        let (s, m, imm) = (&r.frame, &mut r.matrices, &r.immediate);
         if out.is_null() {
             m.fail(0x0501);
             return;
         }
 
-        match query(s, m, pname) {
+        match query(s, m, imm, pname) {
             Some((v, n)) => {
                 for (i, value) in v[..n].iter().enumerate() {
                     out.add(i).write((*value != 0.) as u8);

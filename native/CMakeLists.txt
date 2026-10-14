@@ -18,13 +18,13 @@ find_program(C3DGL_CARGO cargo REQUIRED)
 set(C3DGL_RUST_TARGET armv6k-nintendo-3ds)
 set(C3DGL_RUST_OUT "${CMAKE_CURRENT_BINARY_DIR}/cargo")
 set(C3DGL_ARCHIVE "${C3DGL_RUST_OUT}/${C3DGL_RUST_TARGET}/release/libc3dgl.a")
+file(GLOB C3DGL_RUST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.rs")
 add_custom_command(OUTPUT "${C3DGL_ARCHIVE}"
     COMMAND ${CMAKE_COMMAND} -E env "CARGO_TARGET_DIR=${C3DGL_RUST_OUT}"
         ${C3DGL_CARGO} build --release --target ${C3DGL_RUST_TARGET}
         -Zbuild-std=core,alloc --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    DEPENDS Cargo.toml build.rs rust-toolchain.toml src/lib.rs src/platform.rs src/gpu.rs
-        src/renderer.rs src/arrays.rs src/immediate.rs src/texture.rs src/blend.rs src/primitive.rs src/matrix.rs src/frame.rs src/raster.rs src/registers.rs src/shader.rs
+    DEPENDS Cargo.toml build.rs rust-toolchain.toml ${C3DGL_RUST_SOURCES}
     VERBATIM)
 add_custom_target(c3dgl_native_build ALL DEPENDS "${C3DGL_ARCHIVE}")
 add_library(c3dgl_native_rust STATIC IMPORTED GLOBAL)

@@ -265,6 +265,73 @@ struct Src<'a> {
     edges: &'a [bool],
 }
 
+/// Visit the polygons of the primitives of `mode` (4..=9) over `n` vertices in drawing order:
+/// `f(vertex indices, edge flags, flat shading vertex)`. `whole`: GL_POLYGON is one polygon
+/// (outlines, feedback) rather than a triangle fan. `flat`: provoking vertices apply.
+pub(crate) fn visit(
+    mode: u32,
+    n: usize,
+    edges: &[bool],
+    flat: bool,
+    whole: bool,
+    f: &mut dyn FnMut(&[usize], &[bool], Option<usize>) -> Result<(), u32>,
+) -> Result<(), u32> {
+    let flat = |i: usize| flat.then_some(i);
+    let flags = |idx: &[usize]| idx.iter().map(|i| edges[*i]).collect::<Vec<bool>>();
+    match mode {
+        4 => {
+            for k in (0..n / 3 * 3).step_by(3) {
+                let idx = [k, k + 1, k + 2];
+                f(&idx, &flags(&idx), flat(k + 2))?;
+            }
+        }
+        5 => {
+            for i in 0..n.saturating_sub(2) {
+                // Every other triangle is flipped to keep the winding of the first one.
+                let idx = if i % 2 == 1 {
+                    [i + 1, i, i + 2]
+                } else {
+                    [i, i + 1, i + 2]
+                };
+                f(&idx, &[true; 3], flat(i + 2))?;
+            }
+        }
+        6 => {
+            for i in 1..n.saturating_sub(1) {
+                f(&[0, i, i + 1], &[true; 3], flat(i + 1))?;
+            }
+        }
+        7 => {
+            for k in (0..n / 4 * 4).step_by(4) {
+                let idx = [k, k + 1, k + 2, k + 3];
+                f(&idx, &flags(&idx), flat(k + 3))?;
+            }
+        }
+        8 => {
+            let mut i = 0;
+            while i + 3 < n {
+                // Quad i is v[2i], v[2i+1], v[2i+3], v[2i+2].
+                f(&[i, i + 1, i + 3, i + 2], &[true; 4], flat(i + 3))?;
+                i += 2;
+            }
+        }
+        9 => {
+            if n >= 3 {
+                if whole {
+                    let idx: Vec<usize> = (0..n).collect();
+                    f(&idx, edges, flat(0))?;
+                } else {
+                    for i in 1..n - 1 {
+                        f(&[0, i, i + 1], &[true; 3], flat(0))?;
+                    }
+                }
+            }
+        }
+        _ => return Err(0x0500),
+    }
+    Ok(())
+}
+
 /// Assemble the primitives of `mode` (4..=9) from `v` (drawing order; `backs`: back colors of
 /// two-sided lighting or empty; `edges`: GL edge flags of each vertex) into ordered draws.
 pub(crate) fn assemble(
@@ -279,60 +346,15 @@ pub(crate) fn assemble(
         items: Vec::new(),
     };
     let src = Src { v, backs, edges };
-    let flat = |i: usize| s.flat.then_some(i);
-    let flags = |idx: &[usize]| idx.iter().map(|i| edges[*i]).collect::<Vec<bool>>();
-    match mode {
-        4 => {
-            for k in (0..v.len() / 3 * 3).step_by(3) {
-                let idx = [k, k + 1, k + 2];
-                b.polygon(&src, &idx, &flags(&idx), flat(k + 2))?;
-            }
-        }
-        5 => {
-            for i in 0..v.len().saturating_sub(2) {
-                // Every other triangle is flipped to keep the winding of the first one.
-                let idx = if i % 2 == 1 {
-                    [i + 1, i, i + 2]
-                } else {
-                    [i, i + 1, i + 2]
-                };
-                b.polygon(&src, &idx, &[true; 3], flat(i + 2))?;
-            }
-        }
-        6 => {
-            for i in 1..v.len().saturating_sub(1) {
-                b.polygon(&src, &[0, i, i + 1], &[true; 3], flat(i + 1))?;
-            }
-        }
-        7 => {
-            for k in (0..v.len() / 4 * 4).step_by(4) {
-                let idx = [k, k + 1, k + 2, k + 3];
-                b.polygon(&src, &idx, &flags(&idx), flat(k + 3))?;
-            }
-        }
-        8 => {
-            let mut i = 0;
-            while i + 3 < v.len() {
-                // Quad i is v[2i], v[2i+1], v[2i+3], v[2i+2].
-                b.polygon(&src, &[i, i + 1, i + 3, i + 2], &[true; 4], flat(i + 3))?;
-                i += 2;
-            }
-        }
-        9 => {
-            if v.len() >= 3 {
-                if s.modes_active() {
-                    // One polygon: its outline and flags are not a fan's.
-                    let idx: Vec<usize> = (0..v.len()).collect();
-                    b.polygon(&src, &idx, edges, flat(0))?;
-                } else {
-                    for i in 1..v.len() - 1 {
-                        b.polygon(&src, &[0, i, i + 1], &[true; 3], flat(0))?;
-                    }
-                }
-            }
-        }
-        _ => return Err(0x0500),
-    }
+    // GL_POLYGON is one polygon when its outline is drawn.
+    visit(
+        mode,
+        v.len(),
+        edges,
+        s.flat,
+        s.modes_active(),
+        &mut |idx, flags, pv| b.polygon(&src, idx, flags, pv),
+    )?;
     Ok(b.items)
 }
 

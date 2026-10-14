@@ -12,6 +12,8 @@ mod clip;
 #[cfg(any(target_os = "horizon", test))]
 mod evaluator;
 #[cfg(any(target_os = "horizon", test))]
+mod feedback;
+#[cfg(any(target_os = "horizon", test))]
 mod fog;
 #[cfg(any(target_os = "horizon", test))]
 mod frame;

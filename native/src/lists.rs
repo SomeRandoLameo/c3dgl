@@ -113,6 +113,11 @@ pub(crate) enum Cmd {
     CallList(u32),
     CallLists(Vec<u32>),
     ListBase(u32),
+    PassThrough(f32),
+    InitNames,
+    LoadName(u32),
+    PushName(u32),
+    PopName,
     /// A call that failed while compiling raises its error when executed.
     Raise(u32),
 }
@@ -348,6 +353,11 @@ unsafe fn execute(cmd: &Cmd) {
         Cmd::CallList(l) => glCallList(*l),
         Cmd::CallLists(names) => glCallLists(names.len() as i32, 0x1405, names.as_ptr().cast()),
         Cmd::ListBase(b) => glListBase(*b),
+        Cmd::PassThrough(t) => crate::feedback::glPassThrough(*t),
+        Cmd::InitNames => crate::feedback::glInitNames(),
+        Cmd::LoadName(n) => crate::feedback::glLoadName(*n),
+        Cmd::PushName(n) => crate::feedback::glPushName(*n),
+        Cmd::PopName => crate::feedback::glPopName(),
         Cmd::Raise(code) => with_immediate(|r| r.matrices.fail(*code)),
     }
 }
