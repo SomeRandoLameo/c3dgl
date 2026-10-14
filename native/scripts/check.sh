@@ -28,6 +28,13 @@ for consumer in c3dgl_native_triangle c3dgl_native_triangle_cpp c3dgl_native_cub
         echo "Unexpected Citro3D/libctru GPU encoder or shader helper in $consumer" >&2
         exit 1
     fi
+    # The 3DS main thread stack is 32 KiB; a large init frame crashed at startup.
+    frame=$("$DEVKITPRO/devkitARM/bin/arm-none-eabi-objdump" -d --disassemble=c3dglInit "build-native/$consumer.elf" |
+        sed -n 's/.*sub[[:space:]]*sp, sp, #\([0-9]*\).*/\1/p' | awk '{s+=$1} END {print s+0}')
+    if [ "$frame" -gt 8192 ]; then
+        echo "c3dglInit stack frame too large in $consumer: $frame bytes" >&2
+        exit 1
+    fi
 done
 "$root/native/scripts/check_rust3ds.sh"
 echo 'PASS: Rust tests, C/C++ ABI, rust3ds consumer, 3DS builds and native dependency audits.'

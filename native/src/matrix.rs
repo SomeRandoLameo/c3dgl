@@ -44,6 +44,20 @@ impl Matrices {
         }
     }
 
+    /// Initialize in place; building the 10 KiB value on the 32 KiB 3DS stack overflows it.
+    pub unsafe fn init(dst: *mut Self) {
+        let stacks = core::ptr::addr_of_mut!((*dst).stacks).cast::<[f32; 16]>();
+        for i in 0..5 * 32 {
+            stacks.add(i).write(IDENTITY);
+        }
+        core::ptr::addr_of_mut!((*dst).depths).write([0; 5]);
+        core::ptr::addr_of_mut!((*dst).mode).write(0);
+        core::ptr::addr_of_mut!((*dst).active).write(0);
+        core::ptr::addr_of_mut!((*dst).dirty).write(true);
+        core::ptr::addr_of_mut!((*dst).texture_dirty).write(true);
+        core::ptr::addr_of_mut!((*dst).error).write(0);
+    }
+
     pub(crate) fn fail(&mut self, error: u32) {
         if self.error == 0 {
             self.error = error;

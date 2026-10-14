@@ -135,7 +135,7 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
     one(c, r::GSH_MISC0, 0)?;
     one(c, r::GSH_MISC1, 0)?;
     one(c, r::GSH_INPUTBUFFER_CONFIG, 0xa0000000)?;
-    // v0/v1/v2: float4 position/color/UV, 48-byte internal stride.
+    // v0/v1/v2: float4 position/color/UV; the stride also covers the extra texture units.
     seq(c, r::ATTRIBBUFFERS_FORMAT_LOW, &[0xfff, 0x2ff80000])?;
     masked(c, r::VSH_INPUTBUFFER_CONFIG, 11, 0xa0000002)?;
     one(c, r::VSH_NUM_ATTR, 2)?;
@@ -143,7 +143,7 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
     one(c, r::ATTRIBBUFFERS_LOC, vertices >> 3)?;
     let mut buffers = [0; 36];
     buffers[1] = 0x210;
-    buffers[2] = 0x30300000;
+    buffers[2] = ((core::mem::size_of::<crate::renderer::GpuVertex>() as u32) << 16) | 0x30000000;
     seq(c, r::ATTRIBBUFFER0_OFFSET, &buffers)?;
     finish(c)
 }

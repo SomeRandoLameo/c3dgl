@@ -99,7 +99,8 @@ pub(crate) struct Renderer {
     error: i32,
 }
 
-static mut CONTEXT: Option<Renderer> = None;
+// Boxed: the renderer is large and the 3DS main thread stack is only 32 KiB.
+static mut CONTEXT: Option<alloc::boxed::Box<Renderer>> = None;
 
 pub unsafe fn with_matrices(f: impl FnOnce(&mut Matrices)) {
     if let Some(r) = (&mut *ptr::addr_of_mut!(CONTEXT)).as_mut() {
@@ -201,7 +202,7 @@ pub unsafe fn clear_gl(mask: u32) {
 }
 
 impl Renderer {
-    unsafe fn create() -> Option<Self> {
+    unsafe fn create() -> Option<alloc::boxed::Box<Self>> {
         // Fallible allocation and RAII rollback for every intermediate failure.
         let commands = Buffer::new(COMMAND_WORDS * 4, false)?;
         let state = Buffer::new(STATE_WORDS * 4, false)?;
@@ -222,31 +223,35 @@ impl Renderer {
 
         let state_words = encoded.used;
 
-        Some(Self {
-            arrays: crate::arrays::Arrays::new(),
-            immediate: crate::immediate::Immediate::new(),
-            transient: alloc::vec::Vec::new(),
-            frame: FrameState::new(),
-            work_wait_ticks: 0,
-            work_gpu_ticks: 0,
-            submitted_bytes: 0,
-            matrices: Matrices::new(),
-            commands,
-            state,
-            vertices,
-            color,
-            depth,
-            state_words,
-            used: 0,
-            vertex_count: 0,
-            generation: 0,
-            active: false,
-            started: 0,
-            wait_ticks: 0,
-            draws: 0,
-            stats: Stats::default(),
-            error: 0,
-        })
+        let layout = core::alloc::Layout::new::<Self>();
+        let slot = alloc::alloc::alloc(layout).cast::<Self>();
+        if slot.is_null() {
+            return None;
+        }
+        core::ptr::addr_of_mut!((*slot).arrays).write(crate::arrays::Arrays::new());
+        core::ptr::addr_of_mut!((*slot).immediate).write(crate::immediate::Immediate::new());
+        core::ptr::addr_of_mut!((*slot).transient).write(alloc::vec::Vec::new());
+        core::ptr::addr_of_mut!((*slot).frame).write(FrameState::new());
+        core::ptr::addr_of_mut!((*slot).work_wait_ticks).write(0);
+        core::ptr::addr_of_mut!((*slot).work_gpu_ticks).write(0);
+        core::ptr::addr_of_mut!((*slot).submitted_bytes).write(0);
+        Matrices::init(core::ptr::addr_of_mut!((*slot).matrices));
+        core::ptr::addr_of_mut!((*slot).commands).write(commands);
+        core::ptr::addr_of_mut!((*slot).state).write(state);
+        core::ptr::addr_of_mut!((*slot).vertices).write(vertices);
+        core::ptr::addr_of_mut!((*slot).color).write(color);
+        core::ptr::addr_of_mut!((*slot).depth).write(depth);
+        core::ptr::addr_of_mut!((*slot).state_words).write(state_words);
+        core::ptr::addr_of_mut!((*slot).used).write(0);
+        core::ptr::addr_of_mut!((*slot).vertex_count).write(0);
+        core::ptr::addr_of_mut!((*slot).generation).write(0);
+        core::ptr::addr_of_mut!((*slot).active).write(false);
+        core::ptr::addr_of_mut!((*slot).started).write(0);
+        core::ptr::addr_of_mut!((*slot).wait_ticks).write(0);
+        core::ptr::addr_of_mut!((*slot).draws).write(0);
+        core::ptr::addr_of_mut!((*slot).stats).write(Stats::default());
+        core::ptr::addr_of_mut!((*slot).error).write(0);
+        Some(alloc::boxed::Box::from_raw(slot))
     }
 
     unsafe fn restore(&mut self) -> bool {
