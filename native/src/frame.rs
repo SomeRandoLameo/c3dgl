@@ -23,6 +23,7 @@ pub struct FrameState {
     pub clip: crate::clip::ClipState,
     pub fog: crate::fog::Fog,
     pub stipple: crate::stipple::Stipple,
+    pub accum: crate::accum::Accum,
     pub texgen: crate::texgen::TexGen,
     pub light: crate::lighting::Lighting,
     pub eval: crate::evaluator::Evaluators,
@@ -49,6 +50,7 @@ impl FrameState {
             clip: crate::clip::ClipState::new(),
             fog: crate::fog::Fog::new(),
             stipple: crate::stipple::Stipple::new(),
+            accum: crate::accum::Accum::new(),
             texgen: crate::texgen::TexGen::new(),
             light: crate::lighting::Lighting::new(),
             eval: crate::evaluator::Evaluators::new(),
@@ -272,6 +274,9 @@ fn query(
         return Some((v, 1));
     }
     if let Some(v) = s.fog.query(pname) {
+        return Some(v);
+    }
+    if let Some(v) = s.accum.query(pname) {
         return Some(v);
     }
     if let Some(x) = s.stipple.query(pname) {

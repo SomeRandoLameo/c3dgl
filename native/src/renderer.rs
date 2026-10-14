@@ -137,10 +137,23 @@ pub unsafe fn with_frame(f: impl FnOnce(&mut FrameState, &mut Matrices)) {
 
 pub unsafe fn clear_gl(mask: u32) {
     const STENCIL: u32 = 0x0400;
-    if mask & !(crate::frame::COLOR | crate::frame::DEPTH | STENCIL) != 0 {
+    if mask
+        & !(crate::frame::COLOR | crate::frame::DEPTH | STENCIL | crate::accum::ACCUM_BUFFER_BIT)
+        != 0
+    {
         with_matrices(|m| m.fail(0x0501));
         return;
     }
+    if mask & crate::accum::ACCUM_BUFFER_BIT != 0 {
+        let ok = (&*ptr::addr_of!(CONTEXT))
+            .as_ref()
+            .is_some_and(|r| !r.immediate.active && !r.frame.select.active());
+        if ok {
+            crate::accum::clear_buffer();
+        }
+        // The other buffers follow below; with GL_ACCUM_BUFFER_BIT alone there is nothing more.
+    }
+    let mask = mask & !crate::accum::ACCUM_BUFFER_BIT;
 
     if mask == 0 {
         return;
@@ -300,6 +313,139 @@ unsafe fn clear_quad(r: &mut Renderer, color: bool, depth: bool, stencil: bool) 
     r.frame.fog.enabled = saved.3;
     r.frame.textures.suspended = false;
     r.frame.textures.dirty = true;
+}
+
+/// Run the queued commands to completion and start a fresh command list (the GPU state stays).
+unsafe fn sync_frame(r: &mut Renderer) -> Result<(), u32> {
+    let mut commands = r.commands();
+    if gpu::finish(&mut commands).is_err() {
+        return Err(0x0505);
+    }
+    r.used = commands.used;
+    let wait = p::c3dglPlatformTick();
+    if p::c3dglPlatformSubmit(r.commands.pointer, (r.used * 4) as u32, ptr::null_mut()) < 0 {
+        return Err(0x0502);
+    }
+    r.work_gpu_ticks += p::c3dglPlatformWait();
+    r.submitted_bytes += (r.used * 4) as u32;
+    r.work_wait_ticks += p::c3dglPlatformTick() - wait;
+    r.used = 0;
+    let mut commands = r.commands();
+    if gpu::begin(&mut commands).is_err() {
+        return Err(0x0505);
+    }
+    r.used = commands.used;
+    Ok(())
+}
+
+/// Window columns [line0, line0 + lines) of the color buffer as linear RGBA8 (column x: 240 pixels
+/// from y = 0 up, bytes A, B, G, R) once all drawing so far has finished.
+pub(crate) unsafe fn read_color(
+    r: &mut Renderer,
+    line0: usize,
+    lines: usize,
+) -> Result<Buffer, u32> {
+    let out = Buffer::new(lines * 960, false).ok_or(0x0505u32)?;
+    if r.active {
+        sync_frame(r)?;
+    }
+    if p::c3dglPlatformReadColor(r.color.pointer, line0 as u32, lines as u32, out.pointer) < 0 {
+        return Err(0x0502);
+    }
+    Ok(out)
+}
+
+/// Draw a `w` x `h` RGBA8 image at window position (x, y) over the color buffer through the
+/// scissor test and the color mask only (no other fragment operation). `fill` writes the texels
+/// of the tiled texture (`tw` x `th`, sides padded to powers of two of at least 8).
+pub(crate) unsafe fn draw_image(
+    r: &mut Renderer,
+    (x, y, w, h): (usize, usize, usize, usize),
+    fill: &mut dyn FnMut(*mut u8, usize, usize),
+) -> Result<(), u32> {
+    let pow2 = |v: usize| {
+        let mut p = 8;
+        while p < v {
+            p <<= 1;
+        }
+        p
+    };
+    let (tw, th) = (pow2(w), pow2(h));
+    let bytes = tw * th * 4;
+    let texture = Buffer::new(bytes, false).ok_or(0x0505u32)?;
+    ptr::write_bytes(texture.pointer, 0, bytes);
+    fill(texture.pointer, tw, th);
+    if p::c3dglPlatformFlush(texture.pointer, bytes as u32) < 0 {
+        return Err(0x0502);
+    }
+    if !r.active && begin_frame(r, true, None) != 0 {
+        return Err(0x0502);
+    }
+    let saved = (
+        r.frame.raster,
+        r.frame.viewport,
+        r.frame.drawable,
+        r.frame.fog.enabled,
+    );
+    let mut q = crate::raster::Raster::new();
+    q.scissor = saved.0.scissor;
+    q.scissor_box = saved.0.scissor_box;
+    q.color_mask = saved.0.color_mask;
+    q.dirty = true;
+    r.frame.raster = q;
+    r.frame.viewport = [0, 0, 400, 240];
+    r.frame.drawable = true;
+    r.frame.viewport_dirty = true;
+    r.frame.fog.enabled = false;
+    r.frame.textures.suspended = true;
+    // RGBA8, nearest, clamped; TexEnv stage 0 replaces color and alpha by the texel.
+    r.frame.textures.set_image(Some(crate::texture::Packet {
+        enabled: true,
+        complete: true,
+        address: texture.physical(),
+        dimensions: (tw as u32) << 16 | th as u32,
+        parameters: 0,
+        replace: true,
+        scale: [1.; 2],
+        tev: [3 | 3 << 16, 0, 0, u32::MAX, 0],
+        lod: 0,
+        format: 0,
+        flip: false,
+        one_d: false,
+    }));
+    r.matrices.texture_dirty = true;
+
+    let (sw, sh) = (2. / 400., 2. / 240.);
+    let (x0, x1) = (x as f32 * sw - 1., (x + w) as f32 * sw - 1.);
+    let (y0, y1) = (y as f32 * sh - 1., (y + h) as f32 * sh - 1.);
+    let (s1, t1) = (w as f32 / tw as f32, h as f32 / th as f32);
+    let corner = |px: f32, py: f32, s: f32, t: f32| GpuVertex {
+        position: [px, py, 0., 1.],
+        color: [255.; 4],
+        texcoord: [s, t, 0., 1.],
+        extra_texcoords: [[0., 0., 0., 1.]; 2],
+    };
+    let vertices = [
+        corner(x0, y0, 0., 0.),
+        corner(x1, y0, s1, 0.),
+        corner(x1, y1, s1, t1),
+        corner(x0, y1, 0., t1),
+    ];
+    let result = draw_transient(r, &vertices, &[0u16, 1, 2, 0, 2, 3], 6, true, 0.);
+
+    r.frame.raster = saved.0;
+    r.frame.raster.dirty = true;
+    r.frame.viewport = saved.1;
+    r.frame.drawable = saved.2;
+    r.frame.viewport_dirty = true;
+    r.frame.fog.enabled = saved.3;
+    r.frame.textures.suspended = false;
+    r.frame.textures.set_image(None);
+    r.matrices.texture_dirty = true;
+    // The queued draw samples the texture until the frame is collected.
+    let kept = r.frame.textures.retire(texture);
+    result?;
+    kept
 }
 
 impl Renderer {
@@ -684,8 +830,10 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
     }
     let raster = (r.frame.raster.dirty || clip_changed || stipple_changed).then_some(raster_state);
     let texgen_units = r.frame.texgen.unit_mask();
+    // An internal image (pixel rectangle) is sampled as it is: no matrices, no projection.
+    let image = r.frame.textures.has_image();
     let tex_matrix = |unit: usize| {
-        if texgen_units >> unit & 1 != 0 {
+        if image || texgen_units >> unit & 1 != 0 {
             crate::matrix::IDENTITY
         } else {
             r.matrices.texture_for(unit)
@@ -693,12 +841,13 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
     };
     // Unit 0 divides by q per pixel after a texcoord with q != 1, a projective texture matrix
     // or generated coordinates.
-    let projective = r.frame.textures.q_used
-        || (texgen_units & 1 != 0 && r.frame.textures.packets()[0].enabled)
-        || {
-            let m = tex_matrix(0);
-            m[3] != 0. || m[7] != 0. || m[15] != 1.
-        };
+    let projective = !image
+        && (r.frame.textures.q_used
+            || (texgen_units & 1 != 0 && r.frame.textures.packets()[0].enabled)
+            || {
+                let m = tex_matrix(0);
+                m[3] != 0. || m[7] != 0. || m[15] != 1.
+            });
 
     let texture = (r.frame.textures.dirty || r.matrices.texture_dirty || stipple_changed)
         .then(|| r.frame.textures.packets());
@@ -980,6 +1129,17 @@ mod lifecycle_tests {
 
     #[no_mangle]
     extern "C" fn c3dglPlatformReadback(_: *mut u8, _: u32) -> i32 {
+        0
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn c3dglPlatformReadColor(
+        _: *mut u8,
+        _: u32,
+        lines: u32,
+        out: *mut u8,
+    ) -> i32 {
+        core::ptr::write_bytes(out, 0, lines as usize * 960);
         0
     }
 

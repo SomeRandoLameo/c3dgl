@@ -35,6 +35,10 @@ pub(crate) enum Cmd {
     DepthRange(f64, f64),
     LineWidth(f32),
     LineStipple(i32, u16),
+    Accum(u32, f32),
+    ClearAccum([f32; 4]),
+    DrawBuffer(u32),
+    ReadBuffer(u32),
     PolygonStipple(Vec<u8>),
     PointSize(f32),
     MatrixMode(u32),
@@ -198,8 +202,8 @@ pub(crate) unsafe fn compiling() -> bool {
 
 unsafe fn execute(cmd: &Cmd) {
     use crate::{
-        blend::*, clip::*, evaluator::*, fog::*, frame::*, immediate::*, lighting::*, matrix::*,
-        raster::*, stipple::*, texgen::*, texture::*,
+        accum::*, blend::*, clip::*, evaluator::*, fog::*, frame::*, immediate::*, lighting::*,
+        matrix::*, raster::*, stipple::*, texgen::*, texture::*,
     };
     match cmd {
         Cmd::Enable(cap, on) => {
@@ -233,6 +237,10 @@ unsafe fn execute(cmd: &Cmd) {
         Cmd::DepthRange(a, b) => glDepthRange(*a, *b),
         Cmd::LineWidth(w) => glLineWidth(*w),
         Cmd::LineStipple(f, p) => glLineStipple(*f, *p),
+        Cmd::Accum(op, v) => glAccum(*op, *v),
+        Cmd::ClearAccum(c) => glClearAccum(c[0], c[1], c[2], c[3]),
+        Cmd::DrawBuffer(m) => glDrawBuffer(*m),
+        Cmd::ReadBuffer(m) => glReadBuffer(*m),
         Cmd::PolygonStipple(m) => {
             if let Ok(mask) = <[u8; 128]>::try_from(m.as_slice()) {
                 crate::stipple::set_polygon_mask(mask);

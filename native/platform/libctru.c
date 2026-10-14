@@ -117,6 +117,29 @@ int c3dglPlatformSubmit(void *commands, u32 bytes, void *color) {
     return 0;
 }
 
+/* Copy window columns [line0, line0 + lines) of the tiled RGBA8 color buffer to linear RGBA8 memory (column x:
+ * 240 pixels from y = 0 up, bytes A, B, G, R) and wait for it. The GPU must be idle. */
+int c3dglPlatformReadColor(void *color, u32 line0, u32 lines, void *out) {
+    if (!acquired || !color || !out || !lines) return -2;
+    c3dglPlatformWait();
+    size_t size = (size_t)lines * 240 * 4;
+    GSPGPU_FlushDataCache(out, size);
+    swap_on_finish = false;
+    Result result = GX_DisplayTransfer((u32 *)((u8 *)color + (size_t)line0 * 240 * 4), GX_BUFFER_DIM(240, lines),
+        (u32 *)out, GX_BUFFER_DIM(240, lines),
+        GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
+        GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) |
+        GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+    if (R_FAILED(result)) { gxCmdQueueClear(&queue); return result; }
+    LightEvent_Clear(&completed);
+    started = svcGetSystemTick();
+    pending = true;
+    gxCmdQueueRun(&queue);
+    c3dglPlatformWait();
+    GSPGPU_InvalidateDataCache(out, size);
+    return 0;
+}
+
 int c3dglPlatformReadback(u8 *pixels, u32 capacity) {
     if (!acquired || !pixels || capacity < 400*240*3 || !last_output) return -2;
     c3dglPlatformWait();

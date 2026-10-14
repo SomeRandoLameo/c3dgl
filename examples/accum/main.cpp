@@ -129,7 +129,49 @@ void printStats() {
     std::printf("\x1b[u");
 }
 
+constexpr int kViews = 6;
+
 }  // namespace
+
+void setupScene() {
+    glClearColor(0.08f, 0.08f, 0.15f, 1.0f);
+    glClearAccum(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_ACCUM_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_SCISSOR_TEST);
+}
+
+// Eye positions on the lens: a ring of 6
+void makeLens(float lens[kViews][2]) {
+    for (int i = 0; i < kViews; i++) {
+        lens[i][0] = 0.22f * std::cos(i * 2.0f * kPi / kViews);
+        lens[i][1] = 0.22f * std::sin(i * 2.0f * kPi / kViews);
+    }
+}
+
+void drawFrame(float time, bool accum, float lens[kViews][2]) {
+    // Left half: motion blur
+    glViewport(0, 0, kHalf, C3DGL_SCREEN_HEIGHT);
+    glScissor(0, 0, kHalf, C3DGL_SCREEN_HEIGHT);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    motionScene(time);
+    if (accum) {
+        glAccum(GL_MULT, 0.7f);
+        glAccum(GL_ACCUM, 0.3f);
+        glAccum(GL_RETURN, 1.0f);
+    }
+
+    // Right half: depth of field
+    glViewport(kHalf, 0, kHalf, C3DGL_SCREEN_HEIGHT);
+    glScissor(kHalf, 0, kHalf, C3DGL_SCREEN_HEIGHT);
+    for (int i = 0; i < (accum ? kViews : 1); i++) {
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        depthScene(time, accum ? lens[i][0] : 0.0f, accum ? lens[i][1] : 0.0f);
+        if (accum) glAccum(i ? GL_ACCUM : GL_LOAD, 1.0f / kViews);
+    }
+    if (accum) glAccum(GL_RETURN, 1.0f);
+}
 
 int main() {
     gfxInitDefault();
@@ -146,12 +188,7 @@ int main() {
         return 1;
     }
 
-    glClearColor(0.08f, 0.08f, 0.15f, 1.0f);
-    glClearAccum(0.0f, 0.0f, 0.0f, 0.0f);
-    glClear(GL_ACCUM_BUFFER_BIT);
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
-    glEnable(GL_SCISSOR_TEST);
+    setupScene();
 
     std::printf("c3dgl accum\n\n\n\n\n"
                 "Left: motion blur. Each frame\n"
@@ -165,13 +202,8 @@ int main() {
                 "A: pause   B: accumulation\n"
                 "START: exit\n\n");
 
-    // Eye positions on the lens: a ring of 6
-    constexpr int kViews = 6;
     float lens[kViews][2];
-    for (int i = 0; i < kViews; i++) {
-        lens[i][0] = 0.22f * std::cos(i * 2.0f * kPi / kViews);
-        lens[i][1] = 0.22f * std::sin(i * 2.0f * kPi / kViews);
-    }
+    makeLens(lens);
 
     bool paused = false, accum = true;
     float time = 0.0f;
@@ -188,26 +220,7 @@ int main() {
         }
         if (!paused) time += 1.0f;
 
-        // Left half: motion blur
-        glViewport(0, 0, kHalf, C3DGL_SCREEN_HEIGHT);
-        glScissor(0, 0, kHalf, C3DGL_SCREEN_HEIGHT);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        motionScene(time);
-        if (accum) {
-            glAccum(GL_MULT, 0.7f);
-            glAccum(GL_ACCUM, 0.3f);
-            glAccum(GL_RETURN, 1.0f);
-        }
-
-        // Right half: depth of field
-        glViewport(kHalf, 0, kHalf, C3DGL_SCREEN_HEIGHT);
-        glScissor(kHalf, 0, kHalf, C3DGL_SCREEN_HEIGHT);
-        for (int i = 0; i < (accum ? kViews : 1); i++) {
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            depthScene(time, accum ? lens[i][0] : 0.0f, accum ? lens[i][1] : 0.0f);
-            if (accum) glAccum(i ? GL_ACCUM : GL_LOAD, 1.0f / kViews);
-        }
-        if (accum) glAccum(GL_RETURN, 1.0f);
+        drawFrame(time, accum, lens);
 
         c3dglSwapBuffers();
     }

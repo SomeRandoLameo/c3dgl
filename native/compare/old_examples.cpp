@@ -44,6 +44,9 @@
 #else
 #define CASE "glu0"
 #endif
+#elif defined(C3DGL_OLD_ACCUM)
+#include "../../examples/accum/main.cpp"
+#define CASE "accum"
 #elif defined(C3DGL_OLD_STIPPLE)
 #include "../../examples/stipple/main.cpp"
 #define CASE "stipple"
@@ -150,6 +153,13 @@ int main() {
     initBumpPatch();
     const Renderers renderers={newRenderer(GLU_FILL),newRenderer(GLU_OUTLINE_POLYGON),newRenderer(GLU_OUTLINE_PATCH)};
     drawNurbsRendererPage(renderers,0.0f,tex);
+#elif defined(C3DGL_OLD_ACCUM)
+    // Frames 1..5 of the original main loop: the motion blur and the depth of field build on the earlier frames
+    setupScene();
+    const GLuint tex=0;
+    float lens[kViews][2];
+    makeLens(lens);
+    for(int frame=1;frame<=5;frame++) drawFrame((float)frame,true,lens);
 #elif defined(C3DGL_OLD_STIPPLE)
     // The first frame of the original main loop (angle 0.5)
     const GLuint tex=createTexture();

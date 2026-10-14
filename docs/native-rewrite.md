@@ -424,3 +424,20 @@ between 1 and 254, the draw is not exact and reports GL_INVALID_OPERATION. The o
 example keeps `createTexture()`, `setupScene()` and `drawFrame()` (extracted unchanged): its first
 frame and all 22 earlier scenes match the C framebuffer exactly (`native-results/stipple-step/`).
 Host tests: 54 pass.
+
+
+## Accumulation buffer checkpoint
+
+`glAccum` (GL_ACCUM, GL_LOAD, GL_RETURN, GL_MULT, GL_ADD), `glClearAccum`, `glClear(GL_ACCUM_BUFFER_BIT)`,
+`glDrawBuffer` and `glReadBuffer` (front/back/left aliases are accepted, buffers that do not exist
+report GL_INVALID_OPERATION) are implemented, including display lists, attrib groups and queries.
+The accumulation buffer is allocated at its first use in normal memory (signed 16 bits per
+component, 32767 = 1.0), column by column like the framebuffer, and every operation is limited to
+the scissor box. GL_ACCUM and GL_LOAD read the color buffer like glReadPixels: the queued commands
+run to completion, a display transfer (`c3dglPlatformReadColor`) copies the columns to linear
+memory. GL_RETURN draws the result as RGBA8 images in tiles of up to 256x256 pixels through the
+scissor test and the color mask only (`renderer::draw_image`: unit 0 is replaced by an internal
+texture, stage 0 replaces color and alpha, the user's state is restored). The original accum example
+keeps `setupScene()`, `makeLens()` and `drawFrame()` (extracted unchanged): after five frames the
+motion blur and the depth of field match the C framebuffer exactly (`native-results/accum-step/`).
+Host tests: 54 pass.

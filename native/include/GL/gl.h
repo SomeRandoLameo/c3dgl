@@ -64,6 +64,33 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param);
 void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params);
 void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels);
 void glTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels);
+#define GL_ACCUM 0x0100
+#define GL_LOAD 0x0101
+#define GL_RETURN 0x0102
+#define GL_MULT 0x0103
+#define GL_ADD 0x0104
+#define GL_ACCUM_BUFFER_BIT 0x00000200
+#define GL_ACCUM_CLEAR_VALUE 0x0b80
+#define GL_ACCUM_RED_BITS 0x0d58
+#define GL_ACCUM_GREEN_BITS 0x0d59
+#define GL_ACCUM_BLUE_BITS 0x0d5a
+#define GL_ACCUM_ALPHA_BITS 0x0d5b
+#define GL_DRAW_BUFFER 0x0c01
+#define GL_READ_BUFFER 0x0c02
+#define GL_NONE 0
+#define GL_FRONT_LEFT 0x0400
+#define GL_FRONT_RIGHT 0x0401
+#define GL_BACK_LEFT 0x0402
+#define GL_BACK_RIGHT 0x0403
+#define GL_FRONT 0x0404
+#define GL_LEFT 0x0406
+#define GL_RIGHT 0x0407
+#define GL_FRONT_AND_BACK 0x0408
+#define GL_AUX0 0x0409
+void glAccum(GLenum op, GLfloat value);
+void glClearAccum(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+void glDrawBuffer(GLenum mode);
+void glReadBuffer(GLenum mode);
 void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid *pixels);
 void glTexSubImage1D(GLenum target, GLint level, GLint x, GLsizei width, GLenum format, GLenum type, const GLvoid *pixels);
 void glTexCoord2f(GLfloat s, GLfloat t);

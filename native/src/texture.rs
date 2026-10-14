@@ -302,6 +302,7 @@ pub(crate) struct Textures {
     pack: PixelStore,
     /// PICA texture unit of GL unit 0: 1 while polygon stipple takes unit 0.
     shift: u32,
+    image: Option<Packet>,
     objects: Vec<Object>,
     retired: Vec<Buffer>,
 }
@@ -319,6 +320,7 @@ impl Textures {
             unpack: PixelStore::default(),
             pack: PixelStore::default(),
             shift: 0,
+            image: None,
             objects: Vec::new(),
             retired: Vec::new(),
         }
@@ -402,7 +404,21 @@ impl Textures {
     }
 
     pub unsafe fn packets(&self) -> [Packet; 3] {
-        core::array::from_fn(|unit| self.packet_for(unit))
+        let mut packets: [Packet; 3] = core::array::from_fn(|unit| self.packet_for(unit));
+        if let Some(p) = self.image {
+            packets[0] = p;
+        }
+        packets
+    }
+
+    /// Replace unit 0 by an internal image (pixel rectangles); the other units pass through.
+    pub fn set_image(&mut self, image: Option<Packet>) {
+        self.image = image;
+        self.dirty = true;
+    }
+
+    pub fn has_image(&self) -> bool {
+        self.image.is_some()
     }
     pub fn enabled(&self) -> bool {
         self.units[self.active].enabled

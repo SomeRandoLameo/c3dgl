@@ -2,6 +2,8 @@
 
 extern crate alloc;
 #[cfg(any(target_os = "horizon", test))]
+mod accum;
+#[cfg(any(target_os = "horizon", test))]
 mod arrays;
 #[cfg(any(target_os = "horizon", test))]
 mod attrib;

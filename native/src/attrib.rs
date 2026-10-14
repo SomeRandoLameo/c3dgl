@@ -27,6 +27,8 @@ const VIEWPORT: u32 = 0x800;
 const TRANSFORM: u32 = 0x1000;
 const ENABLE: u32 = 0x2000;
 const COLOR_BUFFER: u32 = 0x4000;
+const PIXEL_MODE: u32 = 0x20;
+const ACCUM_BUFFER: u32 = 0x200;
 const EVAL: u32 = 0x10000;
 const TEXTURE: u32 = 0x40000;
 const SCISSOR: u32 = 0x80000;
@@ -56,6 +58,7 @@ pub(crate) struct Saved {
     texgen: crate::texgen::TexGen,
     fog: crate::fog::Fog,
     stipple: crate::stipple::Stipple,
+    accum: crate::accum::Accum,
     clip: crate::clip::ClipState,
     list_base: u32,
     mode: usize,
@@ -114,6 +117,7 @@ pub unsafe extern "C" fn glPushAttrib(mask: u32) {
             texgen: f.texgen.clone(),
             fog: f.fog,
             stipple: f.stipple,
+            accum: f.accum.clone(),
             clip: f.clip,
             list_base: f.lists.base,
             mode: r.matrices.mode(),
@@ -211,6 +215,13 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         f.raster.blend = a.raster.blend;
         f.raster.color_mask = a.raster.color_mask;
         f.clear_color = a.clear_color;
+        f.accum.draw_buffer = a.accum.draw_buffer;
+    }
+    if mask & PIXEL_MODE != 0 {
+        f.accum.read_buffer = a.accum.read_buffer;
+    }
+    if mask & ACCUM_BUFFER != 0 {
+        f.accum.clear = a.accum.clear;
     }
     if mask & TEXTURE != 0 {
         f.textures.restore(&a.textures, true, true);
