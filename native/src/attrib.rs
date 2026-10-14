@@ -62,7 +62,8 @@ pub(crate) struct Saved {
 pub(crate) struct ClientSaved {
     mask: u32,
     arrays: ArraysSave,
-    alignment: usize,
+    unpack: crate::texture::PixelStore,
+    pack: crate::texture::PixelStore,
 }
 
 #[derive(Default)]
@@ -256,7 +257,8 @@ pub unsafe extern "C" fn glPushClientAttrib(mask: u32) {
         let saved = ClientSaved {
             mask,
             arrays: r.arrays.save(),
-            alignment: r.frame.textures.alignment(),
+            unpack: r.frame.textures.unpack(),
+            pack: r.frame.textures.pack(),
         };
         r.stacks.clients.push(saved);
     });
@@ -274,7 +276,8 @@ pub unsafe extern "C" fn glPopClientAttrib() {
             return;
         };
         if saved.mask & CLIENT_PIXEL_STORE != 0 {
-            r.frame.textures.set_alignment(saved.alignment);
+            r.frame.textures.set_unpack(saved.unpack);
+            r.frame.textures.set_pack(saved.pack);
         }
         if saved.mask & CLIENT_VERTEX_ARRAY != 0 {
             r.arrays.restore(&saved.arrays);

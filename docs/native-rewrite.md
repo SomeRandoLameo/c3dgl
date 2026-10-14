@@ -390,3 +390,18 @@ current color, normal, texture coordinates and edge flag. Mesa GLU (unmodified, 
 the cursor until a cube is picked: its highlighted frame with the feedback outline matches
 the C framebuffer exactly, as do all earlier scenes (`native-results/select-step/`). Host
 tests: 54 pass.
+
+
+## 1D textures and pixel storage checkpoint
+
+`GL_TEXTURE_1D` objects (`glTexImage1D`, `glTexSubImage1D`, binding, enable, parameters,
+deletion, attrib save, display lists) are stored as w x 1 images whose padded rows all repeat
+the image, so any t samples the same texel; a 2D texture on the same unit takes precedence.
+`GL_PROXY_TEXTURE_1D` and `GL_PROXY_TEXTURE_2D` record what would be accepted and
+`glGetTexLevelParameteriv/fv` answers for all four targets. Pixel storage is complete for
+GL_UNPACK_* and GL_PACK_* (alignment, row length, skip rows, skip pixels; unpack honoured by
+texture uploads and display-list capture, pack kept for the pixel-read functions);
+GL_*_SWAP_BYTES and GL_*_LSB_FIRST can only be set to false and report GL_INVALID_VALUE
+otherwise. Mesa GLU's `gluBuild1DMipmaps` and `gluBuild2DMipmaps` run on it: the original glu
+example pages (`glu0`, `glu1`, `glu2`) and all 19 earlier scenes match the C framebuffer
+exactly (`native-results/glu-step/`). Host tests: 54 pass.

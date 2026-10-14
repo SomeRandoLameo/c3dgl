@@ -26,6 +26,7 @@ The interactive original main and unsupported pages are not run yet. This is a
 | clipplane | the eight cells of the original main loop | API self-test (needs GLES fixed-point calls) |
 | lists | the first frame through display lists (`createLists()`, `setupScene()`, extracted from main unchanged) | immediate-mode toggle, input and statistics |
 | select | frame after picking a cube (GL_SELECT with gluPickMatrix, then GL_FEEDBACK outline), cursor walked to a hit | input, statistics |
+| glu0, glu1, glu2 | the original glu example pages (`drawQuadricsPage` etc., bodies extracted unchanged): scale/mipmap checks, quadrics, NURBS and tessellation | input, statistics |
 | texcoords | complete original `drawTexcoordPage(createF(16))`, all eight cells | subsequent multitexture, mipmap and compression pages remain separate |
 | texmatrix | complete original first-page body in `drawTextureMatrixPage`, eight cells at time=0 | subsequent pages remain separate |
 | cube | `createCheckerTexture()`, `drawCube(texture,0,0,0,200,240,true)` | full main also uses PNG/ROMFS, scissor, lines and Citro3D statistics |

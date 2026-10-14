@@ -281,7 +281,12 @@ unsafe fn execute(cmd: &Cmd) {
                 .as_ref()
                 .map_or(core::ptr::null(), |p| p.as_ptr().cast::<c_void>());
             // The pixels were stored tightly packed.
-            let alignment = set_alignment(1);
+            let store = set_unpack(crate::texture::PixelStore {
+                alignment: 1,
+                row_length: 0,
+                skip_rows: 0,
+                skip_pixels: 0,
+            });
             if *sub && *target == 0x0de0 {
                 glTexSubImage1D(*target, *level, *x, *w, *f, *ty, pointer);
             } else if *sub {
@@ -293,7 +298,7 @@ unsafe fn execute(cmd: &Cmd) {
                     *target, *level, *internal, *w, *h, *border, *f, *ty, pointer,
                 );
             }
-            set_alignment(alignment);
+            set_unpack(store);
         }
         Cmd::CompressedTexImage {
             target,

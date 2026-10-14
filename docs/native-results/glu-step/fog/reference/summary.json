@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "fbadda45622edbdddfb803cec552920b48379e8ed8e0798bd3fb27408372f2ce",
+  "images": {
+    "c3dgl-old-fog-reference.ppm": "5ff94a62c51eec20f9cd81852282a0a832a80ea64c9112b8bac6326b8390c5a8"
+  },
+  "process_exit": -9
+}

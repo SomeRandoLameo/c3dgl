@@ -285,7 +285,8 @@ pub(crate) struct Textures {
     pub suspended: bool,
     proxy2: [Proxy; 12],
     proxy1: [Proxy; 12],
-    alignment: usize,
+    unpack: PixelStore,
+    pack: PixelStore,
     objects: Vec<Object>,
     retired: Vec<Buffer>,
 }
@@ -300,7 +301,8 @@ impl Textures {
             suspended: false,
             proxy2: [Proxy::default(); 12],
             proxy1: [Proxy::default(); 12],
-            alignment: 4,
+            unpack: PixelStore::default(),
+            pack: PixelStore::default(),
             objects: Vec::new(),
             retired: Vec::new(),
         }
@@ -472,7 +474,15 @@ impl Textures {
             0x0de0 => self.units[self.active].enabled1 as u8 as f64,
             0x8069 => self.units[self.active].bound as f64,
             0x8068 => self.units[self.active].bound1 as f64,
-            0x0cf5 => self.alignment as f64,
+            0x0cf0 | 0x0cf1 | 0x0d00 | 0x0d01 => 0.,
+            0x0cf2 => self.unpack.row_length as f64,
+            0x0cf3 => self.unpack.skip_rows as f64,
+            0x0cf4 => self.unpack.skip_pixels as f64,
+            0x0cf5 => self.unpack.alignment as f64,
+            0x0d02 => self.pack.row_length as f64,
+            0x0d03 => self.pack.skip_rows as f64,
+            0x0d04 => self.pack.skip_pixels as f64,
+            0x0d05 => self.pack.alignment as f64,
             0x0d33 => 1024.,
             0x84e0 => (0x84c0 + self.active) as f64,
             0x84e2 => 3.,
@@ -689,6 +699,8 @@ enum Source<'a> {
         ty: u32,
         bpp: usize,
         alignment: usize,
+        /// Pixels per source row (0: the image width).
+        row: usize,
     },
     /// Tightly packed RGBA bytes (expanded palette indices).
     Rgba(&'a [u8]),
@@ -757,13 +769,14 @@ unsafe fn fill_level(
                 ty,
                 bpp,
                 alignment,
+                row,
             },
         ) if ty != 0x1401 => {
             // Packed client data into an RGBA8 chain: through 8-bit components.
             if pixels.is_null() {
                 return;
             }
-            let stride = (w * bpp + alignment - 1) & !(alignment - 1);
+            let stride = (row_of(row, w) * bpp + alignment - 1) & !(alignment - 1);
             for y in 0..h {
                 for x in 0..w {
                     let c = read_rgba(pixels.add(y * stride + x * bpp), f, ty);
@@ -783,6 +796,7 @@ unsafe fn fill_level(
                 f,
                 bpp,
                 alignment,
+                row,
                 ..
             },
         ) => {
@@ -798,6 +812,7 @@ unsafe fn fill_level(
                     pixels,
                     bpp,
                     alignment,
+                    row,
                     f == 0x1906,
                 );
             }
@@ -811,12 +826,13 @@ unsafe fn fill_level(
                 ty,
                 bpp,
                 alignment,
+                row,
             },
         ) if fmt.packed() => {
             if pixels.is_null() {
                 return;
             }
-            let stride = (w * bpp + alignment - 1) & !(alignment - 1);
+            let stride = (row_of(row, w) * bpp + alignment - 1) & !(alignment - 1);
             for y in 0..h {
                 for x in 0..w {
                     let c = read_rgba(pixels.add(y * stride + x * bpp), f, ty);
@@ -961,9 +977,10 @@ unsafe fn upload(
     pixels: *const u8,
     bpp: usize,
     alignment: usize,
+    row: usize,
     alpha_only: bool,
 ) {
-    let stride = (w * bpp + alignment - 1) & !(alignment - 1);
+    let stride = (row_of(row, w) * bpp + alignment - 1) & !(alignment - 1);
     for y in 0..h {
         for x in 0..w {
             let s = pixels.add(y * stride + x * bpp);
@@ -994,29 +1011,68 @@ unsafe fn capture(pixels: *const c_void, w: i32, h: i32, f: u32, ty: u32) -> Opt
     if pixels.is_null() || !(0..=1024).contains(&w) || !(0..=1024).contains(&h) {
         return None;
     }
-    let mut alignment = 4;
-    crate::renderer::with_immediate(|r| alignment = r.frame.textures.alignment());
+    let mut store = PixelStore::default();
+    crate::renderer::with_immediate(|r| store = r.frame.textures.unpack());
     let (w, h) = (w as usize, h as usize);
-    let stride = (w * bpp + alignment - 1) & !(alignment - 1);
+    let pixels = store.start(pixels.cast(), bpp, w);
+    let stride = (row_of(store.row_length, w) * bpp + store.alignment - 1) & !(store.alignment - 1);
     let mut out = Vec::new();
     out.try_reserve_exact(w * h * bpp).ok()?;
     for y in 0..h {
-        out.extend_from_slice(core::slice::from_raw_parts(
-            pixels.cast::<u8>().add(y * stride),
-            w * bpp,
-        ));
+        out.extend_from_slice(core::slice::from_raw_parts(pixels.add(y * stride), w * bpp));
     }
     Some(out)
 }
 
-/// Set the unpack alignment; returns the previous one (display list execution).
-pub(crate) unsafe fn set_alignment(alignment: usize) -> usize {
-    let mut old = 4;
+/// Set the unpack state; returns the previous one (display list execution).
+pub(crate) unsafe fn set_unpack(store: PixelStore) -> PixelStore {
+    let mut old = PixelStore::default();
     crate::renderer::with_immediate(|r| {
-        old = r.frame.textures.alignment();
-        r.frame.textures.set_alignment(alignment);
+        old = r.frame.textures.unpack();
+        r.frame.textures.set_unpack(store);
     });
     old
+}
+
+/// Pixel storage modes of one direction (GL_UNPACK_* / GL_PACK_*). Byte swapping and LSB-first
+/// bit order are not supported and cannot be enabled.
+#[derive(Clone, Copy)]
+pub(crate) struct PixelStore {
+    pub alignment: usize,
+    pub row_length: usize,
+    pub skip_rows: usize,
+    pub skip_pixels: usize,
+}
+
+impl Default for PixelStore {
+    fn default() -> Self {
+        Self {
+            alignment: 4,
+            row_length: 0,
+            skip_rows: 0,
+            skip_pixels: 0,
+        }
+    }
+}
+
+impl PixelStore {
+    /// First pixel of an image of width `w` (GL_UNPACK_SKIP_ROWS / SKIP_PIXELS applied).
+    unsafe fn start(&self, pixels: *const u8, bpp: usize, w: usize) -> *const u8 {
+        if pixels.is_null() {
+            return pixels;
+        }
+        let stride =
+            (row_of(self.row_length, w) * bpp + self.alignment - 1) & !(self.alignment - 1);
+        pixels.add(self.skip_rows * stride + self.skip_pixels * bpp)
+    }
+}
+
+fn row_of(row: usize, w: usize) -> usize {
+    if row == 0 {
+        w
+    } else {
+        row
+    }
 }
 
 macro_rules! api {
@@ -1159,13 +1215,36 @@ pub unsafe extern "C" fn glIsTexture(name: u32) -> u8 {
 #[no_mangle]
 pub unsafe extern "C" fn glPixelStorei(pname: u32, value: i32) {
     api!(|t: &mut Textures| {
-        if pname != 0x0cf5 {
-            return Err(0x0500);
+        let store = match pname {
+            0x0cf0..=0x0cf5 => &mut t.unpack,
+            0x0d00..=0x0d05 => &mut t.pack,
+            _ => return Err(0x0500),
+        };
+        match pname & 0xf {
+            // GL_*_SWAP_BYTES and GL_*_LSB_FIRST: only the default (off) exists.
+            0 | 1 => {
+                if value != 0 {
+                    return Err(0x0501);
+                }
+            }
+            2..=4 => {
+                if value < 0 {
+                    return Err(0x0501);
+                }
+                let v = value as usize;
+                match pname & 0xf {
+                    2 => store.row_length = v,
+                    3 => store.skip_rows = v,
+                    _ => store.skip_pixels = v,
+                }
+            }
+            _ => {
+                if !matches!(value, 1 | 2 | 4 | 8) {
+                    return Err(0x0501);
+                }
+                store.alignment = value as usize;
+            }
         }
-        if !matches!(value, 1 | 2 | 4 | 8) {
-            return Err(0x0501);
-        }
-        t.alignment = value as usize;
         Ok(())
     });
 }
@@ -1249,12 +1328,20 @@ pub(crate) struct TexSave {
 }
 
 impl Textures {
-    pub fn alignment(&self) -> usize {
-        self.alignment
+    pub fn unpack(&self) -> PixelStore {
+        self.unpack
     }
 
-    pub fn set_alignment(&mut self, alignment: usize) {
-        self.alignment = alignment;
+    pub fn set_unpack(&mut self, store: PixelStore) {
+        self.unpack = store;
+    }
+
+    pub fn pack(&self) -> PixelStore {
+        self.pack
+    }
+
+    pub fn set_pack(&mut self, store: PixelStore) {
+        self.pack = store;
     }
 
     pub fn save(&self) -> TexSave {
@@ -1627,11 +1714,12 @@ unsafe fn tex_image(
             return Err(0x0501);
         }
         let src = Source::Gl {
-            pixels: pixels.cast(),
+            pixels: t.unpack.start(pixels.cast(), bpp, w as usize),
             f,
             ty,
             bpp,
-            alignment: t.alignment,
+            alignment: t.unpack.alignment,
+            row: t.unpack.row_length,
         };
         define_image(
             t,
@@ -2066,11 +2154,12 @@ unsafe fn tex_sub_image(
         let storage = chain_buffer(o, levels, o.width, o.height, fmt, true)?;
         let region = storage.pointer.add(level_offset(tw, th, level, fmt));
         let src = Source::Gl {
-            pixels: pixels.cast(),
+            pixels: t.unpack.start(pixels.cast(), bpp, w as usize),
             f,
             ty,
             bpp,
-            alignment: t.alignment,
+            alignment: t.unpack.alignment,
+            row: t.unpack.row_length,
         };
         fill_level(region, lw, lh, x, y, w, h, fmt, o.base, src);
         padding_in(region, iw, ih, lw, lh, o.wrap, fmt.bpp());
@@ -2264,6 +2353,7 @@ mod tests {
                 pixels.as_ptr(),
                 3,
                 4,
+                0,
                 false,
             );
         }
