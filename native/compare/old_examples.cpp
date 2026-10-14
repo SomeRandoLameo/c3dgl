@@ -21,7 +21,11 @@
 #endif
 #else
 #include "../../examples/cube/main.cpp"
+#ifdef C3DGL_OLD_OVERLAY
+#define CASE "overlay"
+#else
 #define CASE "cube"
+#endif
 #endif
 #undef main
 #ifdef C3DGL_COMPARE_NATIVE
@@ -57,6 +61,8 @@ int main() {
     const GLuint tex=createF(16);drawTexcoordPage(tex);
 #elif defined(C3DGL_OLD_TEXTURE)
     const GLuint tex=createF(16);drawCell(0,0,tex);
+#elif defined(C3DGL_OLD_OVERLAY)
+    const GLuint tex=0;drawOverlay();
 #else
     const GLuint tex=createCheckerTexture();drawCube(tex,0,0,0,200,240,true);
 #endif

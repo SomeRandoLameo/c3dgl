@@ -15,6 +15,8 @@ pub struct FrameState {
     pub drawable: bool,
     pub clear_color: u32,
     pub clear_depth: f32,
+    pub line_width: f32,
+    pub point_size: f32,
 }
 
 impl FrameState {
@@ -27,6 +29,8 @@ impl FrameState {
             drawable: true,
             clear_color: 0,
             clear_depth: 1.,
+            line_width: 1.,
+            point_size: 1.,
         }
     }
 
@@ -79,6 +83,28 @@ pub unsafe extern "C" fn glViewport(x: i32, y: i32, w: i32, h: i32) {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn glLineWidth(width: f32) {
+    with_frame(|s, m| {
+        if !(width > 0.) {
+            m.fail(0x0501);
+            return;
+        }
+        s.line_width = width;
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glPointSize(size: f32) {
+    with_frame(|s, m| {
+        if !(size > 0.) {
+            m.fail(0x0501);
+            return;
+        }
+        s.point_size = size;
+    });
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn glClear(mask: u32) {
     clear_gl(mask);
 }
@@ -112,6 +138,23 @@ fn query(s: &FrameState, m: &Matrices, pname: u32) -> Option<([f64; 16], usize)>
             v[0] = s.clear_depth as f64;
 
             1
+        }
+
+        0x0b21 => {
+            v[0] = s.line_width as f64;
+            1
+        }
+
+        0x0b11 => {
+            v[0] = s.point_size as f64;
+            1
+        }
+
+        // Points are quads, so any size works; lines any width.
+        0x0b12 | 0x846d => {
+            v[0] = 1.;
+            v[1] = crate::lines::MAX_POINT_SIZE as f64;
+            2
         }
 
         0x0d3a => {

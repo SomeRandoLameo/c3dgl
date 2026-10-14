@@ -166,6 +166,76 @@ impl Arrays {
         Ok(out)
     }
 
+    /// The vertices of a draw in drawing order (indices resolved), for CPU-side expansion.
+    pub unsafe fn gather(
+        &self,
+        first: usize,
+        count: usize,
+        kind: u32,
+        indices: usize,
+        current_color: [f32; 4],
+        current_texcoord: [f32; 4],
+        extra_current: [[f32; 4]; 2],
+    ) -> Result<Vec<GpuVertex>, u32> {
+        if !self.enabled[0] {
+            return Err(0x0502);
+        }
+        let w = match kind {
+            0 => 0,
+            0x1401 => 1,
+            0x1403 => 2,
+            0x1405 => 4,
+            _ => return Err(0x0500),
+        };
+        if count > 4096 {
+            return Err(0x0501);
+        }
+        let source = if kind == 0 {
+            ptr::null()
+        } else {
+            self.source(
+                self.bound[1],
+                indices,
+                count.checked_mul(w).ok_or(0x0501u32)?,
+            )?
+        };
+        let mut out = Vec::new();
+        out.try_reserve_exact(count).map_err(|_| 0x0505u32)?;
+        for i in 0..count {
+            let n = match w {
+                0 => first + i,
+                1 => ptr::read(source.add(i)) as usize,
+                2 => ptr::read_unaligned(source.add(i * 2).cast::<u16>()) as usize,
+                _ => ptr::read_unaligned(source.add(i * 4).cast::<u32>()) as usize,
+            };
+            if kind != 0 && n >= 4096 {
+                return Err(0x0501);
+            }
+            let mut extra = extra_current;
+            for unit in 0..2 {
+                if self.enabled[3 + unit] {
+                    extra[unit] = self.value(self.extra_texcoords[unit], n, false)?;
+                }
+            }
+            out.push(GpuVertex {
+                position: self.value(self.vertex, n, false)?,
+                color: if self.enabled[1] {
+                    self.value(self.color, n, true)?
+                        .map(crate::immediate::gpu_color_component)
+                } else {
+                    current_color.map(crate::immediate::gpu_color_component)
+                },
+                texcoord: if self.enabled[2] {
+                    self.value(self.texcoord, n, false)?
+                } else {
+                    current_texcoord
+                },
+                extra_texcoords: extra,
+            });
+        }
+        Ok(out)
+    }
+
     pub unsafe fn prepare(
         &mut self,
         mode: u32,

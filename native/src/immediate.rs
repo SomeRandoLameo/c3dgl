@@ -6,6 +6,8 @@ pub(crate) struct Batch {
     pub vertices: Vec<GpuVertex>,
     pub indices: Vec<u16>,
     pub count: u32,
+    /// GL mode of the batch; modes below 4 (points, lines) carry raw vertices for expansion.
+    pub primitive: u32,
 }
 
 pub(crate) struct Immediate {
@@ -74,7 +76,7 @@ impl Immediate {
         let plan = crate::primitive::Plan::new(self.mode, self.vertices.len())?;
         self.vertices.truncate(plan.consumed);
         let vertices = core::mem::take(&mut self.vertices);
-        let indices = if self.mode == 4 {
+        let indices = if self.mode <= 4 {
             Vec::new()
         } else {
             plan.indices(|i| i as u16)?
@@ -83,7 +85,12 @@ impl Immediate {
         Ok(Batch {
             vertices,
             indices,
-            count: plan.output as u32,
+            count: if self.mode < 4 {
+                plan.consumed as u32
+            } else {
+                plan.output as u32
+            },
+            primitive: self.mode,
         })
     }
 }
@@ -226,7 +233,7 @@ mod tests {
     fn assembly_and_errors() {
         let mut s = Immediate::new();
         assert_eq!(s.vertex([0.; 4]), Err(0x0502));
-        assert_eq!(s.begin(1), Err(0x0500));
+        assert_eq!(s.begin(10), Err(0x0500));
         s.begin(4).unwrap();
         assert_eq!(s.begin(4), Err(0x0502));
         s.color = [0., 1., 0., 1.];

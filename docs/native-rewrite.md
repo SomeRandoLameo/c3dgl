@@ -249,3 +249,20 @@ eight selected original scenes match the C framebuffer exactly; see
 `native-results/compressed-step/` (one run each). 1D textures, sized internal formats,
 multiple texture environments beyond the example pages and the other examples remain
 open. Host tests: 32 pass.
+
+
+## Scissor, points and lines checkpoint
+
+`glScissor`/`GL_SCISSOR_TEST` write the PICA scissor registers for the rotated
+target (clamped like the C renderer). `GL_POINTS`, `GL_LINES`, `GL_LINE_LOOP` and
+`GL_LINE_STRIP` with `glPointSize`/`glLineWidth` are expanded on the CPU to
+screen-aligned NDC quads (w clipping, square caps, perpendicular half width, as in
+the C renderer) and drawn with an identity projection and without culling; the
+renderer switches between this clip-space state and the normal MVP state per draw.
+Immediate mode and client/VBO arrays share the path; expanded geometry is
+transient. The complete unchanged `drawOverlay` of `examples/cube/main.cpp`
+(scissored quad plus four `GL_LINES`) and all nine selected original scenes match
+the C framebuffer exactly (`native-results/lines-step/`, one run each). Open: line
+stipple, smooth lines, point sprites/attenuation/size arrays, polygon modes and
+offset, user clip planes, and a scissored `glClear` (the memory fill still clears the
+whole buffer). Host tests: 34 pass.

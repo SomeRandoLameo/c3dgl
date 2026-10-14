@@ -11,6 +11,14 @@ pub(crate) struct Plan {
 impl Plan {
     pub fn new(mode: u32, count: usize) -> Result<Self, u32> {
         let (consumed, triangles) = match mode {
+            // Points and lines are expanded on the CPU, not assembled into triangle indices.
+            0..=3 => {
+                return Ok(Self {
+                    mode,
+                    consumed: crate::lines::consumed(mode, count),
+                    output: 0,
+                });
+            }
             4 => {
                 let n = count / 3 * 3;
                 (n, n / 3)
@@ -121,7 +129,9 @@ mod tests {
         }
         assert!(sequence(7, 3).is_empty());
         assert!(sequence(8, 3).is_empty());
-        assert!(Plan::new(1, 3).is_err());
+        assert!(Plan::new(10, 3).is_err());
+        assert_eq!(Plan::new(1, 5).unwrap().consumed, 4);
+        assert_eq!(Plan::new(0, 5).unwrap().consumed, 5);
         assert!(Plan::new(5, usize::MAX).is_err());
     }
 

@@ -105,6 +105,10 @@ void glBlendEquation(GLenum mode);
 void glBlendEquationSeparate(GLenum rgb, GLenum alpha);
 void glBlendColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
 #define GL_DEPTH_TEST 0x0b71
+#define GL_POINT_SIZE 0x0b11
+#define GL_LINE_WIDTH 0x0b21
+#define GL_SCISSOR_BOX 0x0c10
+#define GL_SCISSOR_TEST 0x0c11
 #define GL_ALPHA_TEST 0x0bc0
 #define GL_ALPHA_TEST_FUNC 0x0bc1
 #define GL_ALPHA_TEST_REF 0x0bc2
@@ -133,11 +137,18 @@ GLboolean glIsEnabled(GLenum cap);
 void glDepthMask(GLboolean flag);
 void glDepthFunc(GLenum func);
 void glAlphaFunc(GLenum func, GLfloat ref);
+void glLineWidth(GLfloat width);
+void glPointSize(GLfloat size);
+void glScissor(GLint x, GLint y, GLsizei width, GLsizei height);
 void glDepthRange(GLdouble nearValue, GLdouble farValue);
 void glDepthRangef(GLfloat nearValue, GLfloat farValue);
 void glCullFace(GLenum face);
 void glFrontFace(GLenum front);
 void glGetBooleanv(GLenum pname, GLboolean *out);
+#define GL_POINTS 0x0000
+#define GL_LINES 0x0001
+#define GL_LINE_LOOP 0x0002
+#define GL_LINE_STRIP 0x0003
 #define GL_TRIANGLES 0x0004
 #define GL_TRIANGLE_STRIP 0x0005
 #define GL_TRIANGLE_FAN 0x0006

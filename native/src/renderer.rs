@@ -97,6 +97,8 @@ pub(crate) struct Renderer {
     draws: u32,
     stats: Stats,
     error: i32,
+    /// The GPU currently holds the clip-space state (identity matrix, no culling).
+    clip_applied: bool,
 }
 
 // Boxed: the renderer is large and the 3DS main thread stack is only 32 KiB.
@@ -251,6 +253,7 @@ impl Renderer {
         core::ptr::addr_of_mut!((*slot).draws).write(0);
         core::ptr::addr_of_mut!((*slot).stats).write(Stats::default());
         core::ptr::addr_of_mut!((*slot).error).write(0);
+        core::ptr::addr_of_mut!((*slot).clip_applied).write(false);
         Some(alloc::boxed::Box::from_raw(slot))
     }
 
@@ -273,6 +276,7 @@ impl Renderer {
         p::c3dglPlatformWait();
 
         self.generation = generation;
+        self.clip_applied = false;
         self.matrices.dirty = true;
         self.frame.viewport_dirty = true;
         self.frame.raster.dirty = true;
@@ -457,8 +461,9 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
         || r.matrices.dirty
         || r.matrices.texture_dirty
         || r.frame.raster.dirty
-        || r.frame.textures.dirty)
-        && update_draw_state(r).is_err()
+        || r.frame.textures.dirty
+        || r.clip_applied)
+        && update_draw_state(r, false).is_err()
     {
         r.error = -4;
         return -4;
@@ -480,20 +485,24 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
 
 // Keep matrix/viewport packet work out of the unchanged-state draw loop.
 #[inline(never)]
-unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
+unsafe fn update_draw_state(r: &mut Renderer, clip: bool) -> Result<(), ()> {
+    let clip_changed = clip != r.clip_applied;
     let viewport = if r.frame.viewport_dirty {
         Some(r.frame.viewport)
     } else {
         None
     };
 
-    let update = if r.matrices.dirty {
+    // Clip-space draws (expanded lines and points) carry NDC positions: identity projection.
+    let update = if clip {
+        clip_changed.then_some(crate::matrix::IDENTITY)
+    } else if r.matrices.dirty || clip_changed {
         Some(r.matrices.combined())
     } else {
         None
     };
 
-    let raster = r.frame.raster.dirty.then_some(r.frame.raster);
+    let raster = (r.frame.raster.dirty || clip_changed).then_some(r.frame.raster);
     let projective = r.frame.textures.q_used || {
         let m = r.matrices.texture_for(0);
         m[3] != 0. || m[7] != 0. || m[15] != 1.
@@ -523,7 +532,7 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
     }
 
     if let Some(s) = raster {
-        gpu::raster(&mut commands, s)?;
+        gpu::raster(&mut commands, s, clip)?;
     }
 
     if let Some(t) = texture {
@@ -546,7 +555,10 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
     }
 
     r.used = commands.used;
-    r.matrices.dirty = false;
+    r.clip_applied = clip;
+    if !clip {
+        r.matrices.dirty = false;
+    }
     r.matrices.texture_dirty = false;
     r.frame.viewport_dirty = false;
     r.frame.raster.dirty = false;
@@ -1097,11 +1109,62 @@ pub(crate) unsafe fn with_renderer(f: impl FnOnce(&mut Renderer)) {
     });
 }
 
+fn line_style(r: &Renderer) -> crate::lines::Style {
+    crate::lines::Style {
+        pmv: r.matrices.combined(),
+        viewport: r.frame.viewport,
+        line_width: r.frame.line_width,
+        point_size: r.frame.point_size,
+    }
+}
+
+/// Upload vertices (and indices) for one draw of the frame and draw them. `clip`: positions are
+/// already NDC (expanded lines and points).
+unsafe fn draw_transient(
+    r: &mut Renderer,
+    vertices: &[GpuVertex],
+    indices: &[u16],
+    count: u32,
+    clip: bool,
+) -> Result<(), u32> {
+    r.transient.try_reserve(1).map_err(|_| 0x0505u32)?;
+    let bytes = vertices.len() * core::mem::size_of::<GpuVertex>();
+    let total = bytes + indices.len() * 2;
+    let storage = Buffer::new(total, false).ok_or(0x0505u32)?;
+    ptr::copy_nonoverlapping(vertices.as_ptr().cast::<u8>(), storage.pointer, bytes);
+    ptr::copy_nonoverlapping(
+        indices.as_ptr().cast::<u8>(),
+        storage.pointer.add(bytes),
+        indices.len() * 2,
+    );
+
+    if p::c3dglPlatformFlush(storage.pointer, total as u32) < 0 {
+        return Err(0x0502);
+    }
+
+    update_draw_state(r, clip).map_err(|_| 0x0505u32)?;
+    let mut c = r.commands();
+    gpu::geometry(
+        &mut c,
+        storage.physical(),
+        0,
+        count,
+        (!indices.is_empty()).then_some(bytes as u32 | 0x80000000),
+    )
+    .map_err(|_| 0x0505u32)?;
+
+    r.used = c.used;
+    r.transient.push(storage);
+    r.frame.textures.sampled();
+    r.draws += 1;
+
+    Ok(())
+}
+
 pub(crate) unsafe fn end_immediate() {
     with_immediate(|r| {
         let result = (|| -> Result<(), u32> {
             let batch = r.immediate.end()?;
-            let vertices = batch.vertices;
             if batch.count == 0 {
                 return Ok(());
             }
@@ -1110,42 +1173,24 @@ pub(crate) unsafe fn end_immediate() {
                 return Err(0x0502);
             }
 
-            if !r.frame.drawable || !r.frame.raster.drawable() {
+            if !r.frame.drawable {
                 return Ok(());
             }
 
-            r.transient.try_reserve(1).map_err(|_| 0x0505u32)?;
-            let bytes = vertices.len() * core::mem::size_of::<GpuVertex>();
-            let total = bytes + batch.indices.len() * 2;
-            let storage = Buffer::new(total, false).ok_or(0x0505u32)?;
-            ptr::copy_nonoverlapping(vertices.as_ptr().cast::<u8>(), storage.pointer, bytes);
-            ptr::copy_nonoverlapping(
-                batch.indices.as_ptr().cast::<u8>(),
-                storage.pointer.add(bytes),
-                batch.indices.len() * 2,
-            );
-
-            if p::c3dglPlatformFlush(storage.pointer, total as u32) < 0 {
-                return Err(0x0502);
+            if batch.primitive < 4 {
+                let (vertices, indices) =
+                    crate::lines::expand(batch.primitive, &batch.vertices, &line_style(r))?;
+                if indices.is_empty() {
+                    return Ok(());
+                }
+                return draw_transient(r, &vertices, &indices, indices.len() as u32, true);
             }
 
-            update_draw_state(r).map_err(|_| 0x0505u32)?;
-            let mut c = r.commands();
-            gpu::geometry(
-                &mut c,
-                storage.physical(),
-                0,
-                batch.count,
-                (!batch.indices.is_empty()).then_some(bytes as u32 | 0x80000000),
-            )
-            .map_err(|_| 0x0505u32)?;
+            if !r.frame.raster.drawable() {
+                return Ok(());
+            }
 
-            r.used = c.used;
-            r.transient.push(storage);
-            r.frame.textures.sampled();
-            r.draws += 1;
-
-            Ok(())
+            draw_transient(r, &batch.vertices, &batch.indices, batch.count, false)
         })();
 
         if let Err(e) = result {
@@ -1175,13 +1220,35 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                 return Err(0x0502);
             }
 
-            if !r.frame.drawable || !r.frame.raster.drawable() {
+            if !r.frame.drawable {
                 return Ok(());
             }
 
             if r.arrays.texcoord0_has_q() {
                 r.frame.textures.mark_q();
             }
+
+            if mode < 4 {
+                let source = r.arrays.gather(
+                    first as usize,
+                    count,
+                    kind,
+                    indices,
+                    r.immediate.color,
+                    r.immediate.texcoord,
+                    r.immediate.extra_texcoords,
+                )?;
+                let (vertices, tris) = crate::lines::expand(mode, &source, &line_style(r))?;
+                if tris.is_empty() {
+                    return Ok(());
+                }
+                return draw_transient(r, &vertices, &tris, tris.len() as u32, true);
+            }
+
+            if !r.frame.raster.drawable() {
+                return Ok(());
+            }
+
             let (address, index, draw_count) = r.arrays.prepare(
                 mode,
                 first as usize,
@@ -1193,7 +1260,7 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                 r.immediate.extra_texcoords,
             )?;
 
-            update_draw_state(r).map_err(|_| 0x0505u32)?;
+            update_draw_state(r, false).map_err(|_| 0x0505u32)?;
             let mut c = r.commands();
             gpu::geometry(&mut c, address, 0, draw_count, index).map_err(|_| 0x0505u32)?;
             r.used = c.used;

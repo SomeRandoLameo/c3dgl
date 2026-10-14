@@ -15,6 +15,8 @@ pub(crate) struct Raster {
     pub alpha: bool,
     pub alpha_func: u32,
     pub alpha_ref: u8,
+    pub scissor: bool,
+    pub scissor_box: [i32; 4],
 }
 
 impl Raster {
@@ -32,7 +34,33 @@ impl Raster {
             alpha: false,
             alpha_func: 0x0207,
             alpha_ref: 0,
+            scissor: false,
+            scissor_box: [0, 0, 400, 240],
         }
+    }
+
+    /// SCISSORTEST_MODE/POS/DIM for the rotated 240x400 target (logical x is physical -y).
+    pub fn scissor_words(&self) -> [u32; 3] {
+        if !self.scissor {
+            return [0; 3];
+        }
+        let [bx, by, bw, bh] = self.scissor_box;
+        let (mut x, mut y, mut w, mut h) = (by, 400 - bx.wrapping_add(bw), bh, bw);
+        if x < 0 {
+            w += x;
+            x = 0;
+        }
+        if y < 0 {
+            h += y;
+            y = 0;
+        }
+        w = w.max(0);
+        h = h.max(0);
+        [
+            3,
+            (y as u32) << 16 | (x as u32 & 0xffff),
+            ((y + h) as u32).wrapping_sub(1) << 16 | ((x + w) as u32).wrapping_sub(1) & 0xffff,
+        ]
     }
 
     /// FRAGOP_ALPHA_TEST: enable, PICA comparison (GL order mapped directly) and reference byte.
@@ -98,6 +126,12 @@ impl Raster {
         }
 
         let mut values = [0.; 16];
+        if pname == 0x0c10 {
+            for (i, v) in self.scissor_box.iter().enumerate() {
+                values[i] = *v as f64;
+            }
+            return Some((values, 4));
+        }
         values[0] = match pname {
             0x0b71 => self.depth as u8 as f64,
             0x0b72 => self.depth_mask as u8 as f64,
@@ -106,6 +140,7 @@ impl Raster {
             0x0b45 => self.face as f64,
             0x0b46 => self.front as f64,
             0x0bc0 => self.alpha as u8 as f64,
+            0x0c11 => self.scissor as u8 as f64,
             0x0bc1 => self.alpha_func as f64,
             0x0bc2 => self.alpha_ref as f64 / 255.,
             0x0b70 => {
@@ -133,6 +168,7 @@ unsafe fn enable(cap: u32, on: bool) {
             0x0b71 => &mut r.depth,
             0x0b44 => &mut r.cull,
             0x0bc0 => &mut r.alpha,
+            0x0c11 => &mut r.scissor,
             0x0be2 => &mut r.blend.enabled,
             _ => {
                 m.fail(0x0500);
@@ -165,6 +201,7 @@ pub unsafe extern "C" fn glIsEnabled(cap: u32) -> u8 {
             0x0b71 => s.raster.depth as u8,
             0x0b44 => s.raster.cull as u8,
             0x0bc0 => s.raster.alpha as u8,
+            0x0c11 => s.raster.scissor as u8,
             0x0be2 => s.raster.blend.enabled as u8,
             0x0de1 => s.textures.enabled() as u8,
             _ => {
@@ -175,6 +212,24 @@ pub unsafe extern "C" fn glIsEnabled(cap: u32) -> u8 {
     });
 
     result
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glScissor(x: i32, y: i32, w: i32, h: i32) {
+    with_frame(|s, m| {
+        if w < 0 || h < 0 {
+            m.fail(0x0501);
+            return;
+        }
+
+        let r = &mut s.raster;
+        if r.scissor_box != [x, y, w, h] {
+            r.scissor_box = [x, y, w, h];
+            if r.scissor {
+                r.dirty = true;
+            }
+        }
+    });
 }
 
 #[no_mangle]

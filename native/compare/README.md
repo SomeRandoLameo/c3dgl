@@ -18,6 +18,7 @@ The interactive original main and unsupported pages are not run yet. This is a
 | multitexture | complete original `drawMultitexturePage`, eight cells | mipmap and compression pages remain separate |
 | mipmap | complete original `drawMipmapPage`, eight floor cells (levels, trilinear, GL_GENERATE_MIPMAP, RGB565) | compressed page remains separate |
 | compressed | complete original `drawCompressedPage` (paletted, ETC1, alpha test) | none for this example file |
+| overlay | complete original `drawOverlay` (scissor, GL_LINES) | rest of the cube program (PNG, stats, input) |
 | texcoords | complete original `drawTexcoordPage(createF(16))`, all eight cells | subsequent multitexture, mipmap and compression pages remain separate |
 | texmatrix | complete original first-page body in `drawTextureMatrixPage`, eight cells at time=0 | subsequent pages remain separate |
 | cube | `createCheckerTexture()`, `drawCube(texture,0,0,0,200,240,true)` | full main also uses PNG/ROMFS, scissor, lines and Citro3D statistics |

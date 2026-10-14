@@ -393,18 +393,18 @@ mod tests {
         state.range = [0.2, 0.8];
         let mut words = [0; 80];
         let mut c = Commands::new(&mut words);
-        raster(&mut c, state).unwrap();
+        raster(&mut c, state, false).unwrap();
         assert_eq!(c.used, RASTER_WORDS);
         assert_eq!(c.as_slice()[4], 2);
         assert_eq!(c.as_slice()[6], 0x1f61);
         assert_eq!(c.as_slice()[8], 0x02000000);
         assert_eq!(c.as_slice()[10], pica_float(-(0.8f32 - 0.2), 16));
         assert_eq!(c.as_slice()[12], pica_float(1. - 0.8, 16));
-        let mut too_small = [7; 53];
+        let mut too_small = [7; 57];
         let mut c = Commands::new(&mut too_small);
-        assert!(raster(&mut c, state).is_err());
+        assert!(raster(&mut c, state, false).is_err());
         assert!(c.as_slice().is_empty());
-        assert_eq!(too_small, [7; 53]);
+        assert_eq!(too_small, [7; 57]);
     }
 
     #[test]
@@ -499,14 +499,19 @@ pub fn geometry(
     draw_index(c, first, count, index)
 }
 
-pub const RASTER_WORDS: usize = 16;
-pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster) -> Result<(), ()> {
+pub const RASTER_WORDS: usize = 20;
+pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster, clip: bool) -> Result<(), ()> {
     if c.words.len() - c.used < RASTER_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
         return Err(());
     }
     one(c, r::BLEND_FUNC, s.blend.word())?;
     one(c, r::BLEND_COLOR, s.blend.color_word())?;
-    one(c, r::FACECULLING_CONFIG, s.cull_word())?;
+    // Expanded lines and points have arbitrary winding: never culled.
+    one(
+        c,
+        r::FACECULLING_CONFIG,
+        if clip { 0 } else { s.cull_word() },
+    )?;
     one(c, r::DEPTH_COLOR_MASK, s.depth_word())?;
     masked(
         c,
@@ -522,7 +527,8 @@ pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster) -> Result<(
             pica_float(1. - s.range[1], 16),
         ],
     )?;
-    one(c, r::FRAGOP_ALPHA_TEST, s.alpha_word())
+    one(c, r::FRAGOP_ALPHA_TEST, s.alpha_word())?;
+    seq(c, r::SCISSORTEST_MODE, &s.scissor_words())
 }
 
 pub const TEXTURE_WORDS: usize = 90;
