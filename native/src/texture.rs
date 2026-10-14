@@ -266,6 +266,8 @@ pub(crate) struct Textures {
     pub dirty: bool,
     /// A unit 0 texcoord with q != 1 was submitted: projection mode for good (exact with q = 1 too).
     pub q_used: bool,
+    /// Texturing is off for an internal draw (the clear quad).
+    pub suspended: bool,
     alignment: usize,
     objects: Vec<Object>,
     retired: Vec<Buffer>,
@@ -278,6 +280,7 @@ impl Textures {
             active: 0,
             dirty: false,
             q_used: false,
+            suspended: false,
             alignment: 4,
             objects: Vec::new(),
             retired: Vec::new(),
@@ -388,7 +391,7 @@ impl Textures {
         }
 
         // An incomplete or missing texture disables the unit, as in the C renderer.
-        if !s.complete {
+        if !s.complete || self.suspended {
             s.enabled = false;
         }
         let base = self

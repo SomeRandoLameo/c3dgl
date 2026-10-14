@@ -21,6 +21,7 @@ const POLYGON: u32 = 0x8;
 const LIGHTING: u32 = 0x40;
 const FOG: u32 = 0x80;
 const DEPTH_BUFFER: u32 = 0x100;
+const STENCIL_BUFFER: u32 = 0x400;
 const VIEWPORT: u32 = 0x800;
 const TRANSFORM: u32 = 0x1000;
 const ENABLE: u32 = 0x2000;
@@ -45,6 +46,7 @@ pub(crate) struct Saved {
     point_size: f32,
     clear_color: u32,
     clear_depth: f32,
+    clear_stencil: u8,
     viewport: [i32; 4],
     light: Lighting,
     eval: EvalSave,
@@ -95,6 +97,7 @@ pub unsafe extern "C" fn glPushAttrib(mask: u32) {
             point_size: f.point_size,
             clear_color: f.clear_color,
             clear_depth: f.clear_depth,
+            clear_stencil: f.clear_stencil,
             viewport: f.viewport,
             light: f.light.clone(),
             eval: f.eval.save(),
@@ -146,6 +149,15 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         f.raster.depth_mask = a.raster.depth_mask;
         f.clear_depth = a.clear_depth;
     }
+    if mask & STENCIL_BUFFER != 0 {
+        f.raster.stencil = a.raster.stencil;
+        f.raster.stencil_func = a.raster.stencil_func;
+        f.raster.stencil_ref = a.raster.stencil_ref;
+        f.raster.stencil_func_mask = a.raster.stencil_func_mask;
+        f.raster.stencil_write_mask = a.raster.stencil_write_mask;
+        f.raster.stencil_ops = a.raster.stencil_ops;
+        f.clear_stencil = a.clear_stencil;
+    }
     if mask & VIEWPORT != 0 {
         f.viewport = a.viewport;
         f.raster.range = a.raster.range;
@@ -162,6 +174,7 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         f.raster.cull = a.raster.cull;
         f.raster.depth = a.raster.depth;
         f.raster.scissor = a.raster.scissor;
+        f.raster.stencil = a.raster.stencil;
         f.poly.offset = a.poly.offset;
         f.light.restore_enables(&a.light);
         f.fog.enabled = a.fog.enabled;
@@ -173,6 +186,7 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         f.raster.alpha_func = a.raster.alpha_func;
         f.raster.alpha_ref = a.raster.alpha_ref;
         f.raster.blend = a.raster.blend;
+        f.raster.color_mask = a.raster.color_mask;
         f.clear_color = a.clear_color;
     }
     if mask & TEXTURE != 0 {

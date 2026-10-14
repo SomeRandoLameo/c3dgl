@@ -401,11 +401,11 @@ mod tests {
         assert_eq!(c.as_slice()[8], 0x02000000);
         assert_eq!(c.as_slice()[10], pica_float(-(0.8f32 - 0.2), 16));
         assert_eq!(c.as_slice()[12], pica_float(1. - 0.8, 16));
-        let mut too_small = [7; 57];
+        let mut too_small = [7; 61];
         let mut c = Commands::new(&mut too_small);
         assert!(raster(&mut c, state, false).is_err());
         assert!(c.as_slice().is_empty());
-        assert_eq!(too_small, [7; 57]);
+        assert_eq!(too_small, [7; 61]);
     }
 
     #[test]
@@ -521,7 +521,7 @@ pub(crate) fn fog(c: &mut Commands<'_>, state: Option<(u32, &[u32; 128])>) -> Re
     }
 }
 
-pub const RASTER_WORDS: usize = 20;
+pub const RASTER_WORDS: usize = 24;
 pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster, clip: bool) -> Result<(), ()> {
     if c.words.len() - c.used < RASTER_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
         return Err(());
@@ -550,6 +550,7 @@ pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster, clip: bool)
         ],
     )?;
     one(c, r::FRAGOP_ALPHA_TEST, s.alpha_word())?;
+    seq(c, 0x0105, &s.stencil_words())?;
     seq(c, r::SCISSORTEST_MODE, &s.scissor_words())
 }
 

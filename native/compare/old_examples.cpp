@@ -28,6 +28,13 @@
 #elif defined(C3DGL_OLD_LIGHTING)
 #include "../../examples/lighting/main.cpp"
 #define CASE "lighting"
+#elif defined(C3DGL_OLD_FRAGMENT) || defined(C3DGL_OLD_FRAGMENT2)
+#include "../../examples/fragment/main.cpp"
+#ifdef C3DGL_OLD_FRAGMENT2
+#define CASE "fragment2"
+#else
+#define CASE "fragment"
+#endif
 #elif defined(C3DGL_OLD_FOG)
 #include "../../examples/fog/main.cpp"
 #define CASE "fog"
@@ -100,6 +107,31 @@ int main() {
     const GLuint tex=createF(16);drawTexcoordPage(tex);
 #elif defined(C3DGL_OLD_TEXTURE)
     const GLuint tex=createF(16);drawCell(0,0,tex);
+#elif defined(C3DGL_OLD_FRAGMENT2)
+    // Page 2 of the original main loop, call for call
+    const GLuint tex=0;
+    glClearStencil(3);
+    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);
+    beginCell(0,0);drawStencilInside();
+    beginCell(1,0);drawStencilClearValue();
+    beginCell(2,0);drawStencilCount(2,0);
+    beginCell(3,0);drawStencilInvert(3,0);
+    beginCell(0,1);drawScissorClear(0,1);
+    beginCell(1,1);drawColorMaskClear(1,1);
+    beginCell(2,1);drawDepthClearKeepsStencil(2,1);
+    beginCell(3,1);drawStencilClearKeepsDepth(3,1);
+#elif defined(C3DGL_OLD_FRAGMENT)
+    // Page 1 of the original main loop, call for call
+    const Textures textures={createSprite(),createAlphaDisc(),createChecker(GL_RGB),createChecker(GL_LUMINANCE)};
+    const GLuint tex=textures.sprite;
+    beginCell(0,0);drawAlphaGradient(GL_GREATER);
+    beginCell(1,0);drawAlphaGradient(GL_LESS);
+    beginCell(2,0);drawCutout(tex);
+    beginCell(3,0);drawCutoutDepth(tex);
+    beginCell(0,1);drawModulate(textures);
+    beginCell(1,1);drawReplace(textures);
+    beginCell(2,1);drawDecal(textures);
+    beginCell(3,1);drawBlendAdd(textures);
 #elif defined(C3DGL_OLD_FOG)
     // The cells of the original main loop, call for call
     const GLuint tex=0;glEnable(GL_DEPTH_TEST);

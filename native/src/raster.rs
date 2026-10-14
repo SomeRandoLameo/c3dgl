@@ -17,6 +17,15 @@ pub(crate) struct Raster {
     pub alpha_ref: u8,
     pub scissor: bool,
     pub scissor_box: [i32; 4],
+    pub stencil: bool,
+    pub stencil_func: u32,
+    pub stencil_ref: u8,
+    pub stencil_func_mask: u8,
+    pub stencil_write_mask: u8,
+    /// GL operations on stencil fail, depth fail and pass.
+    pub stencil_ops: [u32; 3],
+    /// Color write mask: bit 0 red .. bit 3 alpha.
+    pub color_mask: u8,
 }
 
 impl Raster {
@@ -36,6 +45,55 @@ impl Raster {
             alpha_ref: 0,
             scissor: false,
             scissor_box: [0, 0, 400, 240],
+            stencil: false,
+            stencil_func: 0x0207,
+            stencil_ref: 0,
+            stencil_func_mask: 0xff,
+            stencil_write_mask: 0xff,
+            stencil_ops: [0x1e00; 3],
+            color_mask: 0xf,
+        }
+    }
+
+    /// FRAGOP_STENCIL_TEST and FRAGOP_STENCIL_OP. Without the test the write mask is 0.
+    pub fn stencil_words(&self) -> [u32; 2] {
+        let function = Self::pica_function(self.stencil_func);
+        let op = |gl: u32| match gl {
+            0x0000 => 1,
+            0x1e01 => 2,
+            0x1e02 => 3,
+            0x1e03 => 4,
+            0x150a => 5,
+            0x8507 => 6,
+            0x8508 => 7,
+            _ => 0,
+        };
+        if self.stencil {
+            [
+                1 | function << 4
+                    | (self.stencil_write_mask as u32) << 8
+                    | (self.stencil_ref as u32) << 16
+                    | (self.stencil_func_mask as u32) << 24,
+                op(self.stencil_ops[0])
+                    | op(self.stencil_ops[1]) << 4
+                    | op(self.stencil_ops[2]) << 8,
+            ]
+        } else {
+            [1 << 4 | 0xff << 24, 0]
+        }
+    }
+
+    /// GL comparison to the PICA one, direct (not reversed like the depth test).
+    fn pica_function(gl: u32) -> u32 {
+        match gl {
+            0x0200 => 0,
+            0x0201 => 4,
+            0x0202 => 2,
+            0x0203 => 5,
+            0x0204 => 6,
+            0x0205 => 3,
+            0x0206 => 7,
+            _ => 1,
         }
     }
 
@@ -100,7 +158,7 @@ impl Raster {
     }
 
     pub fn depth_word(&self) -> u32 {
-        0x0f00
+        (self.color_mask as u32) << 8
             | self.depth as u32
             | (self.comparison() << 4)
             | if self.depth && self.depth_mask {
@@ -126,6 +184,12 @@ impl Raster {
         }
 
         let mut values = [0.; 16];
+        if pname == 0x0c23 {
+            for i in 0..4 {
+                values[i] = (self.color_mask >> i & 1) as f64;
+            }
+            return Some((values, 4));
+        }
         if pname == 0x0c10 {
             for (i, v) in self.scissor_box.iter().enumerate() {
                 values[i] = *v as f64;
@@ -141,6 +205,14 @@ impl Raster {
             0x0b46 => self.front as f64,
             0x0bc0 => self.alpha as u8 as f64,
             0x0c11 => self.scissor as u8 as f64,
+            0x0b90 => self.stencil as u8 as f64,
+            0x0b92 => self.stencil_func as f64,
+            0x0b97 => self.stencil_ref as f64,
+            0x0b93 => self.stencil_func_mask as f64,
+            0x0b98 => self.stencil_write_mask as f64,
+            0x0b94 => self.stencil_ops[0] as f64,
+            0x0b95 => self.stencil_ops[1] as f64,
+            0x0b96 => self.stencil_ops[2] as f64,
             0x0bc1 => self.alpha_func as f64,
             0x0bc2 => self.alpha_ref as f64 / 255.,
             0x0b70 => {
@@ -217,6 +289,12 @@ unsafe fn enable(cap: u32, on: bool) {
             0x0b44 => &mut r.cull,
             0x0bc0 => &mut r.alpha,
             0x0c11 => &mut r.scissor,
+            0x0b90 => {
+                if on {
+                    s.stencil_used = true;
+                }
+                &mut r.stencil
+            }
             0x0be2 => &mut r.blend.enabled,
             _ => {
                 m.fail(0x0500);
@@ -250,6 +328,7 @@ pub unsafe extern "C" fn glIsEnabled(cap: u32) -> u8 {
             0x0b44 => s.raster.cull as u8,
             0x0bc0 => s.raster.alpha as u8,
             0x0c11 => s.raster.scissor as u8,
+            0x0b90 => s.raster.stencil as u8,
             0x8037 | 0x2a02 | 0x2a01 => s.poly.offset[crate::frame::offset_index(cap)] as u8,
             0x0d80 | 0x0d90..=0x0d98 | 0x0db0..=0x0db8 => {
                 s.eval.is_enabled(cap).unwrap_or(false) as u8
@@ -281,6 +360,53 @@ pub unsafe extern "C" fn glScissor(x: i32, y: i32, w: i32, h: i32) {
                 r.dirty = true;
             }
         }
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glStencilFunc(function: u32, reference: i32, mask: u32) {
+    with_frame(|s, m| {
+        if !(0x0200..=0x0207).contains(&function) {
+            m.fail(0x0500);
+            return;
+        }
+        let r = &mut s.raster;
+        r.stencil_func = function;
+        r.stencil_ref = reference.clamp(0, 255) as u8;
+        r.stencil_func_mask = mask as u8;
+        r.dirty = true;
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glStencilOp(fail: u32, zfail: u32, zpass: u32) {
+    with_frame(|s, m| {
+        let valid = |op: u32| matches!(op, 0x1e00..=0x1e03 | 0x150a | 0x8507 | 0x8508 | 0);
+        if !valid(fail) || !valid(zfail) || !valid(zpass) {
+            m.fail(0x0500);
+            return;
+        }
+        s.raster.stencil_ops = [fail, zfail, zpass];
+        s.raster.dirty = true;
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glStencilMask(mask: u32) {
+    with_frame(|s, _| {
+        s.raster.stencil_write_mask = mask as u8;
+        s.raster.dirty = true;
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glColorMask(red: u8, green: u8, blue: u8, alpha: u8) {
+    with_frame(|s, _| {
+        s.raster.color_mask = (red != 0) as u8
+            | ((green != 0) as u8) << 1
+            | ((blue != 0) as u8) << 2
+            | ((alpha != 0) as u8) << 3;
+        s.raster.dirty = true;
     });
 }
 

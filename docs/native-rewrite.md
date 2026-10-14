@@ -328,3 +328,17 @@ and points. The eight cells of the original fog main loop (linear, exp, exp2, or
 depth range, lines and points, alpha) match the C framebuffer exactly
 (`native-results/fog-step/`, one run). The fog state joins the attribute stack (GL_FOG_BIT and
 GL_ENABLE_BIT). W-buffer depth is not used (`C3DGL_W_DEPTH=0` in both builds).
+
+
+## Fragment operations checkpoint
+
+The stencil test and operations, `glColorMask`, `glClearStencil` and masked clears are
+implemented: stencil and color-mask state is emitted with the raster state, `glClear` uses
+the memory fill when the write masks are full, there is no scissor and depth and stencil are
+cleared together (or stencil was never used), and otherwise draws a full-screen quad at the
+clear depth with the scissor box and write masks, as the C renderer does. Texturing and fog
+are suspended for that draw and the user's state is re-emitted afterwards. Both pages of the
+original fragment main loop (alpha test, cutouts, TexEnv modes, blend add; stencil
+inside/count/invert, scissored, color-masked and partial clears) match the C framebuffer
+exactly, as do all earlier scenes (`native-results/fragment-step/`, one run each). Stencil
+and color-mask state join the attribute stack. Host tests: 49 pass.

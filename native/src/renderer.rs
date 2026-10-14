@@ -132,7 +132,8 @@ pub unsafe fn with_frame(f: impl FnOnce(&mut FrameState, &mut Matrices)) {
 }
 
 pub unsafe fn clear_gl(mask: u32) {
-    if mask & !(crate::frame::COLOR | crate::frame::DEPTH) != 0 {
+    const STENCIL: u32 = 0x0400;
+    if mask & !(crate::frame::COLOR | crate::frame::DEPTH | STENCIL) != 0 {
         with_matrices(|m| m.fail(0x0501));
         return;
     }
@@ -150,15 +151,31 @@ pub unsafe fn clear_gl(mask: u32) {
         return;
     }
 
-    let mask = if r.frame.raster.depth_mask {
-        mask
-    } else {
-        mask & !crate::frame::DEPTH
-    };
-
-    if mask == 0 {
+    // Write masks apply to clears.
+    let raster = r.frame.raster;
+    let color = mask & crate::frame::COLOR != 0 && raster.color_mask != 0;
+    let depth = mask & crate::frame::DEPTH != 0 && raster.depth_mask;
+    let stencil = mask & STENCIL != 0 && raster.stencil_write_mask != 0;
+    if !color && !depth && !stencil {
         return;
     }
+
+    // The memory fill clears whole buffers, and depth and stencil only together. Stencil may be
+    // overwritten as long as it was never used.
+    let fill = !raster.scissor
+        && (!color || raster.color_mask == 0xf)
+        && (!stencil || raster.stencil_write_mask == 0xff)
+        && (depth == stencil || (depth && !r.frame.stencil_used));
+    if !fill {
+        clear_quad(r, color, depth, stencil);
+        return;
+    }
+    let mask = if color { crate::frame::COLOR } else { 0 }
+        | if depth || stencil {
+            crate::frame::DEPTH
+        } else {
+            0
+        };
 
     if !r.active {
         if begin_frame(r, true, None) != 0 {
@@ -194,7 +211,9 @@ pub unsafe fn clear_gl(mask: u32) {
         r.used = commands.used;
     }
 
-    let depth = ((1. - r.frame.clear_depth) * 16777215.) as u32;
+    // D24S8: stencil in the top byte, depth reversed.
+    let depth =
+        (r.frame.clear_stencil as u32) << 24 | ((1. - r.frame.clear_depth) * 16777215.) as u32;
     if p::c3dglPlatformClearMasked(
         r.color.pointer,
         r.depth.pointer,
@@ -206,6 +225,72 @@ pub unsafe fn clear_gl(mask: u32) {
     {
         r.matrices.fail(0x0502);
     }
+}
+
+/// Clear by drawing a full-screen quad at the clear depth: honors the scissor box and all write
+/// masks (the state of the draw is built here, then the user's state is re-emitted).
+unsafe fn clear_quad(r: &mut Renderer, color: bool, depth: bool, stencil: bool) {
+    if !r.active && begin_frame(r, true, None) != 0 {
+        r.matrices.fail(0x0502);
+        return;
+    }
+    let saved = (
+        r.frame.raster,
+        r.frame.viewport,
+        r.frame.drawable,
+        r.frame.fog.enabled,
+    );
+    let mut q = crate::raster::Raster::new();
+    q.depth = true; // Depth writes need the test enabled.
+    q.function = 0x0207;
+    q.depth_mask = depth;
+    q.scissor = saved.0.scissor;
+    q.scissor_box = saved.0.scissor_box;
+    q.color_mask = if color { saved.0.color_mask } else { 0 };
+    if stencil {
+        q.stencil = true;
+        q.stencil_ref = r.frame.clear_stencil;
+        q.stencil_write_mask = saved.0.stencil_write_mask;
+        q.stencil_ops = [0x1e01; 3];
+    }
+    q.dirty = true;
+    r.frame.raster = q;
+    // glClear ignores the viewport.
+    r.frame.viewport = [0, 0, 400, 240];
+    r.frame.drawable = true;
+    r.frame.viewport_dirty = true;
+    r.frame.fog.enabled = false;
+    r.frame.textures.suspended = true;
+    r.frame.textures.dirty = true;
+
+    let z = 2. * r.frame.clear_depth - 1.;
+    let rgba = r.frame.clear_color;
+    let bytes: [f32; 4] = core::array::from_fn(|i| ((rgba >> (24 - 8 * i)) & 255) as f32);
+    let corner = |x: f32, y: f32| GpuVertex {
+        position: [x, y, z, 1.],
+        color: bytes,
+        texcoord: [0., 0., 0., 1.],
+        extra_texcoords: [[0., 0., 0., 1.]; 2],
+    };
+    let vertices = [
+        corner(-1., -1.),
+        corner(1., -1.),
+        corner(1., 1.),
+        corner(-1., 1.),
+    ];
+    let indices = [0u16, 1, 2, 0, 2, 3];
+    if let Err(e) = draw_transient(r, &vertices, &indices, 6, true, 0.) {
+        r.matrices.fail(e);
+    }
+
+    r.frame.raster = saved.0;
+    r.frame.raster.dirty = true;
+    r.frame.viewport = saved.1;
+    r.frame.drawable = saved.2;
+    r.frame.viewport_dirty = true;
+    r.frame.fog.enabled = saved.3;
+    r.frame.textures.suspended = false;
+    r.frame.textures.dirty = true;
 }
 
 impl Renderer {

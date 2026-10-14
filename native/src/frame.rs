@@ -30,6 +30,9 @@ pub struct FrameState {
     pub drawable: bool,
     pub clear_color: u32,
     pub clear_depth: f32,
+    pub clear_stencil: u8,
+    /// Stencil was enabled once: depth-only memory fills would destroy its contents.
+    pub stencil_used: bool,
     pub line_width: f32,
     pub point_size: f32,
 }
@@ -55,6 +58,8 @@ impl FrameState {
             drawable: true,
             clear_color: 0,
             clear_depth: 1.,
+            clear_stencil: 0,
+            stencil_used: false,
             line_width: 1.,
             point_size: 1.,
         }
@@ -124,6 +129,11 @@ pub unsafe extern "C" fn glClearColor(r: f32, g: f32, b: f32, a: f32) {
 #[no_mangle]
 pub unsafe extern "C" fn glClearDepth(depth: f64) {
     with_frame(|s, _| s.clear_depth = depth.clamp(0., 1.) as f32);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glClearStencil(s: i32) {
+    with_frame(|f, _| f.clear_stencil = s as u8);
 }
 
 #[no_mangle]
@@ -235,6 +245,11 @@ fn query(s: &FrameState, m: &Matrices, pname: u32) -> Option<([f64; 16], usize)>
 
         0x8037 | 0x2a02 | 0x2a01 => {
             v[0] = s.poly.offset[offset_index(pname)] as u8 as f64;
+            1
+        }
+
+        0x0b91 => {
+            v[0] = s.clear_stencil as f64;
             1
         }
 
