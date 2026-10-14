@@ -343,11 +343,13 @@ mod tests {
             replace: false,
             scale: [1.; 2],
             tev: [0x00300030, 0, 0x00010001, 0xff000000, 0],
+            lod: 0,
+            format: 0,
         };
         let mut off = t;
         off.enabled = false;
         off.tev = [0, 0, 0, 0, 0];
-        texture(&mut c, [t, t, off]).unwrap();
+        texture(&mut c, [t, t, off], true).unwrap();
         assert!(c.used <= TEXTURE_WORDS);
         let writes = decode(c.as_slice());
         let value = |reg: u16| writes.iter().rev().find(|w| w.0 == reg as u32).map(|w| w.1);
@@ -368,7 +370,7 @@ mod tests {
         // An enabled but incomplete texture binds no image and activates no unit.
         t.complete = false;
         let mut c = Commands::new(&mut words);
-        texture(&mut c, [t, off, off]).unwrap();
+        texture(&mut c, [t, off, off], true).unwrap();
         let writes = decode(c.as_slice());
         assert_eq!(
             writes.iter().find(|w| w.0 == 0x0080).map(|w| w.1),
@@ -377,7 +379,7 @@ mod tests {
         assert!(writes.iter().all(|w| w.0 != 0x0085));
         let mut too_small = [7; TEXTURE_WORDS + DRAW_WORDS + 8 + FINISH_WORDS - 1];
         let mut c = Commands::new(&mut too_small);
-        assert!(texture(&mut c, [t, t, t]).is_err());
+        assert!(texture(&mut c, [t, t, t], true).is_err());
         assert_eq!(c.used, 0);
         assert!(too_small.iter().all(|v| *v == 7));
     }
@@ -522,7 +524,11 @@ pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster) -> Result<(
 }
 
 pub const TEXTURE_WORDS: usize = 90;
-pub(crate) fn texture(c: &mut Commands<'_>, units: [crate::texture::Packet; 3]) -> Result<(), ()> {
+pub(crate) fn texture(
+    c: &mut Commands<'_>,
+    units: [crate::texture::Packet; 3],
+    projective: bool,
+) -> Result<(), ()> {
     if c.words.len() - c.used < TEXTURE_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
         return Err(());
     }
@@ -544,32 +550,32 @@ pub(crate) fn texture(c: &mut Commands<'_>, units: [crate::texture::Packet; 3]) 
                         &[
                             0,
                             t.dimensions,
-                            t.parameters | 0x30000000,
-                            0,
+                            t.parameters | if projective { 0x30000000 } else { 0 },
+                            t.lod,
                             t.address >> 3,
                         ],
                     )?;
-                    one(c, 0x008e, 0)?; // Resident uploads are converted to RGBA8.
+                    one(c, 0x008e, t.format)?; // RGBA8 unless RGB565 storage.
                 }
                 1 => {
                     seq(
                         c,
                         0x0091,
-                        &[0, t.dimensions, t.parameters, 0, t.address >> 3],
+                        &[0, t.dimensions, t.parameters, t.lod, t.address >> 3],
                     )?;
-                    one(c, 0x0096, 0)?;
+                    one(c, 0x0096, t.format)?;
                 }
                 _ => {
                     seq(
                         c,
                         0x0099,
-                        &[0, t.dimensions, t.parameters, 0, t.address >> 3],
+                        &[0, t.dimensions, t.parameters, t.lod, t.address >> 3],
                     )?;
-                    one(c, 0x009e, 0)?;
+                    one(c, 0x009e, t.format)?;
                 }
             }
         }
-        // Incomplete level-zero textures (including default mip filters) sample black, alpha one.
+        // Disabled units (including incomplete textures) pass the previous stage through.
         seq(c, envs[unit], &t.tev)?;
     }
     one(c, r::VSH_FLOATUNIFORM_CONFIG, 0x80000004)?;

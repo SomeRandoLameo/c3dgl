@@ -16,6 +16,7 @@ The interactive original main and unsupported pages are not run yet. This is a
 | primitives | `beginCell`, `drawTriangleStrip`, `drawTriangleFan`, `drawQuadStrip`, `drawPolygon` | points/lines, flat/polygon modes, edge flags, polygon offset, evaluators |
 | texture | `createF(16)`, `drawCell(0,0,texture)` | multitexturing/combine, mipmaps, compression |
 | multitexture | complete original `drawMultitexturePage`, eight cells | mipmap and compression pages remain separate |
+| mipmap | complete original `drawMipmapPage`, eight floor cells (levels, trilinear, GL_GENERATE_MIPMAP, RGB565) | compressed page remains separate |
 | texcoords | complete original `drawTexcoordPage(createF(16))`, all eight cells | subsequent multitexture, mipmap and compression pages remain separate |
 | texmatrix | complete original first-page body in `drawTextureMatrixPage`, eight cells at time=0 | subsequent pages remain separate |
 | cube | `createCheckerTexture()`, `drawCube(texture,0,0,0,200,240,true)` | full main also uses PNG/ROMFS, scissor, lines and Citro3D statistics |

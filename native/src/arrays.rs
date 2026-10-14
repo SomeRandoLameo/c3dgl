@@ -93,6 +93,11 @@ impl Arrays {
         }
     }
 
+    /// Unit 0 reads four texcoord components per vertex: q is in use.
+    pub fn texcoord0_has_q(&self) -> bool {
+        self.enabled[2] && self.texcoord.size == 4
+    }
+
     unsafe fn source(&self, name: u32, address: usize, bytes: usize) -> Result<*const u8, u32> {
         if name == 0 {
             if address == 0 || address.checked_add(bytes).is_none() || bytes > isize::MAX as usize {

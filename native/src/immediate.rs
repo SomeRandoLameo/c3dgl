@@ -259,7 +259,12 @@ pub unsafe extern "C" fn glTexCoord3f(s: f32, t: f32, r: f32) {
 }
 #[no_mangle]
 pub unsafe extern "C" fn glTexCoord4f(s: f32, t: f32, r: f32, q: f32) {
-    with_immediate(|state| state.immediate.texcoord = [s, t, r, q]);
+    with_immediate(|state| {
+        state.immediate.texcoord = [s, t, r, q];
+        if q != 1. {
+            state.frame.textures.mark_q();
+        }
+    });
 }
 #[no_mangle]
 pub unsafe extern "C" fn glTexCoord3fv(v: *const f32) {
@@ -277,11 +282,17 @@ pub unsafe extern "C" fn glTexCoord4fv(v: *const f32) {
 #[no_mangle]
 pub unsafe extern "C" fn glMultiTexCoord4f(unit: u32, s: f32, t: f32, r: f32, q: f32) {
     with_immediate(|state| match unit {
-        0x84c0 => state.immediate.texcoord = [s, t, r, q],
+        0x84c0 => {
+            state.immediate.texcoord = [s, t, r, q];
+            if q != 1. {
+                state.frame.textures.mark_q();
+            }
+        }
         0x84c1..=0x84c2 => state.immediate.extra_texcoords[(unit - 0x84c1) as usize] = [s, t, r, q],
         _ => state.matrices.fail(0x0500),
     });
 }
+
 #[no_mangle]
 pub unsafe extern "C" fn glMultiTexCoord2f(unit: u32, s: f32, t: f32) {
     glMultiTexCoord4f(unit, s, t, 0., 1.);

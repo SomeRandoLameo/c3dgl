@@ -77,7 +77,7 @@ pub(crate) struct Renderer {
     pub(crate) arrays: crate::arrays::Arrays,
     pub(crate) immediate: crate::immediate::Immediate,
     transient: alloc::vec::Vec<Buffer>,
-    frame: FrameState,
+    pub(crate) frame: FrameState,
     work_wait_ticks: u64,
     work_gpu_ticks: u64,
     submitted_bytes: u32,
@@ -494,7 +494,13 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
     };
 
     let raster = r.frame.raster.dirty.then_some(r.frame.raster);
-    let texture = r.frame.textures.dirty.then(|| r.frame.textures.packets());
+    let projective = r.frame.textures.q_used || {
+        let m = r.matrices.texture_for(0);
+        m[3] != 0. || m[7] != 0. || m[15] != 1.
+    };
+
+    let texture =
+        (r.frame.textures.dirty || r.matrices.texture_dirty).then(|| r.frame.textures.packets());
     let texmatrix = (r.matrices.texture_dirty || texture.is_some()).then(|| {
         let packets = r.frame.textures.packets();
         (
@@ -502,6 +508,7 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
             core::array::from_fn(|unit| packets[unit].scale),
         )
     });
+
     let needed = texmatrix.map_or(0, |_| gpu::TEXMATRIX_WORDS)
         + viewport.map_or(0, |_| 8)
         + update.map_or(0, |_| 20)
@@ -519,7 +526,7 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
     }
 
     if let Some(t) = texture {
-        gpu::texture(&mut commands, t)?;
+        gpu::texture(&mut commands, t, projective)?;
     }
 
     if let Some((matrices, scales)) = texmatrix {
@@ -1171,6 +1178,9 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                 return Ok(());
             }
 
+            if r.arrays.texcoord0_has_q() {
+                r.frame.textures.mark_q();
+            }
             let (address, index, draw_count) = r.arrays.prepare(
                 mode,
                 first as usize,

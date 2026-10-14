@@ -215,3 +215,20 @@ units, unit-1 texture matrix, per-unit client arrays) matches the C framebuffer
 exactly; all six selected original scenes match. See `native-results/multitexture-step/`
 (one run each; not repeated performance or hardware validation). Mipmaps,
 GL_GENERATE_MIPMAP, compressed textures and the remaining example groups are open.
+
+
+## Mipmap checkpoint
+
+Mipmaps now work on the native path: `glTexImage2D`/`glTexSubImage2D` on levels
+0..10, stored chains down to 8x8, `GL_GENERATE_MIPMAP` (2x2 box filter as in the C
+renderer), GL completeness (a mipmap min filter without all levels disables the
+unit, like the C renderer), the LOD register, nearest/linear mip filtering and
+per-level NPOT padding. `GL_UNSIGNED_SHORT_5_6_5` uploads are stored as real
+RGB565 texels (PICA format 3): expanding them to RGBA8 changed sampling by one
+colour level in 531 pixels, native storage is exact. Unit 0 uses projection mode
+only after a texcoord with q != 1 (sticky) or with a projective texture matrix,
+as in the C renderer; always-on projection changed the sampler's LOD. All seven
+selected original scenes, including the complete unchanged `drawMipmapPage`, match
+the C framebuffer exactly; see `native-results/mipmap-step/` (one run each).
+Compressed (ETC1/paletted) textures, 1D textures and the remaining example groups
+are open. Host tests: 30 pass.
