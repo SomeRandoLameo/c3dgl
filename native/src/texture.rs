@@ -198,9 +198,22 @@ impl Environment {
             scale: [1; 2],
         }
     }
-    pub(crate) fn words(self, unit: usize, enabled: bool, complete: bool, base: u32) -> [u32; 5] {
+    /// TexEnv words of the stage of GL `unit`; `shift`: the PICA texture unit of GL unit 0 (1 with
+    /// polygon stipple, whose pattern takes PICA unit 0).
+    pub(crate) fn words(
+        self,
+        unit: usize,
+        shift: u32,
+        enabled: bool,
+        complete: bool,
+        base: u32,
+    ) -> [u32; 5] {
         let prev = if unit == 0 { 0 } else { 15 };
-        let tex = if complete { 3 + unit as u32 } else { 14 };
+        let tex = if complete {
+            3 + shift + unit as u32
+        } else {
+            14
+        };
         let color = if complete { self.color } else { 0xff000000 };
         let pack = |v: [u32; 3]| v[0] | v[1] << 4 | v[2] << 8;
         if !enabled {
@@ -220,7 +233,7 @@ impl Environment {
         if self.mode == 0x8570 {
             let source = |src| match src {
                 0x1702 => tex,
-                0x84c0..=0x84c2 => 3 + src - 0x84c0,
+                0x84c0..=0x84c2 => 3 + shift + src - 0x84c0,
                 0x8576 => 14,
                 0x8577 => 0,
                 _ => prev,
@@ -287,6 +300,8 @@ pub(crate) struct Textures {
     proxy1: [Proxy; 12],
     unpack: PixelStore,
     pack: PixelStore,
+    /// PICA texture unit of GL unit 0: 1 while polygon stipple takes unit 0.
+    shift: u32,
     objects: Vec<Object>,
     retired: Vec<Buffer>,
 }
@@ -303,9 +318,25 @@ impl Textures {
             proxy1: [Proxy::default(); 12],
             unpack: PixelStore::default(),
             pack: PixelStore::default(),
+            shift: 0,
             objects: Vec::new(),
             retired: Vec::new(),
         }
+    }
+
+    /// Whether polygon stipple takes PICA texture unit 0 (changes the stage sources).
+    pub fn set_stipple(&mut self, on: bool) {
+        if (self.shift == 1) != on {
+            self.shift = on as u32;
+            self.dirty = true;
+        }
+    }
+
+    /// Keep a buffer alive until the queued draws have finished.
+    pub unsafe fn retire(&mut self, buffer: Buffer) -> Result<(), u32> {
+        self.retired.try_reserve(1).map_err(|_| 0x0505u32)?;
+        self.retired.push(buffer);
+        Ok(())
     }
 
     pub fn mark_q(&mut self) {
@@ -451,7 +482,7 @@ impl Textures {
         let base = object.map_or(0x1908, |o| o.base);
         s.tev = self.units[unit]
             .env
-            .words(unit, s.enabled, s.complete, base);
+            .words(unit, self.shift, s.enabled, s.complete, base);
         s
     }
 
@@ -924,7 +955,7 @@ fn offset(width: usize, height: usize, x: usize, y: usize) -> usize {
 }
 
 /// Byte offset of a texel in Morton-tiled storage with `bpp` bytes per texel.
-fn offset_bpp(width: usize, height: usize, x: usize, y: usize, bpp: usize) -> usize {
+pub(crate) fn offset_bpp(width: usize, height: usize, x: usize, y: usize, bpp: usize) -> usize {
     let y = height - 1 - y;
     let tile = (y / 8) * (width / 8) + x / 8;
     let morton = (x & 1)
@@ -1056,6 +1087,11 @@ impl Default for PixelStore {
 }
 
 impl PixelStore {
+    /// GL_*_ROW_LENGTH, or `width` when it is zero.
+    pub(crate) fn row_length_or(&self, width: usize) -> usize {
+        row_of(self.row_length, width)
+    }
+
     /// First pixel of an image of width `w` (GL_UNPACK_SKIP_ROWS / SKIP_PIXELS applied).
     unsafe fn start(&self, pixels: *const u8, bpp: usize, w: usize) -> *const u8 {
         if pixels.is_null() {

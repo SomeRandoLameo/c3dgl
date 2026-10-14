@@ -1,5 +1,9 @@
 ; Object-space position; c0..c3 hold rows of the tilted GL MVP matrix.
-; c5..c7: unit 0 texture matrix rows (s, t, q); c8/c9: unit 1; c10/c11: unit 2.
+; c5..c7: unit 0 texture matrix rows (s, t, q); c8/c9: unit 1; c10/c11: unit 2; c12: q row of unit 0.
+; Polygon stipple (bool stipple): texcoord 0 = c5..c7 * position (window position / 32 times w, PICA
+; divides by w per pixel); GL unit 0 moves to texcoord 1 (c8, c9, c12, divided by q here) and GL
+; unit 1 to texcoord 2 (c10, c11).
+.bool stipple
 .out outpos position
 .out outclr color
 .out outtex texcoord0.st
@@ -19,6 +23,21 @@
     dp4 outpos.z, matrix[2], inpos
     dp4 outpos.w, matrix[3], inpos
     mul outclr, color_scale.xxxx, inclr
+    ifu stipple
+    dp4 outtex.x, c5, inpos
+    dp4 outtex.y, c6, inpos
+    dp4 outtex.z, c7, inpos
+    mov outtex.w, c4.w
+    dp4 r1.x, c8, intex
+    dp4 r1.y, c9, intex
+    dp4 r1.z, c12, intex
+    mov r1.w, c4.w
+    rcp r2.x, r1.z
+    mul outtex1, r1, r2.xxxx
+    dp4 outtex2.x, c10, intex1
+    dp4 outtex2.y, c11, intex1
+    mov outtex2.zw, c4.ww
+    .else
     dp4 outtex.x, c5, intex
     dp4 outtex.y, c6, intex
     dp4 outtex.z, c7, intex
@@ -27,5 +46,6 @@
     dp4 outtex1.y, c9, intex1
     dp4 outtex2.x, c10, intex2
     dp4 outtex2.y, c11, intex2
+    .end
     end
 .end

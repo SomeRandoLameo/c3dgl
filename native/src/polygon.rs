@@ -237,7 +237,8 @@ impl Builder<'_> {
             }
             _ => {
                 // Edge i runs from vertex i to i + 1; its flag also decides whether vertex i is
-                // drawn as a point.
+                // drawn as a point. The outline restarts the line stipple.
+                s.style.counter.set(0);
                 for i in 0..n {
                     if !edges[i] {
                         continue;
@@ -389,6 +390,8 @@ mod tests {
                 line_width: 1.,
                 point_size: 1.,
                 clip: Default::default(),
+                stipple: None,
+                counter: Default::default(),
             },
         }
     }

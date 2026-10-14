@@ -43,6 +43,8 @@ mod renderer;
 #[cfg(any(target_os = "horizon", test))]
 mod shader;
 #[cfg(any(target_os = "horizon", test))]
+mod stipple;
+#[cfg(any(target_os = "horizon", test))]
 mod texgen;
 #[cfg(any(target_os = "horizon", test))]
 mod texture;

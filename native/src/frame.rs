@@ -22,6 +22,7 @@ pub struct FrameState {
     pub lists: crate::lists::Lists,
     pub clip: crate::clip::ClipState,
     pub fog: crate::fog::Fog,
+    pub stipple: crate::stipple::Stipple,
     pub texgen: crate::texgen::TexGen,
     pub light: crate::lighting::Lighting,
     pub eval: crate::evaluator::Evaluators,
@@ -47,6 +48,7 @@ impl FrameState {
             lists: crate::lists::Lists::new(),
             clip: crate::clip::ClipState::new(),
             fog: crate::fog::Fog::new(),
+            stipple: crate::stipple::Stipple::new(),
             texgen: crate::texgen::TexGen::new(),
             light: crate::lighting::Lighting::new(),
             eval: crate::evaluator::Evaluators::new(),
@@ -271,6 +273,11 @@ fn query(
     }
     if let Some(v) = s.fog.query(pname) {
         return Some(v);
+    }
+    if let Some(x) = s.stipple.query(pname) {
+        let mut v = [0.; 16];
+        v[0] = x;
+        return Some((v, 1));
     }
     if let Some(v) = s.textures.query(pname) {
         return Some(v);

@@ -310,11 +310,12 @@ mod tests {
         matrix[3] = 1.;
         let matrices = [matrix; 3];
         let scales = [[0.75, 0.5], [0.5, 0.25], [1., 1.]];
-        texture_matrix(&mut commands, &matrices, &scales, &[false; 3]).unwrap();
+        texture_matrix(&mut commands, &matrices, &scales, &[false; 3], None).unwrap();
         let writes = decode(commands.as_slice());
-        assert_eq!(writes[0], (r::VSH_FLOATUNIFORM_CONFIG as u32, 0x80000005));
-        let data: alloc::vec::Vec<u32> = writes[1..].iter().map(|w| w.1).collect();
-        assert_eq!(data.len(), 28);
+        assert_eq!(writes[0], (r::VSH_BOOLUNIFORM as u32, 0x7fff0000));
+        assert_eq!(writes[1], (r::VSH_FLOATUNIFORM_CONFIG as u32, 0x80000005));
+        let data: alloc::vec::Vec<u32> = writes[2..].iter().map(|w| w.1).collect();
+        assert_eq!(data.len(), 32);
         // Unit 0: s, t, q rows; vectors are stored w, z, y, x.
         assert_eq!(data[0..4], [0.1875f32.to_bits(), 0, 0, 0.75f32.to_bits()]);
         assert_eq!(data[4..8], [0, 0, 0.5f32.to_bits(), 0]);
@@ -326,7 +327,7 @@ mod tests {
         assert_eq!(data[24..28], [0, 0, 1f32.to_bits(), 0]);
         let mut small = [7; TEXMATRIX_WORDS + DRAW_WORDS + 8 + FINISH_WORDS - 1];
         let mut commands = Commands::new(&mut small);
-        assert!(texture_matrix(&mut commands, &matrices, &scales, &[false; 3]).is_err());
+        assert!(texture_matrix(&mut commands, &matrices, &scales, &[false; 3], None).is_err());
         assert_eq!(commands.used, 0);
         assert!(small.iter().all(|word| *word == 7));
     }
@@ -352,7 +353,7 @@ mod tests {
         let mut off = t;
         off.enabled = false;
         off.tev = [0, 0, 0, 0, 0];
-        texture(&mut c, [t, t, off], true).unwrap();
+        texture(&mut c, [t, t, off], true, None).unwrap();
         assert!(c.used <= TEXTURE_WORDS);
         let writes = decode(c.as_slice());
         let value = |reg: u16| writes.iter().rev().find(|w| w.0 == reg as u32).map(|w| w.1);
@@ -373,7 +374,7 @@ mod tests {
         // An enabled but incomplete texture binds no image and activates no unit.
         t.complete = false;
         let mut c = Commands::new(&mut words);
-        texture(&mut c, [t, off, off], true).unwrap();
+        texture(&mut c, [t, off, off], true, None).unwrap();
         let writes = decode(c.as_slice());
         assert_eq!(
             writes.iter().find(|w| w.0 == 0x0080).map(|w| w.1),
@@ -382,7 +383,7 @@ mod tests {
         assert!(writes.iter().all(|w| w.0 != 0x0085));
         let mut too_small = [7; TEXTURE_WORDS + DRAW_WORDS + 8 + FINISH_WORDS - 1];
         let mut c = Commands::new(&mut too_small);
-        assert!(texture(&mut c, [t, t, t], true).is_err());
+        assert!(texture(&mut c, [t, t, t], true, None).is_err());
         assert_eq!(c.used, 0);
         assert!(too_small.iter().all(|v| *v == 7));
     }
@@ -555,26 +556,42 @@ pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster, clip: bool)
     seq(c, r::SCISSORTEST_MODE, &s.scissor_words())
 }
 
-pub const TEXTURE_WORDS: usize = 90;
+pub const TEXTURE_WORDS: usize = 110;
+/// The polygon stipple pattern as the GPU samples it: unit 0 holds a 32x32 A8 texture and TexEnv
+/// stage 3 gives the fragments outside the pattern an alpha that fails the alpha test (`high`:
+/// alpha + (1 - texel alpha), else alpha - (1 - texel alpha)). GL unit n is then PICA unit n + 1.
+#[derive(Clone, Copy)]
+pub(crate) struct StippleUnit {
+    pub address: u32,
+    pub high: bool,
+}
+
 pub(crate) fn texture(
     c: &mut Commands<'_>,
     units: [crate::texture::Packet; 3],
     projective: bool,
+    stipple: Option<StippleUnit>,
 ) -> Result<(), ()> {
     if c.words.len() - c.used < TEXTURE_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
         return Err(());
     }
-    let mut active = 0;
+    let shift = stipple.is_some() as usize;
+    let mut active = stipple.is_some() as u32;
     for (unit, t) in units.iter().enumerate() {
-        active |= ((t.enabled && t.complete) as u32) << unit;
+        active |= ((t.enabled && t.complete) as u32) << (unit + shift);
     }
     masked(c, r::TEXUNIT_CONFIG, 11, (1 << 12) | active)?;
     // Every changed binding/image invalidates texture cache, without evicting VBOs.
     masked(c, r::TEXUNIT_CONFIG, 4, 1 << 16)?;
+    if let Some(s) = stipple {
+        // 32x32 A8, repeated, nearest, sampled in projection mode.
+        seq(c, 0x0081, &[0, 0x0020_0020, 0x3000_2200, 0, s.address >> 3])?;
+        one(c, 0x008e, 8)?;
+    }
     for (unit, t) in units.iter().enumerate() {
         let envs = [r::TEXENV0_SOURCE, r::TEXENV1_SOURCE, r::TEXENV2_SOURCE];
         if t.enabled && t.complete {
-            match unit {
+            match unit + shift {
                 0 => {
                     seq(
                         c,
@@ -610,6 +627,22 @@ pub(crate) fn texture(
         // Disabled units (including incomplete textures) pass the previous stage through.
         seq(c, envs[unit], &t.tev)?;
     }
+    // Stage 3 passes the color through; with polygon stipple the alpha is combined with the
+    // pattern texel (unit 0, previous stage, primary color).
+    seq(
+        c,
+        r::TEXENV3_SOURCE,
+        &match stipple {
+            Some(s) => [
+                0x003f_000f,
+                0x10000,
+                (if s.high { 2 } else { 5 }) << 16,
+                u32::MAX,
+                0,
+            ],
+            None => [0x000f_000f, 0, 0, u32::MAX, 0],
+        },
+    )?;
     one(c, r::VSH_FLOATUNIFORM_CONFIG, 0x80000004)?;
     write(
         c,
@@ -620,21 +653,32 @@ pub(crate) fn texture(
     )
 }
 
-pub const TEXMATRIX_WORDS: usize = 40;
-/// Uniforms c5..c7 (unit 0: s, t, q) and c8..c11 (units 1, 2: s, t), scaled for NPOT storage.
+pub const TEXMATRIX_WORDS: usize = 50;
+/// Uniforms c5..c7 (unit 0: s, t, q), c8..c11 (units 1, 2: s, t) and c12 (q of unit 0), scaled for
+/// NPOT storage; `stipple`: the pattern rows (see `StippleUnit`).
 pub(crate) fn texture_matrix(
     c: &mut Commands<'_>,
     matrices: &[[f32; 16]; 3],
     scales: &[[f32; 2]; 3],
     flips: &[bool; 3],
+    stipple: Option<&[[f32; 4]; 3]>,
 ) -> Result<(), ()> {
     if c.words.len() - c.used < TEXMATRIX_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
         return Err(());
     }
-    let mut data = [0; 28];
-    let mut slot = 0;
+    let mut data = [0; 32];
+    // Rows (s, t, q for unit 0; s, t for the others) go to c5.. in unit order; with polygon stipple
+    // c5..c7 hold the pattern and GL unit 0 and 1 move to c8..c11.
+    let mut slot = if stipple.is_some() { 3 } else { 0 };
     for unit in 0..3 {
-        let rows: &[usize] = if unit == 0 { &[0, 1, 3] } else { &[0, 1] };
+        if stipple.is_some() && unit == 2 {
+            break;
+        }
+        let rows: &[usize] = if unit == 0 && stipple.is_none() {
+            &[0, 1, 3]
+        } else {
+            &[0, 1]
+        };
         for (n, component) in rows.iter().enumerate() {
             for col in 0..4 {
                 let scaled = if n < 2 { scales[unit][n] } else { 1. };
@@ -646,6 +690,18 @@ pub(crate) fn texture_matrix(
                 data[slot * 4 + 3 - col] = value.to_bits();
             }
             slot += 1;
+        }
+    }
+    // c12: the q row of unit 0, divided by in the shader when GL unit 0 moves to texcoord 1.
+    for col in 0..4 {
+        data[28 + 3 - col] = matrices[0][col * 4 + 3].to_bits();
+    }
+    one(c, r::VSH_BOOLUNIFORM, 0x7fff0000 | stipple.is_some() as u32)?;
+    if let Some(rows) = stipple {
+        for (n, row) in rows.iter().enumerate() {
+            for col in 0..4 {
+                data[n * 4 + 3 - col] = row[col].to_bits();
+            }
         }
     }
     one(c, r::VSH_FLOATUNIFORM_CONFIG, 0x80000005)?;

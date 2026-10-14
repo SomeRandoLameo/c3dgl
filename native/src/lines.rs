@@ -15,7 +15,18 @@ pub(crate) struct Style {
     pub point_size: f32,
     /// User clip planes in object space.
     pub clip: crate::clip::Planes,
+    /// Line stipple (factor, pattern) when enabled.
+    pub stipple: Option<(u32, u16)>,
+    /// Fragments of the current strip so far (the stipple position carried between segments).
+    pub counter: core::cell::Cell<u32>,
 }
+
+extern "C" {
+    fn ceilf(x: f32) -> f32;
+}
+
+/// Width of the window in which stippled lines emit quads.
+const SCREEN_WIDTH: f32 = 400.;
 
 /// Vertices a primitive mode of `count` vertices consumes (0 points, 1 lines, 2 loop, 3 strip).
 pub(crate) fn consumed(mode: u32, count: usize) -> usize {
@@ -156,6 +167,21 @@ pub(crate) fn segment(
         dy /= len;
     }
     let r = 0.5 * s.line_width;
+    if let (Some((factor, pattern)), true) = (s.stipple, len >= 1e-6) {
+        // The caps reach r further along the line, r * |major component of the direction| along
+        // the major axis.
+        let cap = r * dx.abs().max(dy.abs());
+        return stippled(
+            s,
+            (factor, pattern),
+            (&va, &vb),
+            (pa, pb),
+            (-dy * r / half_w, dx * r / half_h),
+            cap,
+            out,
+            indices,
+        );
+    }
     let (nx, ny) = (-dy * r / half_w, dx * r / half_h);
     let (ex, ey) = (dx * r / half_w, dy * r / half_h);
     quad(
@@ -168,6 +194,98 @@ pub(crate) fn segment(
             at(&vb, pb[0] + ex - nx, pb[1] + ey - ny, pb[2]),
         ],
     )
+}
+
+/// Line stipple (GL 1.1 section 3.4.2): fragment s of a strip (counted along the major axis,
+/// carried over from segment to segment) is drawn when bit (s / factor) % 16 of the pattern is
+/// set. Fragment k of the segment is the pixel column (row) k whose center lies in [start, end)
+/// along the major axis; each run of drawn fragments becomes a quad that ends on the pixel
+/// edges between them, clipped to the line with its square caps (`cap_u` along the major axis).
+#[allow(clippy::too_many_arguments)]
+fn stippled(
+    s: &Style,
+    (factor, pattern): (u32, u16),
+    (a, b): (&GpuVertex, &GpuVertex),
+    (pa, pb): ([f32; 3], [f32; 3]),
+    (nx, ny): (f32, f32),
+    cap_u: f32,
+    out: &mut Vec<GpuVertex>,
+    indices: &mut Vec<u16>,
+) -> Result<(), u32> {
+    let vp = s.viewport;
+    let (half_w, half_h) = (0.5 * vp[2] as f32, 0.5 * vp[3] as f32);
+    let wa = [
+        vp[0] as f32 + (pa[0] + 1.) * half_w,
+        vp[1] as f32 + (pa[1] + 1.) * half_h,
+    ];
+    let wb = [
+        vp[0] as f32 + (pb[0] + 1.) * half_w,
+        vp[1] as f32 + (pb[1] + 1.) * half_h,
+    ];
+    let axis = if (wb[0] - wa[0]).abs() >= (wb[1] - wa[1]).abs() {
+        0
+    } else {
+        1
+    };
+
+    // u: window coordinate along the major axis, mirrored to increase from a to b.
+    let sign = if wb[axis] >= wa[axis] { 1. } else { -1. };
+    let (ua, ub) = (sign * wa[axis], sign * wb[axis]);
+    // First fragment, one past the last; endpoints within 1/256 pixel of a center (rounding of
+    // vertices given at pixel centers) count as on it.
+    let first = unsafe { ceilf(ua - 0.5 - 1. / 256.) };
+    let end = unsafe { ceilf(ub - 0.5 - 1. / 256.) };
+    if !(end > first) {
+        return Ok(());
+    }
+
+    let period = 16 * factor;
+    let advance = |from: f32, to: f32| ((to - from) as u64 % period as u64) as u32;
+    let mut at_start = s.counter.get();
+    s.counter.set((at_start + advance(first, end)) % period);
+
+    // Quads only for the fragments that can be on the screen (window 0..400 along either axis,
+    // plus the line width).
+    let margin = unsafe { ceilf(2. * cap_u) } + 1.;
+    let screen0 = (if sign > 0. { 0. } else { -SCREEN_WIDTH }) - margin;
+    let k0 = first.max(screen0);
+    let k1 = end.min(screen0 + SCREEN_WIDTH + 2. * margin);
+    if !(k1 > k0) {
+        return Ok(());
+    }
+    at_start = (at_start + advance(first, k0)) % period;
+
+    let on = |k: u32| (pattern >> (((at_start + k) % period) / factor)) & 1 != 0;
+    let n = (k1 - k0) as u32;
+    let mut k = 0;
+    while k < n {
+        let lit = on(k);
+        let mut run = k + 1;
+        while run < n && on(run) == lit {
+            run += 1;
+        }
+        if lit {
+            let u0 = (k0 + k as f32).max(ua - cap_u);
+            let u1 = (k0 + run as f32).min(ub + cap_u);
+            let (t0, t1) = ((u0 - ua) / (ub - ua), (u1 - ua) / (ub - ua));
+            let (t0, t1) = (t0.clamp(0., 1.), t1.clamp(0., 1.));
+            let (va, vb) = (lerp(a, b, t0), lerp(a, b, t1));
+            let p0: [f32; 3] = core::array::from_fn(|i| pa[i] + (pb[i] - pa[i]) * t0);
+            let p1: [f32; 3] = core::array::from_fn(|i| pa[i] + (pb[i] - pa[i]) * t1);
+            quad(
+                out,
+                indices,
+                [
+                    at(&va, p0[0] - nx, p0[1] - ny, p0[2]),
+                    at(&va, p0[0] + nx, p0[1] + ny, p0[2]),
+                    at(&vb, p1[0] + nx, p1[1] + ny, p1[2]),
+                    at(&vb, p1[0] - nx, p1[1] - ny, p1[2]),
+                ],
+            )?;
+        }
+        k = run;
+    }
+    Ok(())
 }
 
 /// The color of `pv` on `v` (flat shading).
@@ -187,6 +305,8 @@ pub(crate) fn expand(
     flat: bool,
 ) -> Result<(Vec<GpuVertex>, Vec<u16>), u32> {
     let (mut out, mut indices) = (Vec::new(), Vec::new());
+    // A primitive starts a strip.
+    s.counter.set(0);
     let mut line = |a: &GpuVertex, b: &GpuVertex, pv: &GpuVertex| {
         if flat {
             segment(
@@ -210,6 +330,8 @@ pub(crate) fn expand(
         }
         1 => {
             for pair in v.chunks_exact(2) {
+                // Every line of GL_LINES restarts the pattern.
+                s.counter.set(0);
                 line(&pair[0], &pair[1], &pair[1])?;
             }
         }
@@ -247,6 +369,8 @@ mod tests {
             line_width: width,
             point_size: size,
             clip: Default::default(),
+            stipple: None,
+            counter: Default::default(),
         }
     }
 

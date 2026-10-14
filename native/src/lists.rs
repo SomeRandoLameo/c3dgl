@@ -34,6 +34,8 @@ pub(crate) enum Cmd {
     PolygonOffset(f32, f32),
     DepthRange(f64, f64),
     LineWidth(f32),
+    LineStipple(i32, u16),
+    PolygonStipple(Vec<u8>),
     PointSize(f32),
     MatrixMode(u32),
     PushMatrix,
@@ -197,7 +199,7 @@ pub(crate) unsafe fn compiling() -> bool {
 unsafe fn execute(cmd: &Cmd) {
     use crate::{
         blend::*, clip::*, evaluator::*, fog::*, frame::*, immediate::*, lighting::*, matrix::*,
-        raster::*, texgen::*, texture::*,
+        raster::*, stipple::*, texgen::*, texture::*,
     };
     match cmd {
         Cmd::Enable(cap, on) => {
@@ -230,6 +232,12 @@ unsafe fn execute(cmd: &Cmd) {
         Cmd::PolygonOffset(a, b) => glPolygonOffset(*a, *b),
         Cmd::DepthRange(a, b) => glDepthRange(*a, *b),
         Cmd::LineWidth(w) => glLineWidth(*w),
+        Cmd::LineStipple(f, p) => glLineStipple(*f, *p),
+        Cmd::PolygonStipple(m) => {
+            if let Ok(mask) = <[u8; 128]>::try_from(m.as_slice()) {
+                crate::stipple::set_polygon_mask(mask);
+            }
+        }
         Cmd::PointSize(s) => glPointSize(*s),
         Cmd::MatrixMode(m) => glMatrixMode(*m),
         Cmd::PushMatrix => glPushMatrix(),

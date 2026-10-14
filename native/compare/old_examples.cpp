@@ -44,6 +44,9 @@
 #else
 #define CASE "glu0"
 #endif
+#elif defined(C3DGL_OLD_STIPPLE)
+#include "../../examples/stipple/main.cpp"
+#define CASE "stipple"
 #elif defined(C3DGL_OLD_SELECT)
 #include "../../examples/select/main.cpp"
 #define CASE "select"
@@ -147,6 +150,12 @@ int main() {
     initBumpPatch();
     const Renderers renderers={newRenderer(GLU_FILL),newRenderer(GLU_OUTLINE_POLYGON),newRenderer(GLU_OUTLINE_PATCH)};
     drawNurbsRendererPage(renderers,0.0f,tex);
+#elif defined(C3DGL_OLD_STIPPLE)
+    // The first frame of the original main loop (angle 0.5)
+    const GLuint tex=createTexture();
+    setupScene();
+    drawFrame(0.5f,tex);
+    glDeleteTextures(1,&tex);
 #elif defined(C3DGL_OLD_SELECT)
     // The first frame of the original main loop: initial angle and cursor, GL_SELECT then GL_FEEDBACK
     setupScene();

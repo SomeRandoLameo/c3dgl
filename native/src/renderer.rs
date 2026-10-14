@@ -102,6 +102,10 @@ pub(crate) struct Renderer {
     /// The fog state the GPU holds (None: no fog).
     fog_key: Option<crate::fog::Key>,
     clip_applied: bool,
+    /// The polygon stipple the GPU holds: pattern rows, texture address, alpha function.
+    stipple_applied: Option<([u32; 12], u32, bool)>,
+    /// Texture of the pattern the GPU samples, with the pattern it was made from.
+    stipple_texture: Option<(Buffer, [u8; 128])>,
     /// Polygon offset folded into the uploaded matrix.
     bias_applied: f32,
 }
@@ -351,6 +355,8 @@ impl Renderer {
         core::ptr::addr_of_mut!((*slot).stacks).write(crate::attrib::Stacks::default());
         core::ptr::addr_of_mut!((*slot).fog_key).write(None);
         core::ptr::addr_of_mut!((*slot).clip_applied).write(false);
+        core::ptr::addr_of_mut!((*slot).stipple_applied).write(None);
+        core::ptr::addr_of_mut!((*slot).stipple_texture).write(None);
         core::ptr::addr_of_mut!((*slot).bias_applied).write(0.);
         Some(alloc::boxed::Box::from_raw(slot))
     }
@@ -375,6 +381,7 @@ impl Renderer {
 
         self.generation = generation;
         self.clip_applied = false;
+        self.stipple_applied = None;
         self.fog_key = None;
         self.bias_applied = 0.;
         self.matrices.dirty = true;
@@ -584,6 +591,53 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
     0
 }
 
+/// The polygon stipple of the next filled draw: pattern rows, texture address and the alpha
+/// function of its test; None (with a GL error) when it cannot be applied. `alpha` receives the
+/// alpha test that drops the fragments outside the pattern.
+unsafe fn stipple_state(
+    r: &mut Renderer,
+    alpha: &mut Option<(u32, u8)>,
+) -> Option<([[f32; 4]; 3], u32, bool)> {
+    if r.frame.textures.packets()[2].enabled {
+        r.matrices.fail(0x0502);
+        return None;
+    }
+    let mask = r.frame.stipple.mask;
+    if r.stipple_texture.as_ref().map(|t| t.1) != Some(mask) {
+        let buffer = Buffer::new(1024, false);
+        let Some(buffer) = buffer else {
+            r.matrices.fail(0x0505);
+            return None;
+        };
+        ptr::copy_nonoverlapping(crate::stipple::texels(&mask).as_ptr(), buffer.pointer, 1024);
+        if p::c3dglPlatformFlush(buffer.pointer, 1024) < 0 {
+            r.matrices.fail(0x0502);
+            return None;
+        }
+        // Queued draws keep sampling the previous pattern.
+        if let Some((old, _)) = r.stipple_texture.take() {
+            if r.frame.textures.retire(old).is_err() {
+                r.matrices.fail(0x0505);
+                return None;
+            }
+        }
+        r.stipple_texture = Some((buffer, mask));
+    }
+    let raster = &r.frame.raster;
+    let (func, reference, high, exact) =
+        crate::stipple::alpha_test(raster.alpha, raster.alpha_func, raster.alpha_ref);
+    if !exact {
+        r.matrices.fail(0x0502);
+    }
+    *alpha = Some((func, reference));
+    let address = r.stipple_texture.as_ref()?.0.physical();
+    Some((
+        crate::stipple::rows(&r.matrices.combined(), r.frame.viewport),
+        address,
+        high,
+    ))
+}
+
 // Keep matrix/viewport packet work out of the unchanged-state draw loop.
 #[inline(never)]
 unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(), ()> {
@@ -604,7 +658,31 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
         None
     };
 
-    let raster = (r.frame.raster.dirty || clip_changed).then_some(r.frame.raster);
+    // Polygon stipple applies to filled polygons (not to expanded lines and points, nor to the
+    // clear quad) and takes PICA texture unit 0, so GL unit 2 cannot be sampled with it.
+    let mut stipple_alpha = None;
+    let stipple = if !clip && r.frame.stipple.polygon && !r.frame.textures.suspended {
+        stipple_state(r, &mut stipple_alpha)
+    } else {
+        None
+    };
+    let stipple_key = stipple.map(|(rows, address, high)| {
+        (
+            core::array::from_fn(|i| rows[i / 4][i % 4].to_bits()),
+            address,
+            high,
+        )
+    });
+    let stipple_changed = stipple_key != r.stipple_applied;
+    r.frame.textures.set_stipple(stipple.is_some());
+
+    let mut raster_state = r.frame.raster;
+    if let Some((func, reference)) = stipple_alpha {
+        raster_state.alpha = true;
+        raster_state.alpha_func = func;
+        raster_state.alpha_ref = reference;
+    }
+    let raster = (r.frame.raster.dirty || clip_changed || stipple_changed).then_some(raster_state);
     let texgen_units = r.frame.texgen.unit_mask();
     let tex_matrix = |unit: usize| {
         if texgen_units >> unit & 1 != 0 {
@@ -622,8 +700,8 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
             m[3] != 0. || m[7] != 0. || m[15] != 1.
         };
 
-    let texture =
-        (r.frame.textures.dirty || r.matrices.texture_dirty).then(|| r.frame.textures.packets());
+    let texture = (r.frame.textures.dirty || r.matrices.texture_dirty || stipple_changed)
+        .then(|| r.frame.textures.packets());
     let texmatrix = (r.matrices.texture_dirty || texture.is_some()).then(|| {
         let packets = r.frame.textures.packets();
         (
@@ -663,11 +741,13 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
     }
 
     if let Some(t) = texture {
-        gpu::texture(&mut commands, t, projective)?;
+        let unit = stipple.map(|(_, address, high)| gpu::StippleUnit { address, high });
+        gpu::texture(&mut commands, t, projective, unit)?;
     }
 
     if let Some((matrices, scales, flips)) = texmatrix {
-        gpu::texture_matrix(&mut commands, &matrices, &scales, &flips)?;
+        let rows = stipple.map(|(rows, _, _)| rows);
+        gpu::texture_matrix(&mut commands, &matrices, &scales, &flips, rows.as_ref())?;
     }
     if let Some(v) = viewport {
         if gpu::viewport(&mut commands, v).is_err() {
@@ -684,6 +764,7 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
     r.used = commands.used;
     r.fog_key = fog_key;
     r.clip_applied = clip;
+    r.stipple_applied = stipple_key;
     if clip {
         r.bias_applied = 0.;
     } else {
@@ -1359,6 +1440,8 @@ fn line_style(r: &Renderer) -> crate::lines::Style {
         line_width: r.frame.line_width,
         point_size: r.frame.point_size,
         clip: r.frame.clip.object_planes(&r.matrices.modelview()),
+        stipple: r.frame.stipple.line_style(),
+        counter: Default::default(),
     }
 }
 

@@ -18,6 +18,7 @@ const CURRENT: u32 = 0x1;
 const POINT: u32 = 0x2;
 const LINE: u32 = 0x4;
 const POLYGON: u32 = 0x8;
+const POLYGON_STIPPLE: u32 = 0x10;
 const LIGHTING: u32 = 0x40;
 const FOG: u32 = 0x80;
 const DEPTH_BUFFER: u32 = 0x100;
@@ -54,6 +55,7 @@ pub(crate) struct Saved {
     textures: TexSave,
     texgen: crate::texgen::TexGen,
     fog: crate::fog::Fog,
+    stipple: crate::stipple::Stipple,
     clip: crate::clip::ClipState,
     list_base: u32,
     mode: usize,
@@ -111,6 +113,7 @@ pub unsafe extern "C" fn glPushAttrib(mask: u32) {
             textures: f.textures.save(),
             texgen: f.texgen.clone(),
             fog: f.fog,
+            stipple: f.stipple,
             clip: f.clip,
             list_base: f.lists.base,
             mode: r.matrices.mode(),
@@ -135,6 +138,12 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
     }
     if mask & LINE != 0 {
         f.line_width = a.line_width;
+        f.stipple.line = a.stipple.line;
+        f.stipple.factor = a.stipple.factor;
+        f.stipple.pattern = a.stipple.pattern;
+    }
+    if mask & POLYGON_STIPPLE != 0 {
+        f.stipple.mask = a.stipple.mask;
     }
     if mask & POLYGON != 0 {
         f.raster.cull = a.raster.cull;
@@ -144,6 +153,7 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         f.poly.offset = a.poly.offset;
         f.poly.factor = a.poly.factor;
         f.poly.units = a.poly.units;
+        f.stipple.polygon = a.stipple.polygon;
     }
     if mask & LIGHTING != 0 {
         f.poly.flat = a.poly.flat;
@@ -188,6 +198,8 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         f.poly.offset = a.poly.offset;
         f.light.restore_enables(&a.light);
         f.fog.enabled = a.fog.enabled;
+        f.stipple.line = a.stipple.line;
+        f.stipple.polygon = a.stipple.polygon;
         f.clip.enabled = a.clip.enabled;
         f.eval.restore_enables(&a.eval);
         f.texgen.restore_enables(&a.texgen);
