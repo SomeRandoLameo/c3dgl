@@ -1,11 +1,16 @@
 ; Object-space position; c0..c3 hold rows of the tilted GL MVP matrix.
+; c5..c7: unit 0 texture matrix rows (s, t, q); c8/c9: unit 1; c10/c11: unit 2.
 .out outpos position
 .out outclr color
 .out outtex texcoord0.st
 .out - texcoord0w outtex.p
+.out outtex1 texcoord1
+.out outtex2 texcoord2
 .alias inpos v0
 .alias inclr v1
 .alias intex v2
+.alias intex1 v3
+.alias intex2 v4
 .alias matrix c0-c3
 .constf color_scale(0.00392156862745, 0.0, 0.0, 0.0)
 .proc main
@@ -18,5 +23,9 @@
     dp4 outtex.y, c6, intex
     dp4 outtex.z, c7, intex
     mov outtex.w, c4.w
+    dp4 outtex1.x, c8, intex1
+    dp4 outtex1.y, c9, intex1
+    dp4 outtex2.x, c10, intex2
+    dp4 outtex2.y, c11, intex2
     end
 .end

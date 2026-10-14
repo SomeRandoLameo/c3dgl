@@ -4,9 +4,11 @@
 #if defined(C3DGL_OLD_PRIMITIVES)
 #include "../../examples/primitives/main.cpp"
 #define CASE "primitives"
-#elif defined(C3DGL_OLD_TEXTURE) || defined(C3DGL_OLD_TEXCOORDS) || defined(C3DGL_OLD_TEXMATRIX)
+#elif defined(C3DGL_OLD_TEXTURE) || defined(C3DGL_OLD_TEXCOORDS) || defined(C3DGL_OLD_TEXMATRIX) || defined(C3DGL_OLD_MULTITEXTURE)
 #include "../../examples/texture/main.cpp"
-#ifdef C3DGL_OLD_TEXMATRIX
+#ifdef C3DGL_OLD_MULTITEXTURE
+#define CASE "multitexture"
+#elif defined(C3DGL_OLD_TEXMATRIX)
 #define CASE "texmatrix"
 #elif defined(C3DGL_OLD_TEXCOORDS)
 #define CASE "texcoords"
@@ -38,6 +40,8 @@ int main() {
     beginCell(1,1);drawQuadStrip();
     beginCell(2,1);drawPolygon();
     glDisable(GL_CULL_FACE);
+#elif defined(C3DGL_OLD_MULTITEXTURE)
+    const GLuint tex=createF(16);const MultiTextures multi=createMultiTextures(tex);drawMultitexturePage(multi);
 #elif defined(C3DGL_OLD_TEXMATRIX)
     const GLuint tex=createF(16), npot=createF(12);drawTextureMatrixPage(tex,npot,0.0f);
     glDeleteTextures(1,&npot);

@@ -118,32 +118,32 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
         write(c, r::VSH_FLOATUNIFORM_DATA, 15, values, false)?;
     }
     one(c, r::VSH_ENTRYPOINT, 0x7fff0000 | shader::ENTRY)?;
-    one(c, r::VSH_OUTMAP_MASK, 7)?;
-    one(c, r::VSH_OUTMAP_TOTAL1, 2)?;
-    one(c, r::VSH_OUTMAP_TOTAL2, 2)?;
+    one(c, r::VSH_OUTMAP_MASK, 0x1f)?;
+    one(c, r::VSH_OUTMAP_TOTAL1, 4)?;
+    one(c, r::VSH_OUTMAP_TOTAL2, 4)?;
     masked(c, r::PRIMITIVE_CONFIG, 1, 1)?;
     seq(
         c,
         r::SH_OUTMAP_TOTAL,
         &[
-            3, 0x03020100, 0x0b0a0908, 0x1f100d0c, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f,
+            5, 0x03020100, 0x0b0a0908, 0x1f100d0c, 0x1f1f0f0e, 0x1f1f1716, 0x1f1f1f1f, 0x1f1f1f1f,
         ],
     )?;
     one(c, r::SH_OUTATTR_MODE, 1)?;
-    one(c, r::SH_OUTATTR_CLOCK, 3 | (1 << 8))?;
+    one(c, r::SH_OUTATTR_CLOCK, 3 | (7 << 8))?;
     masked(c, r::GEOSTAGE_CONFIG, 10, 0)?;
     one(c, r::GSH_MISC0, 0)?;
     one(c, r::GSH_MISC1, 0)?;
     one(c, r::GSH_INPUTBUFFER_CONFIG, 0xa0000000)?;
-    // v0/v1/v2: float4 position/color/UV; the stride also covers the extra texture units.
-    seq(c, r::ATTRIBBUFFERS_FORMAT_LOW, &[0xfff, 0x2ff80000])?;
-    masked(c, r::VSH_INPUTBUFFER_CONFIG, 11, 0xa0000002)?;
-    one(c, r::VSH_NUM_ATTR, 2)?;
-    seq(c, r::VSH_ATTRIBUTES_PERMUTATION_LOW, &[0x210, 0])?;
+    // v0/v1/v2: float4 position/color/UV0/UV1/UV2.
+    seq(c, r::ATTRIBBUFFERS_FORMAT_LOW, &[0xfffff, 0x4fe00000])?;
+    masked(c, r::VSH_INPUTBUFFER_CONFIG, 11, 0xa0000004)?;
+    one(c, r::VSH_NUM_ATTR, 4)?;
+    seq(c, r::VSH_ATTRIBUTES_PERMUTATION_LOW, &[0x43210, 0])?;
     one(c, r::ATTRIBBUFFERS_LOC, vertices >> 3)?;
     let mut buffers = [0; 36];
-    buffers[1] = 0x210;
-    buffers[2] = ((core::mem::size_of::<crate::renderer::GpuVertex>() as u32) << 16) | 0x30000000;
+    buffers[1] = 0x43210;
+    buffers[2] = ((core::mem::size_of::<crate::renderer::GpuVertex>() as u32) << 16) | 0x50000000;
     seq(c, r::ATTRIBBUFFER0_OFFSET, &buffers)?;
     finish(c)
 }
@@ -280,6 +280,26 @@ pub fn finish(c: &mut Commands<'_>) -> Result<(), ()> {
 mod tests {
     use super::*;
 
+    /// Flatten a command stream into (register, value) writes.
+    fn decode(words: &[u32]) -> alloc::vec::Vec<(u32, u32)> {
+        let mut out = alloc::vec::Vec::new();
+        let mut i = 0;
+        while i + 1 < words.len() {
+            let header = words[i + 1];
+            let (register, extra, inc) = (
+                header & 0x3ff,
+                ((header >> 20) & 0xff) as usize,
+                header >> 31 != 0,
+            );
+            for n in 0..=extra {
+                let value = if n == 0 { words[i] } else { words[i + 1 + n] };
+                out.push((if inc { register + n as u32 } else { register }, value));
+            }
+            i += 2 + ((extra + 1) & !1);
+        }
+        out
+    }
+
     #[test]
     fn texture_matrix_scales_rows_without_scaling_projective_q() {
         let mut words = [0; 128];
@@ -287,25 +307,32 @@ mod tests {
         let mut matrix = crate::matrix::IDENTITY;
         matrix[12] = 0.25;
         matrix[3] = 1.;
-        texture_matrix(&mut commands, &matrix, [0.75, 0.5]).unwrap();
-        let packet = commands.as_slice();
-        assert_eq!(packet[0], 0x80000005);
-        let data: alloc::vec::Vec<_> = core::iter::once(packet[2])
-            .chain(packet[4..15].iter().copied())
-            .collect();
+        let matrices = [matrix; 3];
+        let scales = [[0.75, 0.5], [0.5, 0.25], [1., 1.]];
+        texture_matrix(&mut commands, &matrices, &scales).unwrap();
+        let writes = decode(commands.as_slice());
+        assert_eq!(writes[0], (r::VSH_FLOATUNIFORM_CONFIG as u32, 0x80000005));
+        let data: alloc::vec::Vec<u32> = writes[1..].iter().map(|w| w.1).collect();
+        assert_eq!(data.len(), 28);
+        // Unit 0: s, t, q rows; vectors are stored w, z, y, x.
         assert_eq!(data[0..4], [0.1875f32.to_bits(), 0, 0, 0.75f32.to_bits()]);
         assert_eq!(data[4..8], [0, 0, 0.5f32.to_bits(), 0]);
         assert_eq!(data[8..12], [1f32.to_bits(), 0, 0, 1f32.to_bits()]);
-        let mut small = [7; 16 + DRAW_WORDS + 8 + FINISH_WORDS - 1];
+        // Unit 1: scaled s and t rows; unit 2 unscaled.
+        assert_eq!(data[12..16], [0.125f32.to_bits(), 0, 0, 0.5f32.to_bits()]);
+        assert_eq!(data[16..20], [0, 0, 0.25f32.to_bits(), 0]);
+        assert_eq!(data[20..24], [0.25f32.to_bits(), 0, 0, 1f32.to_bits()]);
+        assert_eq!(data[24..28], [0, 0, 1f32.to_bits(), 0]);
+        let mut small = [7; TEXMATRIX_WORDS + DRAW_WORDS + 8 + FINISH_WORDS - 1];
         let mut commands = Commands::new(&mut small);
-        assert!(texture_matrix(&mut commands, &matrix, [1.; 2]).is_err());
+        assert!(texture_matrix(&mut commands, &matrices, &scales).is_err());
         assert_eq!(commands.used, 0);
         assert!(small.iter().all(|word| *word == 7));
     }
 
     #[test]
-    fn texture_binding_modulation_incompleteness_and_overflow() {
-        let mut words = [0; 128];
+    fn texture_binding_units_incompleteness_and_overflow() {
+        let mut words = [0; 160];
         let mut c = Commands::new(&mut words);
         let mut t = crate::texture::Packet {
             enabled: true,
@@ -315,30 +342,42 @@ mod tests {
             parameters: 0x2206,
             replace: false,
             scale: [1.; 2],
-            tev: [0; 5],
+            tev: [0x00300030, 0, 0x00010001, 0xff000000, 0],
         };
-        texture(&mut c, t).unwrap();
-        assert_eq!(c.used, TEXTURE_WORDS);
-        assert_eq!(c.as_slice()[0], 0x1001);
-        assert_eq!(c.as_slice()[2], 0x10000);
-        assert_eq!(c.as_slice()[5], 0x000f0081 | (4 << 20) | (1 << 31));
-        assert_eq!(c.as_slice()[6], t.dimensions);
-        assert_eq!(c.as_slice()[9], t.address >> 3);
-        assert_eq!(c.as_slice()[12], 0x00300030);
-        assert_eq!(c.as_slice()[15], 0x00010001);
+        let mut off = t;
+        off.enabled = false;
+        off.tev = [0, 0, 0, 0, 0];
+        texture(&mut c, [t, t, off]).unwrap();
+        assert!(c.used <= TEXTURE_WORDS);
+        let writes = decode(c.as_slice());
+        let value = |reg: u16| writes.iter().rev().find(|w| w.0 == reg as u32).map(|w| w.1);
+        assert_eq!(
+            writes.iter().find(|w| w.0 == 0x0080).map(|w| w.1),
+            Some(0x1000 | 3)
+        );
+        assert_eq!(value(0x0082), Some(t.dimensions));
+        assert_eq!(value(0x0083), Some(t.parameters | 0x30000000));
+        assert_eq!(value(0x0085), Some(t.address >> 3));
+        assert_eq!(value(0x0092), Some(t.dimensions));
+        assert_eq!(value(0x0093), Some(t.parameters));
+        assert_eq!(value(0x0095), Some(t.address >> 3));
+        assert_eq!(value(0x009a), None);
+        assert_eq!(value(r::TEXENV0_SOURCE), Some(0x00300030));
+        assert_eq!(value(r::TEXENV1_SOURCE + 2), Some(0x00010001));
+        assert_eq!(value(r::TEXENV2_SOURCE), Some(0));
+        // An enabled but incomplete texture binds no image and activates no unit.
         t.complete = false;
-        let start = c.used;
-        texture(&mut c, t).unwrap();
-        assert_eq!(c.as_slice()[start], 0x1000);
-        assert_eq!(c.as_slice()[start + 12], 0x00e000e0);
-        t.enabled = false;
-        let start = c.used;
-        texture(&mut c, t).unwrap();
-        assert_eq!(c.as_slice()[start + 12], 0);
-        assert_eq!(c.as_slice()[start + 15], 0);
+        let mut c = Commands::new(&mut words);
+        texture(&mut c, [t, off, off]).unwrap();
+        let writes = decode(c.as_slice());
+        assert_eq!(
+            writes.iter().find(|w| w.0 == 0x0080).map(|w| w.1),
+            Some(0x1000)
+        );
+        assert!(writes.iter().all(|w| w.0 != 0x0085));
         let mut too_small = [7; TEXTURE_WORDS + DRAW_WORDS + 8 + FINISH_WORDS - 1];
         let mut c = Commands::new(&mut too_small);
-        assert!(texture(&mut c, t).is_err());
+        assert!(texture(&mut c, [t, t, t]).is_err());
         assert_eq!(c.used, 0);
         assert!(too_small.iter().all(|v| *v == 7));
     }
@@ -482,78 +521,87 @@ pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster) -> Result<(
     )
 }
 
-pub const TEXTURE_WORDS: usize = 26;
-pub(crate) fn texture(c: &mut Commands<'_>, t: crate::texture::Packet) -> Result<(), ()> {
+pub const TEXTURE_WORDS: usize = 90;
+pub(crate) fn texture(c: &mut Commands<'_>, units: [crate::texture::Packet; 3]) -> Result<(), ()> {
     if c.words.len() - c.used < TEXTURE_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
         return Err(());
     }
-    let active = t.enabled && t.complete;
-    masked(c, r::TEXUNIT_CONFIG, 11, (1 << 12) | active as u32)?;
+    let mut active = 0;
+    for (unit, t) in units.iter().enumerate() {
+        active |= ((t.enabled && t.complete) as u32) << unit;
+    }
+    masked(c, r::TEXUNIT_CONFIG, 11, (1 << 12) | active)?;
     // Every changed binding/image invalidates texture cache, without evicting VBOs.
     masked(c, r::TEXUNIT_CONFIG, 4, 1 << 16)?;
-    seq(
-        c,
-        0x0081,
-        &[
-            0,
-            t.dimensions,
-            t.parameters | 0x30000000,
-            0,
-            t.address >> 3,
-        ],
-    )?;
-    one(c, 0x008e, 0)?; // Resident uploads are converted to RGBA8.
-    let source = if !t.enabled {
-        0
-    } else if t.complete {
-        if t.replace {
-            0x00030003
-        } else {
-            0x00300030
+    for (unit, t) in units.iter().enumerate() {
+        let envs = [r::TEXENV0_SOURCE, r::TEXENV1_SOURCE, r::TEXENV2_SOURCE];
+        if t.enabled && t.complete {
+            match unit {
+                0 => {
+                    seq(
+                        c,
+                        0x0081,
+                        &[
+                            0,
+                            t.dimensions,
+                            t.parameters | 0x30000000,
+                            0,
+                            t.address >> 3,
+                        ],
+                    )?;
+                    one(c, 0x008e, 0)?; // Resident uploads are converted to RGBA8.
+                }
+                1 => {
+                    seq(
+                        c,
+                        0x0091,
+                        &[0, t.dimensions, t.parameters, 0, t.address >> 3],
+                    )?;
+                    one(c, 0x0096, 0)?;
+                }
+                _ => {
+                    seq(
+                        c,
+                        0x0099,
+                        &[0, t.dimensions, t.parameters, 0, t.address >> 3],
+                    )?;
+                    one(c, 0x009e, 0)?;
+                }
+            }
         }
-    } else {
-        if t.replace {
-            0x000e000e
-        } else {
-            0x00e000e0
-        }
-    };
-    let combine = if t.enabled && !t.replace {
-        0x00010001
-    } else {
-        0
-    };
-    // Incomplete level-zero textures (including default mip filters) sample black, alpha one.
-    seq(c, r::TEXENV0_SOURCE, &[source, 0, combine, 0xff000000, 0])?;
+        // Incomplete level-zero textures (including default mip filters) sample black, alpha one.
+        seq(c, envs[unit], &t.tev)?;
+    }
     one(c, r::VSH_FLOATUNIFORM_CONFIG, 0x80000004)?;
     write(
         c,
         r::VSH_FLOATUNIFORM_DATA,
         15,
-        &[
-            1f32.to_bits(),
-            0,
-            t.scale[1].to_bits(),
-            t.scale[0].to_bits(),
-        ],
+        &[1f32.to_bits(), 0, 0, 0],
         false,
     )
 }
 
+pub const TEXMATRIX_WORDS: usize = 40;
+/// Uniforms c5..c7 (unit 0: s, t, q) and c8..c11 (units 1, 2: s, t), scaled for NPOT storage.
 pub(crate) fn texture_matrix(
     c: &mut Commands<'_>,
-    matrix: &[f32; 16],
-    scale: [f32; 2],
+    matrices: &[[f32; 16]; 3],
+    scales: &[[f32; 2]; 3],
 ) -> Result<(), ()> {
-    if c.words.len() - c.used < 16 + DRAW_WORDS + 8 + FINISH_WORDS {
+    if c.words.len() - c.used < TEXMATRIX_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
         return Err(());
     }
-    let mut data = [0; 12];
-    for row in 0..3 {
-        let component = if row == 2 { 3 } else { row };
-        for col in 0..4 {
-            let value = matrix[col * 4 + component] * if row == 2 { 1. } else { scale[row] };
-            data[row * 4 + 3 - col] = value.to_bits();
+    let mut data = [0; 28];
+    let mut slot = 0;
+    for unit in 0..3 {
+        let rows: &[usize] = if unit == 0 { &[0, 1, 3] } else { &[0, 1] };
+        for (n, component) in rows.iter().enumerate() {
+            for col in 0..4 {
+                let scaled = if n < 2 { scales[unit][n] } else { 1. };
+                data[slot * 4 + 3 - col] = (matrices[unit][col * 4 + component] * scaled).to_bits();
+            }
+            slot += 1;
         }
     }
     one(c, r::VSH_FLOATUNIFORM_CONFIG, 0x80000005)?;

@@ -494,10 +494,15 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
     };
 
     let raster = r.frame.raster.dirty.then_some(r.frame.raster);
-    let texture = r.frame.textures.dirty.then(|| r.frame.textures.packet());
-    let texmatrix = (r.matrices.texture_dirty || texture.is_some())
-        .then(|| (r.matrices.texture(), r.frame.textures.packet().scale));
-    let needed = texmatrix.map_or(0, |_| 16)
+    let texture = r.frame.textures.dirty.then(|| r.frame.textures.packets());
+    let texmatrix = (r.matrices.texture_dirty || texture.is_some()).then(|| {
+        let packets = r.frame.textures.packets();
+        (
+            core::array::from_fn(|unit| r.matrices.texture_for(unit)),
+            core::array::from_fn(|unit| packets[unit].scale),
+        )
+    });
+    let needed = texmatrix.map_or(0, |_| gpu::TEXMATRIX_WORDS)
         + viewport.map_or(0, |_| 8)
         + update.map_or(0, |_| 20)
         + raster.map_or(0, |_| gpu::RASTER_WORDS)
@@ -517,8 +522,8 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
         gpu::texture(&mut commands, t)?;
     }
 
-    if let Some((matrix, scale)) = texmatrix {
-        gpu::texture_matrix(&mut commands, &matrix, scale)?;
+    if let Some((matrices, scales)) = texmatrix {
+        gpu::texture_matrix(&mut commands, &matrices, &scales)?;
     }
     if let Some(v) = viewport {
         if gpu::viewport(&mut commands, v).is_err() {

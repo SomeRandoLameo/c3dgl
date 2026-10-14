@@ -199,5 +199,19 @@ and `check.sh` rejects `c3dglInit` frames above 8 KiB. The attribute stride is
 derived from `GpuVertex`. The earlier `rg`-based symbol audits were vacuous on
 machines without ripgrep and now use `grep`. All five unchanged original scenes
 (primitives, texture, cube, texcoords, texmatrix) match the C framebuffer exactly;
-see `native-results/texenv-step/` (one run each). The per-unit TEV words are
-computed but not yet emitted to the GPU; multitexturing is not yet functional.
+see `native-results/texenv-step/` (one run each). 
+
+
+## Multitexture checkpoint
+
+Three texture units are now emitted to the GPU: the vertex shader reads five
+attributes (position, color, three texcoord sets) and outputs texcoord0/1/2
+through per-unit texture-matrix rows (c5..c11); texture units 0..2 have their own
+image registers and TEV stages 0..2 carry the per-unit TexEnv words (modulate,
+add, replace, decal, blend and COMBINE with sources, operands, constants and
+scales). The complete unchanged `drawMultitexturePage` of `examples/texture/main.cpp`
+(eight cells: modulate, add, COMBINE interpolate/dot3/subtract with RGB_SCALE, three
+units, unit-1 texture matrix, per-unit client arrays) matches the C framebuffer
+exactly; all six selected original scenes match. See `native-results/multitexture-step/`
+(one run each; not repeated performance or hardware validation). Mipmaps,
+GL_GENERATE_MIPMAP, compressed textures and the remaining example groups are open.
