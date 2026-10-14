@@ -7,6 +7,7 @@ use alloc::vec::Vec;
 use core::{ffi::c_void, ptr};
 
 const TARGET: u32 = 0x0de1;
+const TARGET_1D: u32 = 0x0de0;
 const LIMIT: usize = 64;
 
 /// Texel storage of a texture chain.
@@ -62,11 +63,14 @@ struct Level {
     width: usize,
     height: usize,
     base: u32,
+    internal: u32,
     fmt: Fmt,
 }
 
 struct Object {
     name: u32,
+    /// A GL_TEXTURE_1D object: stored square with every row holding the image.
+    one_d: bool,
     instantiated: bool,
     storage: Option<Buffer>,
     width: usize,
@@ -76,6 +80,8 @@ struct Object {
     wrap: [u32; 2],
     used: bool,
     base: u32,
+    /// The internal format as given by the application.
+    internal: u32,
     /// Stored levels: level l of the chain is `stored(width) >> l` wide, minimum 8.
     levels: usize,
     defs: [Level; 12],
@@ -84,9 +90,10 @@ struct Object {
 }
 
 impl Object {
-    fn new(name: u32, instantiated: bool) -> Self {
+    fn new(name: u32, one_d: bool, instantiated: bool) -> Self {
         Self {
             name,
+            one_d,
             instantiated,
             storage: None,
             width: 0,
@@ -96,6 +103,7 @@ impl Object {
             wrap: [0x2901; 2],
             used: false,
             base: 0x1908,
+            internal: 0x1908,
             levels: 1,
             defs: [Level::default(); 12],
             generate: false,
@@ -145,12 +153,17 @@ pub(crate) struct Packet {
     pub format: u32,
     /// ETC1 is stored upside down: the texture matrix maps t to q - t.
     pub flip: bool,
+    /// 1D texture: the texture matrix maps t to s.
+    pub one_d: bool,
 }
 
 #[derive(Clone, Copy)]
 struct Unit {
     enabled: bool,
     bound: u32,
+    /// GL_TEXTURE_1D: its own enable flag and binding.
+    enabled1: bool,
+    bound1: u32,
     env: Environment,
 }
 impl Unit {
@@ -158,6 +171,8 @@ impl Unit {
         Self {
             enabled: false,
             bound: 0,
+            enabled1: false,
+            bound1: 0,
             env: Environment::new(),
         }
     }
@@ -268,6 +283,8 @@ pub(crate) struct Textures {
     pub q_used: bool,
     /// Texturing is off for an internal draw (the clear quad).
     pub suspended: bool,
+    proxy2: [Proxy; 12],
+    proxy1: [Proxy; 12],
     alignment: usize,
     objects: Vec<Object>,
     retired: Vec<Buffer>,
@@ -281,6 +298,8 @@ impl Textures {
             dirty: false,
             q_used: false,
             suspended: false,
+            proxy2: [Proxy::default(); 12],
+            proxy1: [Proxy::default(); 12],
             alignment: 4,
             objects: Vec::new(),
             retired: Vec::new(),
@@ -302,24 +321,45 @@ impl Textures {
     }
 
     fn index(&mut self) -> Result<usize, u32> {
-        if let Some(i) = self
-            .objects
-            .iter()
-            .position(|o| o.name == self.units[self.active].bound)
-        {
+        self.index_for(false)
+    }
+
+    /// The bound object of the active unit for GL_TEXTURE_2D or GL_TEXTURE_1D.
+    fn index_for(&mut self, one_d: bool) -> Result<usize, u32> {
+        let unit = &self.units[self.active];
+        let name = if one_d { unit.bound1 } else { unit.bound };
+        if let Some(i) = self.find(name, one_d) {
             return Ok(i);
         }
 
-        self.insert(self.units[self.active].bound, true)
+        self.insert(name, one_d, true)
     }
 
-    fn insert(&mut self, name: u32, instantiated: bool) -> Result<usize, u32> {
+    fn find(&self, name: u32, one_d: bool) -> Option<usize> {
+        self.objects
+            .iter()
+            .position(|o| o.name == name && o.one_d == one_d)
+    }
+
+    /// The texture a unit samples: GL_TEXTURE_2D takes precedence over GL_TEXTURE_1D.
+    fn sampling(&self, unit: usize) -> Option<(u32, bool)> {
+        let u = &self.units[unit];
+        if u.enabled {
+            Some((u.bound, false))
+        } else if u.enabled1 {
+            Some((u.bound1, true))
+        } else {
+            None
+        }
+    }
+
+    fn insert(&mut self, name: u32, one_d: bool, instantiated: bool) -> Result<usize, u32> {
         if self.objects.len() >= LIMIT {
             return Err(0x0505);
         }
 
         self.objects.try_reserve(1).map_err(|_| 0x0505u32)?;
-        self.objects.push(Object::new(name, instantiated));
+        self.objects.push(Object::new(name, one_d, instantiated));
 
         Ok(self.objects.len() - 1)
     }
@@ -334,6 +374,16 @@ impl Textures {
     pub fn enabled(&self) -> bool {
         self.units[self.active].enabled
     }
+    pub fn enabled_1d(&self) -> bool {
+        self.units[self.active].enabled1
+    }
+    pub fn set_enabled_1d(&mut self, on: bool) {
+        if self.units[self.active].enabled1 != on {
+            self.units[self.active].enabled1 = on;
+            self.dirty = true;
+        }
+    }
+
     pub fn set_enabled(&mut self, on: bool) {
         if self.enabled() != on {
             self.units[self.active].enabled = on;
@@ -342,8 +392,9 @@ impl Textures {
     }
 
     unsafe fn packet_for(&self, unit: usize) -> Packet {
+        let sampling = self.sampling(unit);
         let mut s = Packet {
-            enabled: self.units[unit].enabled,
+            enabled: sampling.is_some(),
             complete: false,
             address: 0,
             dimensions: 0,
@@ -354,14 +405,15 @@ impl Textures {
             lod: 0,
             format: 0,
             flip: false,
+            one_d: false,
         };
 
-        if let Some(o) = self
-            .objects
-            .iter()
-            .find(|o| o.name == self.units[unit].bound)
-        {
+        let object = sampling
+            .and_then(|(name, one_d)| self.find(name, one_d))
+            .map(|i| &self.objects[i]);
+        if let Some(o) = object {
             s.complete = o.complete();
+            s.one_d = o.one_d;
             if s.complete {
                 s.address = o.storage.as_ref().unwrap().physical();
                 let (tw, th) = (stored(o.width), stored(o.height));
@@ -394,11 +446,7 @@ impl Textures {
         if !s.complete || self.suspended {
             s.enabled = false;
         }
-        let base = self
-            .objects
-            .iter()
-            .find(|o| o.name == self.units[unit].bound)
-            .map_or(0x1908, |o| o.base);
+        let base = object.map_or(0x1908, |o| o.base);
         s.tev = self.units[unit]
             .env
             .words(unit, s.enabled, s.complete, base);
@@ -406,14 +454,12 @@ impl Textures {
     }
 
     pub fn sampled(&mut self) {
-        for unit in &self.units {
-            if unit.enabled {
-                if let Some(o) = self
-                    .objects
-                    .iter_mut()
-                    .find(|o| o.name == unit.bound && o.complete())
-                {
-                    o.used = true;
+        for unit in 0..3 {
+            if let Some((name, one_d)) = self.sampling(unit) {
+                if let Some(i) = self.find(name, one_d) {
+                    if self.objects[i].complete() {
+                        self.objects[i].used = true;
+                    }
                 }
             }
         }
@@ -423,7 +469,9 @@ impl Textures {
         let mut v = [0.; 16];
         v[0] = match pname {
             0x0de1 => self.units[self.active].enabled as u8 as f64,
+            0x0de0 => self.units[self.active].enabled1 as u8 as f64,
             0x8069 => self.units[self.active].bound as f64,
+            0x8068 => self.units[self.active].bound1 as f64,
             0x0cf5 => self.alignment as f64,
             0x0d33 => 1024.,
             0x84e0 => (0x84c0 + self.active) as f64,
@@ -458,6 +506,15 @@ impl Textures {
         self.dirty = true;
 
         Ok(())
+    }
+}
+
+/// GL_TEXTURE_2D (false) or GL_TEXTURE_1D (true).
+fn target_dims(t: u32) -> Result<bool, u32> {
+    match t {
+        TARGET => Ok(false),
+        TARGET_1D => Ok(true),
+        _ => Err(0x0500),
     }
 }
 
@@ -1004,7 +1061,7 @@ pub unsafe extern "C" fn glGenTextures(n: i32, out: *mut u32) {
             while t.objects.iter().any(|o| o.name == name) {
                 name = name.checked_add(1).ok_or(0x0505u32)?;
             }
-            t.objects.push(Object::new(name, false));
+            t.objects.push(Object::new(name, false, false));
             out.add(i).write(name);
         }
 
@@ -1018,16 +1075,32 @@ pub unsafe extern "C" fn glBindTexture(kind: u32, name: u32) {
         return;
     }
     api!(|t: &mut Textures| {
-        target(kind)?;
-        let i = if let Some(i) = t.objects.iter().position(|o| o.name == name) {
-            i
-        } else {
-            t.insert(name, true)?
+        let one_d = target_dims(kind)?;
+        // Generated names are bound for the first time to one target; the default texture 0 exists
+        // once per target.
+        let i = match t.objects.iter().position(|o| o.name == name) {
+            Some(i) if name != 0 => {
+                if t.objects[i].instantiated && t.objects[i].one_d != one_d {
+                    return Err(0x0502);
+                }
+                t.objects[i].one_d = one_d;
+                i
+            }
+            _ => match t.find(name, one_d) {
+                Some(i) => i,
+                None => t.insert(name, one_d, true)?,
+            },
         };
 
         t.objects[i].instantiated = true;
-        if t.units[t.active].bound != name {
-            t.units[t.active].bound = name;
+        let unit = &mut t.units[t.active];
+        let slot = if one_d {
+            &mut unit.bound1
+        } else {
+            &mut unit.bound
+        };
+        if *slot != name {
+            *slot = name;
             t.dirty = true;
         }
 
@@ -1057,8 +1130,12 @@ pub unsafe extern "C" fn glDeleteTextures(n: i32, names: *const u32) {
                     }
                 }
                 for unit in &mut t.units {
-                    if unit.bound == name {
+                    if unit.bound == name && !o.one_d {
                         unit.bound = 0;
+                        t.dirty = true;
+                    }
+                    if unit.bound1 == name && o.one_d {
+                        unit.bound1 = 0;
                         t.dirty = true;
                     }
                 }
@@ -1123,6 +1200,7 @@ fn define_generated(o: &mut Object) {
             width: level_size(o.width, l),
             height: level_size(o.height, l),
             base: o.base,
+            internal: o.internal,
             fmt: o.fmt,
         };
         l += 1;
@@ -1135,7 +1213,7 @@ pub unsafe extern "C" fn glTexParameteri(kind: u32, pname: u32, value: i32) {
         return;
     }
     api!(|t: &mut Textures| {
-        target(kind)?;
+        let one_d = target_dims(kind)?;
         let value = value as u32;
         let valid = match pname {
             0x2801 => matches!(value, 0x2600 | 0x2601 | 0x2700..=0x2703),
@@ -1147,7 +1225,7 @@ pub unsafe extern "C" fn glTexParameteri(kind: u32, pname: u32, value: i32) {
         if !valid {
             return Err(0x0500);
         }
-        let i = t.index()?;
+        let i = t.index_for(one_d)?;
         t.set_param(i, pname, value)
     });
 }
@@ -1156,7 +1234,9 @@ pub unsafe extern "C" fn glTexParameteri(kind: u32, pname: u32, value: i32) {
 #[derive(Clone, Copy)]
 pub(crate) struct UnitSave {
     enabled: bool,
+    enabled1: bool,
     bound: u32,
+    bound1: u32,
     env: Environment,
     /// min filter, mag filter, wrap s, wrap t, generate mipmap of the bound object.
     params: Option<[u32; 5]>,
@@ -1183,7 +1263,9 @@ impl Textures {
                 let unit = &self.units[u];
                 UnitSave {
                     enabled: unit.enabled,
+                    enabled1: unit.enabled1,
                     bound: unit.bound,
+                    bound1: unit.bound1,
                     env: unit.env,
                     params: self
                         .objects
@@ -1202,11 +1284,14 @@ impl Textures {
         for (u, saved) in save.units.iter().enumerate() {
             if enables {
                 self.units[u].enabled = saved.enabled;
+                self.units[u].enabled1 = saved.enabled1;
             }
             if !state {
                 continue;
             }
             self.units[u].env = saved.env;
+            let exists1 = self.objects.iter().any(|o| o.name == saved.bound1);
+            self.units[u].bound1 = if exists1 { saved.bound1 } else { 0 };
             let exists = self.objects.iter().any(|o| o.name == saved.bound);
             self.units[u].bound = if exists || saved.bound == 0 {
                 saved.bound
@@ -1305,14 +1390,14 @@ impl Textures {
 #[no_mangle]
 pub unsafe extern "C" fn glGetTexParameteriv(kind: u32, pname: u32, out: *mut i32) {
     api!(|t: &mut Textures| {
-        target(kind)?;
+        let one_d = target_dims(kind)?;
         if out.is_null() {
             return Err(0x0501);
         }
         if !matches!(pname, 0x2800..=0x2803 | 0x8191) {
             return Err(0x0500);
         }
-        let i = t.index()?;
+        let i = t.index_for(one_d)?;
         let o = &t.objects[i];
         let value = match pname {
             0x2801 => o.min,
@@ -1340,12 +1425,14 @@ unsafe fn define_image(
     t: &mut Textures,
     level: usize,
     base: u32,
+    internal: u32,
     fmt: Fmt,
     w: usize,
     h: usize,
     src: Source,
+    one_d: bool,
 ) -> Result<(), u32> {
-    let i = t.index()?;
+    let i = t.index_for(one_d)?;
     if level > 0 {
         // Levels before level 0 are ignored; levels below 8x8 only count for completeness.
         let o = &t.objects[i];
@@ -1367,6 +1454,7 @@ unsafe fn define_image(
             width: w,
             height: h,
             base,
+            internal,
             fmt,
         };
         if fits && level <= max_stored(tw, th) {
@@ -1428,6 +1516,7 @@ unsafe fn define_image(
         o.defs = [Level::default(); 12];
     }
     o.base = base;
+    o.internal = internal;
     o.fmt = fmt;
     o.levels = levels;
     if generating {
@@ -1448,7 +1537,37 @@ pub unsafe extern "C" fn glTexImage2D(
     ty: u32,
     pixels: *const c_void,
 ) {
-    if crate::lists::compiling() {
+    tex_image(false, kind, level, internal, w, h, border, f, ty, pixels);
+}
+
+/// A 1D image is a w x 1 image; every row of the padded storage repeats it.
+#[no_mangle]
+pub unsafe extern "C" fn glTexImage1D(
+    kind: u32,
+    level: i32,
+    internal: i32,
+    w: i32,
+    border: i32,
+    f: u32,
+    ty: u32,
+    pixels: *const c_void,
+) {
+    tex_image(true, kind, level, internal, w, 1, border, f, ty, pixels);
+}
+
+unsafe fn tex_image(
+    one_d: bool,
+    kind: u32,
+    level: i32,
+    internal: i32,
+    w: i32,
+    h: i32,
+    border: i32,
+    f: u32,
+    ty: u32,
+    pixels: *const c_void,
+) {
+    if kind != PROXY_2D && kind != PROXY_1D && crate::lists::compiling() {
         let cmd = crate::lists::Cmd::TexImage {
             sub: false,
             target: kind,
@@ -1468,22 +1587,45 @@ pub unsafe extern "C" fn glTexImage2D(
         }
     }
     api!(|t: &mut Textures| {
-        target(kind)?;
+        if one_d {
+            if kind != TARGET_1D && kind != PROXY_1D {
+                return Err(0x0500);
+            }
+        } else if kind != PROXY_2D {
+            target(kind)?;
+        }
         let bpp = format(f, ty)?;
-        if !matches!(internal, 0x1906..=0x190a) {
+        let Some(base) = base_internal(internal) else {
             return Err(0x0501);
-        }
-        if border != 0 || !level_valid(level, w, h) {
-            return Err(0x0501);
-        }
-        // Unsized RGB/RGBA formats keep packed 16-bit data in its own format.
-        let base = internal as u32;
-        let fmt = match (base, ty) {
-            (0x1907, 0x8363) => Fmt::Rgb565,
-            (0x1908, 0x8033) => Fmt::Rgba4,
-            (0x1908, 0x8034) => Fmt::Rgba5551,
-            _ => Fmt::Rgba8,
         };
+        if border != 0 || !(0..=10).contains(&level) || !dimension(w) || !dimension(h) {
+            return Err(0x0501);
+        }
+        let fmt = storage_format(internal as u32, base, ty);
+        if kind == PROXY_2D || kind == PROXY_1D {
+            // Only records whether the image would be accepted.
+            let fits = w <= 1024 >> level && h <= 1024 >> level;
+            let slot = if kind == PROXY_1D {
+                &mut t.proxy1[level as usize]
+            } else {
+                &mut t.proxy2[level as usize]
+            };
+            *slot = if fits {
+                Proxy {
+                    width: w,
+                    height: h,
+                    internal: internal as u32,
+                    base,
+                    fmt,
+                }
+            } else {
+                Proxy::default()
+            };
+            return Ok(());
+        }
+        if !level_valid(level, w, h) {
+            return Err(0x0501);
+        }
         let src = Source::Gl {
             pixels: pixels.cast(),
             f,
@@ -1491,8 +1633,176 @@ pub unsafe extern "C" fn glTexImage2D(
             bpp,
             alignment: t.alignment,
         };
-        define_image(t, level as usize, base, fmt, w as usize, h as usize, src)
+        define_image(
+            t,
+            level as usize,
+            base,
+            internal as u32,
+            fmt,
+            w as usize,
+            h as usize,
+            src,
+            one_d,
+        )
     });
+}
+
+const PROXY_2D: u32 = 0x8064;
+const PROXY_1D: u32 = 0x8063;
+
+/// An image the application asked for with a proxy target.
+#[derive(Clone, Copy, Default)]
+struct Proxy {
+    width: i32,
+    height: i32,
+    internal: u32,
+    base: u32,
+    fmt: Fmt,
+}
+
+/// Base internal format of a texture internal format (GL 1.1 tables 3.15 and 3.16); None for
+/// intensity formats and anything else not supported.
+fn base_internal(internal: i32) -> Option<u32> {
+    Some(match internal as u32 {
+        0x1906 | 0x803b..=0x803e => 0x1906,
+        1 | 0x1909 | 0x803f..=0x8042 => 0x1909,
+        2 | 0x190a | 0x8043..=0x8048 => 0x190a,
+        3 | 0x1907 | 0x2a10 | 0x804f..=0x8054 => 0x1907,
+        4 | 0x1908 | 0x8055..=0x805b => 0x1908,
+        _ => return None,
+    })
+}
+
+/// The storage that holds internal format `internal`: the closest PICA one for sized formats;
+/// unsized RGB/RGBA keep packed 16-bit data in its format.
+fn storage_format(internal: u32, base: u32, ty: u32) -> Fmt {
+    let unsized_format = matches!(internal, 1..=4 | 0x1906 | 0x1907 | 0x1908 | 0x1909 | 0x190a);
+    match base {
+        0x1907
+            if matches!(internal, 0x2a10 | 0x804f | 0x8050) || (unsized_format && ty == 0x8363) =>
+        {
+            Fmt::Rgb565
+        }
+        0x1908 if matches!(internal, 0x8055 | 0x8056) => Fmt::Rgba4,
+        0x1908 if internal == 0x8057 => Fmt::Rgba5551,
+        0x1908 if unsized_format && ty == 0x8033 => Fmt::Rgba4,
+        0x1908 if unsized_format && ty == 0x8034 => Fmt::Rgba5551,
+        _ => Fmt::Rgba8,
+    }
+}
+
+/// Bits per channel (red, green, blue, alpha, luminance, intensity) of a storage.
+fn channel_bits(fmt: Fmt, base: u32) -> [i32; 6] {
+    match fmt {
+        Fmt::Rgb565 => [5, 6, 5, 0, 0, 0],
+        Fmt::Rgba4 => [4, 4, 4, 4, 0, 0],
+        Fmt::Rgba5551 => [5, 5, 5, 1, 0, 0],
+        Fmt::Etc1 => [8, 8, 8, 0, 0, 0],
+        Fmt::Rgba8 => match base {
+            0x1907 => [8, 8, 8, 0, 0, 0],
+            0x1906 => [0, 0, 0, 8, 0, 0],
+            0x1909 => [0, 0, 0, 0, 8, 0],
+            0x190a => [0, 0, 0, 8, 8, 0],
+            _ => [8, 8, 8, 8, 0, 0],
+        },
+    }
+}
+
+/// glGetTexLevelParameteriv: the image of `level` of the bound texture (or a proxy).
+#[no_mangle]
+pub unsafe extern "C" fn glGetTexLevelParameteriv(
+    kind: u32,
+    level: i32,
+    pname: u32,
+    params: *mut i32,
+) {
+    api!(|t: &mut Textures| {
+        if !(0..=10).contains(&level) {
+            return Err(0x0501);
+        }
+        if params.is_null() {
+            return Err(0x0501);
+        }
+        let l = level as usize;
+        // Width, height, internal format and storage of the level; zero without an image.
+        let (width, height, internal, base, fmt, has_image) = match kind {
+            TARGET | TARGET_1D => {
+                let i = t.index_for(kind == TARGET_1D)?;
+                let o = &t.objects[i];
+                if o.storage.is_some() && l == 0 {
+                    (
+                        o.width as i32,
+                        o.height as i32,
+                        o.internal,
+                        o.base,
+                        o.fmt,
+                        true,
+                    )
+                } else if o.storage.is_some() && o.defs[l].defined {
+                    let d = o.defs[l];
+                    (
+                        d.width as i32,
+                        d.height as i32,
+                        d.internal,
+                        d.base,
+                        d.fmt,
+                        true,
+                    )
+                } else {
+                    (0, 0, 0, 0, Fmt::Rgba8, false)
+                }
+            }
+            PROXY_2D | PROXY_1D => {
+                let p = if kind == PROXY_1D {
+                    t.proxy1[l]
+                } else {
+                    t.proxy2[l]
+                };
+                (p.width, p.height, p.internal, p.base, p.fmt, p.width > 0)
+            }
+            _ => return Err(0x0500),
+        };
+        let bits = if has_image {
+            channel_bits(fmt, base)
+        } else {
+            [0; 6]
+        };
+        params.write(match pname {
+            0x1000 => width,
+            0x1001 => height,
+            0x1005 => 0,
+            // GL default: one component.
+            0x1003 => {
+                if has_image {
+                    internal as i32
+                } else {
+                    1
+                }
+            }
+            0x805c => bits[0],
+            0x805d => bits[1],
+            0x805e => bits[2],
+            0x805f => bits[3],
+            0x8060 => bits[4],
+            0x8061 => bits[5],
+            _ => return Err(0x0500),
+        });
+        Ok(())
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glGetTexLevelParameterfv(
+    kind: u32,
+    level: i32,
+    pname: u32,
+    params: *mut f32,
+) {
+    let mut v = 0;
+    glGetTexLevelParameteriv(kind, level, pname, &mut v);
+    if !params.is_null() {
+        params.write(v as f32);
+    }
 }
 
 /// GL_OES_compressed_paletted_texture entry: (index bits, storage, base format, GL format, type, bytes).
@@ -1590,7 +1900,17 @@ pub unsafe extern "C" fn glCompressedTexImage2D(
                     }
                     indices = Some(&idx[(lw * lh * bits + 7) / 8..]);
                 }
-                define_image(t, l, base, fmt, lw, lh, Source::Rgba(&rgba))?;
+                define_image(
+                    t,
+                    l,
+                    base,
+                    internal,
+                    fmt,
+                    lw,
+                    lh,
+                    Source::Rgba(&rgba),
+                    false,
+                )?;
             }
             return Ok(());
         }
@@ -1609,10 +1929,12 @@ pub unsafe extern "C" fn glCompressedTexImage2D(
             t,
             level as usize,
             0x1907,
+            0x8d64,
             Fmt::Etc1,
             w,
             h,
             Source::Etc1(blocks),
+            false,
         )
     });
 }
@@ -1652,6 +1974,34 @@ pub unsafe extern "C" fn glTexSubImage2D(
     ty: u32,
     pixels: *const c_void,
 ) {
+    tex_sub_image(false, kind, level, x, y, w, h, f, ty, pixels);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glTexSubImage1D(
+    kind: u32,
+    level: i32,
+    x: i32,
+    w: i32,
+    f: u32,
+    ty: u32,
+    pixels: *const c_void,
+) {
+    tex_sub_image(true, kind, level, x, 0, w, 1, f, ty, pixels);
+}
+
+unsafe fn tex_sub_image(
+    one_d: bool,
+    kind: u32,
+    level: i32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    f: u32,
+    ty: u32,
+    pixels: *const c_void,
+) {
     if crate::lists::compiling() {
         let cmd = crate::lists::Cmd::TexImage {
             sub: true,
@@ -1672,13 +2022,19 @@ pub unsafe extern "C" fn glTexSubImage2D(
         }
     }
     api!(|t: &mut Textures| {
-        target(kind)?;
+        if one_d {
+            if kind != TARGET_1D {
+                return Err(0x0500);
+            }
+        } else {
+            target(kind)?;
+        }
         let bpp = format(f, ty)?;
         if !(0..=10).contains(&level) || x < 0 || y < 0 || w < 0 || h < 0 {
             return Err(0x0501);
         }
 
-        let i = t.index()?;
+        let i = t.index_for(one_d)?;
         let o = &t.objects[i];
         let level = level as usize;
         let (x, y, w, h) = (x as usize, y as usize, w as usize, h as usize);

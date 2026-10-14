@@ -26,6 +26,7 @@ typedef double GLdouble;
 #define GL_MAX_TEXTURE_STACK_DEPTH 0x0d39
 #define GL_FALSE 0
 #define GL_TRUE 1
+#define GL_TEXTURE_1D 0x0de0
 #define GL_TEXTURE_2D 0x0de1
 #define GL_TEXTURE0 0x84c0
 #define GL_TEXTURE_ENV 0x2300
@@ -63,6 +64,8 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param);
 void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params);
 void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels);
 void glTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels);
+void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid *pixels);
+void glTexSubImage1D(GLenum target, GLint level, GLint x, GLsizei width, GLenum format, GLenum type, const GLvoid *pixels);
 void glTexCoord2f(GLfloat s, GLfloat t);
 void glTexCoord3f(GLfloat s, GLfloat t, GLfloat r);
 void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q);

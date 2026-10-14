@@ -527,6 +527,100 @@ static void printStats() {
     std::printf("\x1b[u");
 }
 
+void drawQuadricsPage(GLUquadric* quad, GLuint checker, float angle) {
+    glEnable(GL_DEPTH_TEST);
+
+    // Wireframe globe: z axis up
+    beginCell(0, 0);
+    glRotatef(angle, 0, 1, 0);
+    glRotatef(-90, 1, 0, 0);
+    glColor3f(0.4f, 0.8f, 1.0f);
+    gluQuadricDrawStyle(quad, GLU_LINE);
+    gluSphere(quad, 0.9, 16, 10);
+
+    // Textured ball, back faces culled
+    beginCell(1, 0);
+    glRotatef(angle, 0, 1, 0);
+    glRotatef(-90, 1, 0, 0);
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, checker);
+    glColor3f(1, 1, 1);
+    gluQuadricDrawStyle(quad, GLU_FILL);
+    gluQuadricTexture(quad, GL_TRUE);
+    gluSphere(quad, 0.9, 24, 16);
+    gluQuadricTexture(quad, GL_FALSE);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_CULL_FACE);
+
+    // Cones (open both ends), seen from above, front filled / back wireframe
+    for (int inside = 0; inside < 2; inside++) {
+        beginCell(2 + inside, 0, 2.0);
+        glRotatef(angle, 0, 1, 0);
+        glRotatef(-90, 1, 0, 0);
+        glTranslatef(0, 0, -0.6f);
+        frontFillBackLine();
+        glColor3f(1.0f, 0.6f, 0.2f);
+        gluQuadricOrientation(quad, inside ? GLU_INSIDE : GLU_OUTSIDE);
+        gluCylinder(quad, 0.4, 0.8, 1.2, 20, 4);
+        gluQuadricOrientation(quad, GLU_OUTSIDE);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    }
+
+    // Disk with a hole, facing the camera (+z), back faces culled
+    beginCell(0, 1, 0.0);
+    glRotatef(angle * 0.5f, 0, 0, 1);
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, checker);
+    glColor3f(1, 1, 1);
+    gluQuadricTexture(quad, GL_TRUE);
+    gluDisk(quad, 0.35, 0.9, 24, 3);
+    gluQuadricTexture(quad, GL_FALSE);
+    glDisable(GL_TEXTURE_2D);
+
+    // 3/4 pie: from +y clockwise over +x and -y to -x, the top-left quarter stays open
+    beginCell(1, 1, 0.0);
+    glColor3f(0.3f, 0.9f, 0.4f);
+    gluPartialDisk(quad, 0.0, 0.9, 24, 2, 0.0, 270.0);
+    glDisable(GL_CULL_FACE);
+
+    // Silhouette: two arcs and the two radial edges of a 3/4 ring
+    beginCell(2, 1, 0.0);
+    glColor3f(1, 1, 1);
+    glLineWidth(2.0f);
+    gluQuadricDrawStyle(quad, GLU_SILHOUETTE);
+    gluPartialDisk(quad, 0.4, 0.9, 24, 3, 0.0, 270.0);
+    gluQuadricDrawStyle(quad, GLU_FILL);
+    glLineWidth(1.0f);
+
+    // gluProject: ball on a circle, crosshair drawn in window coordinates at its projected center
+    beginCell(3, 1);
+    const float bx = 0.7f * std::cos(angle * 0.05f), bz = 0.7f * std::sin(angle * 0.05f);
+    glTranslatef(bx, 0, bz);
+    glColor3f(0.9f, 0.3f, 0.3f);
+    gluSphere(quad, 0.2, 12, 8);
+    GLdouble model[16], proj[16], wx, wy, wz;
+    GLint view[4];
+    glGetDoublev(GL_MODELVIEW_MATRIX, model);
+    glGetDoublev(GL_PROJECTION_MATRIX, proj);
+    glGetIntegerv(GL_VIEWPORT, view);
+    gluProject(0, 0, 0, model, proj, view, &wx, &wy, &wz);
+
+    glDisable(GL_DEPTH_TEST);
+    glViewport(0, 0, C3DGL_TOP_SCREEN_WIDTH, C3DGL_SCREEN_HEIGHT);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluOrtho2D(0, C3DGL_TOP_SCREEN_WIDTH, 0, C3DGL_SCREEN_HEIGHT);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glColor3f(1, 1, 1);
+    glBegin(GL_LINES);
+    glVertex2d(wx - 8, wy); glVertex2d(wx + 8, wy);
+    glVertex2d(wx, wy - 8); glVertex2d(wx, wy + 8);
+    glEnd();
+}
+
 int main() {
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, nullptr);
@@ -579,97 +673,7 @@ int main() {
             angle += 1.0f;
             continue;
         }
-        glEnable(GL_DEPTH_TEST);
-
-        // Wireframe globe: z axis up
-        beginCell(0, 0);
-        glRotatef(angle, 0, 1, 0);
-        glRotatef(-90, 1, 0, 0);
-        glColor3f(0.4f, 0.8f, 1.0f);
-        gluQuadricDrawStyle(quad, GLU_LINE);
-        gluSphere(quad, 0.9, 16, 10);
-
-        // Textured ball, back faces culled
-        beginCell(1, 0);
-        glRotatef(angle, 0, 1, 0);
-        glRotatef(-90, 1, 0, 0);
-        glEnable(GL_CULL_FACE);
-        glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, checker);
-        glColor3f(1, 1, 1);
-        gluQuadricDrawStyle(quad, GLU_FILL);
-        gluQuadricTexture(quad, GL_TRUE);
-        gluSphere(quad, 0.9, 24, 16);
-        gluQuadricTexture(quad, GL_FALSE);
-        glDisable(GL_TEXTURE_2D);
-        glDisable(GL_CULL_FACE);
-
-        // Cones (open both ends), seen from above, front filled / back wireframe
-        for (int inside = 0; inside < 2; inside++) {
-            beginCell(2 + inside, 0, 2.0);
-            glRotatef(angle, 0, 1, 0);
-            glRotatef(-90, 1, 0, 0);
-            glTranslatef(0, 0, -0.6f);
-            frontFillBackLine();
-            glColor3f(1.0f, 0.6f, 0.2f);
-            gluQuadricOrientation(quad, inside ? GLU_INSIDE : GLU_OUTSIDE);
-            gluCylinder(quad, 0.4, 0.8, 1.2, 20, 4);
-            gluQuadricOrientation(quad, GLU_OUTSIDE);
-            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        }
-
-        // Disk with a hole, facing the camera (+z), back faces culled
-        beginCell(0, 1, 0.0);
-        glRotatef(angle * 0.5f, 0, 0, 1);
-        glEnable(GL_CULL_FACE);
-        glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, checker);
-        glColor3f(1, 1, 1);
-        gluQuadricTexture(quad, GL_TRUE);
-        gluDisk(quad, 0.35, 0.9, 24, 3);
-        gluQuadricTexture(quad, GL_FALSE);
-        glDisable(GL_TEXTURE_2D);
-
-        // 3/4 pie: from +y clockwise over +x and -y to -x, the top-left quarter stays open
-        beginCell(1, 1, 0.0);
-        glColor3f(0.3f, 0.9f, 0.4f);
-        gluPartialDisk(quad, 0.0, 0.9, 24, 2, 0.0, 270.0);
-        glDisable(GL_CULL_FACE);
-
-        // Silhouette: two arcs and the two radial edges of a 3/4 ring
-        beginCell(2, 1, 0.0);
-        glColor3f(1, 1, 1);
-        glLineWidth(2.0f);
-        gluQuadricDrawStyle(quad, GLU_SILHOUETTE);
-        gluPartialDisk(quad, 0.4, 0.9, 24, 3, 0.0, 270.0);
-        gluQuadricDrawStyle(quad, GLU_FILL);
-        glLineWidth(1.0f);
-
-        // gluProject: ball on a circle, crosshair drawn in window coordinates at its projected center
-        beginCell(3, 1);
-        const float bx = 0.7f * std::cos(angle * 0.05f), bz = 0.7f * std::sin(angle * 0.05f);
-        glTranslatef(bx, 0, bz);
-        glColor3f(0.9f, 0.3f, 0.3f);
-        gluSphere(quad, 0.2, 12, 8);
-        GLdouble model[16], proj[16], wx, wy, wz;
-        GLint view[4];
-        glGetDoublev(GL_MODELVIEW_MATRIX, model);
-        glGetDoublev(GL_PROJECTION_MATRIX, proj);
-        glGetIntegerv(GL_VIEWPORT, view);
-        gluProject(0, 0, 0, model, proj, view, &wx, &wy, &wz);
-
-        glDisable(GL_DEPTH_TEST);
-        glViewport(0, 0, C3DGL_TOP_SCREEN_WIDTH, C3DGL_SCREEN_HEIGHT);
-        glMatrixMode(GL_PROJECTION);
-        glLoadIdentity();
-        gluOrtho2D(0, C3DGL_TOP_SCREEN_WIDTH, 0, C3DGL_SCREEN_HEIGHT);
-        glMatrixMode(GL_MODELVIEW);
-        glLoadIdentity();
-        glColor3f(1, 1, 1);
-        glBegin(GL_LINES);
-        glVertex2d(wx - 8, wy); glVertex2d(wx + 8, wy);
-        glVertex2d(wx, wy - 8); glVertex2d(wx, wy + 8);
-        glEnd();
+        drawQuadricsPage(quad, checker, angle);
 
         c3dglSwapBuffers();
         angle += 1.0f;

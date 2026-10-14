@@ -282,8 +282,12 @@ unsafe fn execute(cmd: &Cmd) {
                 .map_or(core::ptr::null(), |p| p.as_ptr().cast::<c_void>());
             // The pixels were stored tightly packed.
             let alignment = set_alignment(1);
-            if *sub {
+            if *sub && *target == 0x0de0 {
+                glTexSubImage1D(*target, *level, *x, *w, *f, *ty, pointer);
+            } else if *sub {
                 glTexSubImage2D(*target, *level, *x, *y, *w, *h, *f, *ty, pointer);
+            } else if *target == 0x0de0 {
+                glTexImage1D(*target, *level, *internal, *w, *border, *f, *ty, pointer);
             } else {
                 glTexImage2D(
                     *target, *level, *internal, *w, *h, *border, *f, *ty, pointer,

@@ -347,6 +347,7 @@ mod tests {
             lod: 0,
             format: 0,
             flip: false,
+            one_d: false,
         };
         let mut off = t;
         off.enabled = false;

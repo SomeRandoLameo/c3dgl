@@ -367,6 +367,20 @@ fn query(
     Some((v, len))
 }
 
+/// GL_VENDOR, GL_RENDERER, GL_VERSION and GL_EXTENSIONS (an empty string for other names).
+#[no_mangle]
+pub unsafe extern "C" fn glGetString(name: u32) -> *const u8 {
+    match name {
+        0x1f00 => b"c3dgl\0".as_ptr(),
+        0x1f01 => b"PICA200 (native)\0".as_ptr(),
+        0x1f02 => b"1.1 c3dgl\0".as_ptr(),
+        0x1f03 => {
+            b"GL_OES_compressed_paletted_texture GL_OES_compressed_ETC1_RGB8_texture\0".as_ptr()
+        }
+        _ => b"\0".as_ptr(),
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn glGetFloatv(pname: u32, out: *mut f32) {
     with_renderer(|r| {
@@ -380,6 +394,27 @@ pub unsafe extern "C" fn glGetFloatv(pname: u32, out: *mut f32) {
             Some((v, n)) => {
                 for (i, value) in v[..n].iter().enumerate() {
                     out.add(i).write(*value as f32);
+                }
+            }
+
+            None => m.fail(0x0500),
+        }
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glGetDoublev(pname: u32, out: *mut f64) {
+    with_renderer(|r| {
+        let (s, m, imm) = (&r.frame, &mut r.matrices, &r.immediate);
+        if out.is_null() {
+            m.fail(0x0501);
+            return;
+        }
+
+        match query(s, m, imm, pname) {
+            Some((v, n)) => {
+                for (i, value) in v[..n].iter().enumerate() {
+                    out.add(i).write(*value);
                 }
             }
 

@@ -35,6 +35,15 @@
 #else
 #define CASE "fragment"
 #endif
+#elif defined(C3DGL_OLD_GLU0) || defined(C3DGL_OLD_GLU1) || defined(C3DGL_OLD_GLU2)
+#include "../../examples/glu/main.cpp"
+#if defined(C3DGL_OLD_GLU2)
+#define CASE "glu2"
+#elif defined(C3DGL_OLD_GLU1)
+#define CASE "glu1"
+#else
+#define CASE "glu0"
+#endif
 #elif defined(C3DGL_OLD_SELECT)
 #include "../../examples/select/main.cpp"
 #define CASE "select"
@@ -116,6 +125,28 @@ int main() {
     const GLuint tex=createF(16);drawTexcoordPage(tex);
 #elif defined(C3DGL_OLD_TEXTURE)
     const GLuint tex=createF(16);drawCell(0,0,tex);
+#elif defined(C3DGL_OLD_GLU0)
+    // Page 1 of the original main loop: quadrics
+    const GLuint tex=createChecker();
+    GLUquadric* quad=gluNewQuadric();
+    drawQuadricsPage(quad,tex,0.0f);
+    gluDeleteQuadric(quad);
+#elif defined(C3DGL_OLD_GLU1)
+    // Page 2 of the original main loop: tessellation and NURBS curve/surface
+    const GLuint tex=0;
+    GLUtesselator* tess=newTess();
+    GLUnurbs* nurbs=newNurbs();
+    initBumpPatch();
+    drawTessellation(tess);
+    drawNurbs(nurbs,0.0f);
+    gluDeleteNurbsRenderer(nurbs);
+    gluDeleteTess(tess);
+#elif defined(C3DGL_OLD_GLU2)
+    // Page 3 of the original main loop: NURBS renderer display modes
+    const GLuint tex=createChecker();
+    initBumpPatch();
+    const Renderers renderers={newRenderer(GLU_FILL),newRenderer(GLU_OUTLINE_POLYGON),newRenderer(GLU_OUTLINE_PATCH)};
+    drawNurbsRendererPage(renderers,0.0f,tex);
 #elif defined(C3DGL_OLD_SELECT)
     // The first frame of the original main loop: initial angle and cursor, GL_SELECT then GL_FEEDBACK
     setupScene();

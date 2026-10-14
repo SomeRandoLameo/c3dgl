@@ -230,9 +230,13 @@ unsafe fn enable(cap: u32, on: bool) {
     if crate::lists::record(crate::lists::Cmd::Enable(cap, on)) {
         return;
     }
-    if cap == 0x0de1 {
+    if cap == 0x0de1 || cap == 0x0de0 {
         with_frame(|s, _| {
-            s.textures.set_enabled(on);
+            if cap == 0x0de1 {
+                s.textures.set_enabled(on);
+            } else {
+                s.textures.set_enabled_1d(on);
+            }
         });
         return;
     }
@@ -350,6 +354,7 @@ pub unsafe extern "C" fn glIsEnabled(cap: u32) -> u8 {
             }
             0x0be2 => s.raster.blend.enabled as u8,
             0x0de1 => s.textures.enabled() as u8,
+            0x0de0 => s.textures.enabled_1d() as u8,
             _ => {
                 m.fail(0x0500);
                 0

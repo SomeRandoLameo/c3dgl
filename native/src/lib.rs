@@ -46,6 +46,8 @@ mod shader;
 mod texgen;
 #[cfg(any(target_os = "horizon", test))]
 mod texture;
+#[cfg(any(target_os = "horizon", test))]
+mod variants;
 
 /// PICA command encoding is independent of GPU services and memory allocation.
 /// The caller owns the storage; no allocation and no partial writes on overflow.
