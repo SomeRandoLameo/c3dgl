@@ -36,6 +36,25 @@ pub(crate) enum Cmd {
     LineWidth(f32),
     LineStipple(i32, u16),
     Accum(u32, f32),
+    RasterPos([f32; 4]),
+    PixelZoom(f32, f32),
+    PixelTransfer(u32, f32),
+    PixelMap(u32, i32, Vec<f32>),
+    Bitmap {
+        size: [i32; 2],
+        /// xorig, yorig, xmove, ymove
+        motion: [f32; 4],
+        /// Tightly packed, most significant bit first.
+        bits: Option<Vec<u8>>,
+    },
+    DrawPixels {
+        size: [i32; 2],
+        format: u32,
+        ty: u32,
+        /// Tightly packed rows.
+        data: Option<Vec<u8>>,
+    },
+    CopyPixels([i32; 4], u32),
     ClearAccum([f32; 4]),
     DrawBuffer(u32),
     ReadBuffer(u32),
@@ -203,7 +222,7 @@ pub(crate) unsafe fn compiling() -> bool {
 unsafe fn execute(cmd: &Cmd) {
     use crate::{
         accum::*, blend::*, clip::*, evaluator::*, fog::*, frame::*, immediate::*, lighting::*,
-        matrix::*, raster::*, stipple::*, texgen::*, texture::*,
+        matrix::*, pixels::*, raster::*, stipple::*, texgen::*, texture::*,
     };
     match cmd {
         Cmd::Enable(cap, on) => {
@@ -238,6 +257,40 @@ unsafe fn execute(cmd: &Cmd) {
         Cmd::LineWidth(w) => glLineWidth(*w),
         Cmd::LineStipple(f, p) => glLineStipple(*f, *p),
         Cmd::Accum(op, v) => glAccum(*op, *v),
+        Cmd::RasterPos(v) => glRasterPos4f(v[0], v[1], v[2], v[3]),
+        Cmd::PixelZoom(x, y) => glPixelZoom(*x, *y),
+        Cmd::PixelTransfer(p, v) => glPixelTransferf(*p, *v),
+        Cmd::PixelMap(m, n, v) => crate::pixels::set_pixel_map(*m, *n, v),
+        Cmd::CopyPixels(a, ty) => glCopyPixels(a[0], a[1], a[2], a[3], *ty),
+        Cmd::Bitmap { size, motion, bits } => {
+            let pointer = bits.as_ref().map_or(core::ptr::null(), |b| b.as_ptr());
+            let store = set_unpack(crate::texture::PixelStore {
+                alignment: 1,
+                row_length: 0,
+                skip_rows: 0,
+                skip_pixels: 0,
+            });
+            glBitmap(
+                size[0], size[1], motion[0], motion[1], motion[2], motion[3], pointer,
+            );
+            set_unpack(store);
+        }
+        Cmd::DrawPixels {
+            size,
+            format,
+            ty,
+            data,
+        } => {
+            let pointer = data.as_ref().map_or(core::ptr::null(), |b| b.as_ptr());
+            let store = set_unpack(crate::texture::PixelStore {
+                alignment: 1,
+                row_length: 0,
+                skip_rows: 0,
+                skip_pixels: 0,
+            });
+            glDrawPixels(size[0], size[1], *format, *ty, pointer);
+            set_unpack(store);
+        }
         Cmd::ClearAccum(c) => glClearAccum(c[0], c[1], c[2], c[3]),
         Cmd::DrawBuffer(m) => glDrawBuffer(*m),
         Cmd::ReadBuffer(m) => glReadBuffer(*m),

@@ -59,6 +59,7 @@ pub(crate) struct Saved {
     fog: crate::fog::Fog,
     stipple: crate::stipple::Stipple,
     accum: crate::accum::Accum,
+    pixels: crate::pixels::Pixels,
     clip: crate::clip::ClipState,
     list_base: u32,
     mode: usize,
@@ -118,6 +119,7 @@ pub unsafe extern "C" fn glPushAttrib(mask: u32) {
             fog: f.fog,
             stipple: f.stipple,
             accum: f.accum.clone(),
+            pixels: f.pixels.clone(),
             clip: f.clip,
             list_base: f.lists.base,
             mode: r.matrices.mode(),
@@ -136,6 +138,7 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         r.immediate.texcoord = a.texcoord;
         r.immediate.extra_texcoords = a.extra_texcoords;
         r.immediate.edge = a.edge;
+        f.pixels.raster = a.pixels.raster;
     }
     if mask & POINT != 0 {
         f.point_size = a.point_size;
@@ -219,6 +222,8 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
     }
     if mask & PIXEL_MODE != 0 {
         f.accum.read_buffer = a.accum.read_buffer;
+        f.pixels.zoom = a.pixels.zoom;
+        f.pixels.transfer = a.pixels.transfer;
     }
     if mask & ACCUM_BUFFER != 0 {
         f.accum.clear = a.accum.clear;

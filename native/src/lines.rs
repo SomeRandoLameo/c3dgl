@@ -37,7 +37,7 @@ pub(crate) fn consumed(mode: u32, count: usize) -> usize {
 }
 
 /// Correctly rounded square root on the 3DS FPU; elsewhere Newton iterations (no_std has no sqrt).
-fn sqrt(x: f32) -> f32 {
+pub(crate) fn sqrt(x: f32) -> f32 {
     #[cfg(target_arch = "arm")]
     {
         let r: f32;

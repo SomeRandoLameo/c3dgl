@@ -44,6 +44,9 @@
 #else
 #define CASE "glu0"
 #endif
+#elif defined(C3DGL_OLD_PIXELS)
+#include "../../examples/pixels/main.cpp"
+#define CASE "pixels"
 #elif defined(C3DGL_OLD_ACCUM)
 #include "../../examples/accum/main.cpp"
 #define CASE "accum"
@@ -153,6 +156,12 @@ int main() {
     initBumpPatch();
     const Renderers renderers={newRenderer(GLU_FILL),newRenderer(GLU_OUTLINE_POLYGON),newRenderer(GLU_OUTLINE_PATCH)};
     drawNurbsRendererPage(renderers,0.0f,tex);
+#elif defined(C3DGL_OLD_PIXELS)
+    // A frame of the original main loop (t = 1.5)
+    const GLuint font=setupScene();
+    static GLubyte plasma[IMAGE_SIZE*IMAGE_SIZE];
+    const GLuint tex=0;
+    drawFrame(font,plasma,1.5f);
 #elif defined(C3DGL_OLD_ACCUM)
     // Frames 1..5 of the original main loop: the motion blur and the depth of field build on the earlier frames
     setupScene();

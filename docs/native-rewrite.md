@@ -441,3 +441,24 @@ texture, stage 0 replaces color and alpha, the user's state is restored). The or
 keeps `setupScene()`, `makeLens()` and `drawFrame()` (extracted unchanged): after five frames the
 motion blur and the depth of field match the C framebuffer exactly (`native-results/accum-step/`).
 Host tests: 54 pass.
+
+
+## Pixel rectangles checkpoint
+
+`glRasterPos*` (all 24 forms: transformed, clipped by the view volume and the user clip planes, lit
+like a vertex, texture coordinates through the unit 0 matrix, snapped within 1/1024 of integers),
+`glPixelZoom`, `glPixelTransfer{f,i}`, `glPixelMap{fv,uiv,usv}`, `glBitmap`, `glDrawPixels` (every
+color format and type including packed 16-bit and `GL_COLOR_INDEX` through the I_TO_x maps with
+index shift/offset, `GL_MAP_COLOR`, scale and bias), `glCopyPixels(GL_COLOR)` and `glReadPixels` for
+color formats; queries and attrib groups (CURRENT: raster position, PIXEL_MODE: zoom and transfer),
+display lists (images and bitmaps are stored tightly packed) and feedback tokens. Images and
+bitmaps are textures drawn as quads in window coordinates through the whole fragment pipeline
+(`renderer::draw_pixel_quad`: unit 0 is replaced by the image, TexEnv stage 0 replaces the color or
+combines the A8 bitmap mask with the raster color, the bitmap modes alpha-test the mask); the raster
+position's depth and color are used. `glCopyPixels` and `glReadPixels` read the color buffer through
+the display transfer and apply the pixel transfer. Not implemented, reporting
+GL_INVALID_OPERATION: depth and stencil images (`GL_DEPTH_COMPONENT`, `GL_STENCIL_INDEX` in
+`glDrawPixels`/`glReadPixels`, `GL_DEPTH`/`GL_STENCIL` in `glCopyPixels`), byte swapping and
+LSB-first order. The original pixels example keeps `setupScene()` and `drawFrame()` (extracted
+unchanged): its frame and all 24 other scenes match the C framebuffer exactly
+(`native-results/pixels-step/`). Host tests: 54 pass.

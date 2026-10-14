@@ -87,6 +87,57 @@ void glTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei width
 #define GL_RIGHT 0x0407
 #define GL_FRONT_AND_BACK 0x0408
 #define GL_AUX0 0x0409
+#define GL_BITMAP 0x1a00
+#define GL_COLOR 0x1800
+#define GL_DEPTH 0x1801
+#define GL_STENCIL 0x1802
+#define GL_COLOR_INDEX 0x1900
+#define GL_PIXEL_MAP_I_TO_I 0x0c70
+#define GL_PIXEL_MAP_S_TO_S 0x0c71
+#define GL_PIXEL_MAP_I_TO_R 0x0c72
+#define GL_PIXEL_MAP_I_TO_G 0x0c73
+#define GL_PIXEL_MAP_I_TO_B 0x0c74
+#define GL_PIXEL_MAP_I_TO_A 0x0c75
+#define GL_PIXEL_MAP_R_TO_R 0x0c76
+#define GL_PIXEL_MAP_G_TO_G 0x0c77
+#define GL_PIXEL_MAP_B_TO_B 0x0c78
+#define GL_PIXEL_MAP_A_TO_A 0x0c79
+#define GL_MAP_COLOR 0x0d10
+#define GL_MAP_STENCIL 0x0d11
+#define GL_INDEX_SHIFT 0x0d12
+#define GL_INDEX_OFFSET 0x0d13
+#define GL_RED_SCALE 0x0d14
+#define GL_RED_BIAS 0x0d15
+#define GL_ZOOM_X 0x0d16
+#define GL_ZOOM_Y 0x0d17
+#define GL_GREEN_SCALE 0x0d18
+#define GL_GREEN_BIAS 0x0d19
+#define GL_BLUE_SCALE 0x0d1a
+#define GL_BLUE_BIAS 0x0d1b
+#define GL_ALPHA_SCALE 0x0d1c
+#define GL_ALPHA_BIAS 0x0d1d
+#define GL_DEPTH_SCALE 0x0d1e
+#define GL_DEPTH_BIAS 0x0d1f
+#define GL_CURRENT_RASTER_COLOR 0x0b04
+#define GL_CURRENT_RASTER_TEXTURE_COORDS 0x0b06
+#define GL_CURRENT_RASTER_POSITION 0x0b07
+#define GL_CURRENT_RASTER_POSITION_VALID 0x0b08
+#define GL_CURRENT_RASTER_DISTANCE 0x0b09
+#define GL_PIXEL_MODE_BIT 0x00000020
+void glPixelZoom(GLfloat xfactor, GLfloat yfactor);
+void glPixelTransferf(GLenum pname, GLfloat param);
+void glPixelTransferi(GLenum pname, GLint param);
+void glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat *values);
+void glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint *values);
+void glPixelMapusv(GLenum map, GLsizei mapsize, const unsigned short *values);
+void glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove, const GLubyte *bitmap);
+void glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels);
+void glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type);
+void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels);
+void glRasterPos2f(GLfloat x, GLfloat y);
+void glRasterPos2i(GLint x, GLint y);
+void glRasterPos3f(GLfloat x, GLfloat y, GLfloat z);
+void glRasterPos4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w);
 void glAccum(GLenum op, GLfloat value);
 void glClearAccum(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
 void glDrawBuffer(GLenum mode);

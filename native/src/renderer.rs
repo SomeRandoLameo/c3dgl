@@ -355,6 +355,147 @@ pub(crate) unsafe fn read_color(
     Ok(out)
 }
 
+/// How a pixel rectangle is drawn: the texel (image), or the raster color where a bitmap bit is
+/// set (`Bitmap`; `BitmapZero` for a raster alpha of 0: alpha = 1 - texel alpha, tested == 0).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PixelMode {
+    Image,
+    Bitmap,
+    BitmapZero,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PixelFormat {
+    Rgba8,
+    A8,
+}
+
+/// A textured quad in window coordinates. `fill` writes the texels of the (tiled, padded to
+/// `size`) texture.
+pub(crate) struct PixelQuad<'a> {
+    pub mode: PixelMode,
+    pub format: PixelFormat,
+    pub size: (usize, usize),
+    pub fill: &'a mut dyn FnMut(*mut u8),
+    pub wx: [f32; 4],
+    pub wy: [f32; 4],
+    pub s: [f32; 4],
+    pub t: [f32; 4],
+    /// Drawn with the GL fragment state and the raster position's depth and color; otherwise
+    /// through the scissor test and the color mask only.
+    pub user_state: bool,
+}
+
+/// Draw a textured quad in window coordinates over the color buffer.
+pub(crate) unsafe fn draw_pixel_quad(r: &mut Renderer, q: PixelQuad) -> Result<(), u32> {
+    let (tw, th) = q.size;
+    let bytes = tw * th * if q.format == PixelFormat::Rgba8 { 4 } else { 1 };
+    let texture = Buffer::new(bytes, false).ok_or(0x0505u32)?;
+    ptr::write_bytes(texture.pointer, 0, bytes);
+    (q.fill)(texture.pointer);
+    if p::c3dglPlatformFlush(texture.pointer, bytes as u32) < 0 {
+        return Err(0x0502);
+    }
+    if !r.active && begin_frame(r, true, None) != 0 {
+        return Err(0x0502);
+    }
+    let saved = (
+        r.frame.raster,
+        r.frame.viewport,
+        r.frame.drawable,
+        r.frame.fog.enabled,
+    );
+    let raster_pos = r.frame.pixels.raster;
+    let mut state = if q.user_state {
+        saved.0
+    } else {
+        let mut c = crate::raster::Raster::new();
+        c.scissor = saved.0.scissor;
+        c.scissor_box = saved.0.scissor_box;
+        c.color_mask = saved.0.color_mask;
+        c
+    };
+    match q.mode {
+        PixelMode::Image => {}
+        PixelMode::Bitmap | PixelMode::BitmapZero => {
+            // Fragments only where the mask is set (the GL alpha test was done by the caller).
+            state.alpha = true;
+            state.alpha_func = if q.mode == PixelMode::Bitmap {
+                0x0204
+            } else {
+                0x0202
+            };
+            state.alpha_ref = 0;
+        }
+    }
+    state.dirty = true;
+    r.frame.raster = state;
+    r.frame.viewport = [0, 0, 400, 240];
+    r.frame.drawable = true;
+    r.frame.viewport_dirty = true;
+    if !q.user_state {
+        r.frame.fog.enabled = false;
+    }
+    r.frame.textures.suspended = true;
+    let tev = match q.mode {
+        PixelMode::Image => [3 | 3 << 16, 0, 0, u32::MAX, 0],
+        PixelMode::Bitmap => [3 << 16, 0, 1 << 16, u32::MAX, 0],
+        PixelMode::BitmapZero => [3 << 16, 1 << 12, 0, u32::MAX, 0],
+    };
+    // Nearest, clamped; TexEnv stage 0 combines the texel with the primary color.
+    r.frame.textures.set_image(Some(crate::texture::Packet {
+        enabled: true,
+        complete: true,
+        address: texture.physical(),
+        dimensions: (tw as u32) << 16 | th as u32,
+        parameters: 0,
+        replace: true,
+        scale: [1.; 2],
+        tev,
+        lod: 0,
+        format: if q.format == PixelFormat::Rgba8 { 0 } else { 8 },
+        flip: false,
+        one_d: false,
+    }));
+    r.matrices.texture_dirty = true;
+
+    let (z, color) = if q.user_state {
+        let (n, f) = (saved.0.range[0], saved.0.range[1]);
+        (
+            if f != n {
+                2. * (raster_pos.pos[2] - n) / (f - n) - 1.
+            } else {
+                0.
+            },
+            raster_pos.color.map(|c| c as f32),
+        )
+    } else {
+        (0., [255.; 4])
+    };
+    let (sw, sh) = (2. / 400., 2. / 240.);
+    let vertices: [GpuVertex; 4] = core::array::from_fn(|i| GpuVertex {
+        position: [q.wx[i] * sw - 1., q.wy[i] * sh - 1., z, 1.],
+        color,
+        texcoord: [q.s[i], q.t[i], 0., 1.],
+        extra_texcoords: [[0., 0., 0., 1.]; 2],
+    });
+    let result = draw_transient(r, &vertices, &[0u16, 1, 2, 0, 2, 3], 6, true, 0.);
+
+    r.frame.raster = saved.0;
+    r.frame.raster.dirty = true;
+    r.frame.viewport = saved.1;
+    r.frame.drawable = saved.2;
+    r.frame.viewport_dirty = true;
+    r.frame.fog.enabled = saved.3;
+    r.frame.textures.suspended = false;
+    r.frame.textures.set_image(None);
+    r.matrices.texture_dirty = true;
+    // The queued draw samples the texture until the frame is collected.
+    let kept = r.frame.textures.retire(texture);
+    result?;
+    kept
+}
+
 /// Draw a `w` x `h` RGBA8 image at window position (x, y) over the color buffer through the
 /// scissor test and the color mask only (no other fragment operation). `fill` writes the texels
 /// of the tiled texture (`tw` x `th`, sides padded to powers of two of at least 8).
@@ -371,81 +512,22 @@ pub(crate) unsafe fn draw_image(
         p
     };
     let (tw, th) = (pow2(w), pow2(h));
-    let bytes = tw * th * 4;
-    let texture = Buffer::new(bytes, false).ok_or(0x0505u32)?;
-    ptr::write_bytes(texture.pointer, 0, bytes);
-    fill(texture.pointer, tw, th);
-    if p::c3dglPlatformFlush(texture.pointer, bytes as u32) < 0 {
-        return Err(0x0502);
-    }
-    if !r.active && begin_frame(r, true, None) != 0 {
-        return Err(0x0502);
-    }
-    let saved = (
-        r.frame.raster,
-        r.frame.viewport,
-        r.frame.drawable,
-        r.frame.fog.enabled,
-    );
-    let mut q = crate::raster::Raster::new();
-    q.scissor = saved.0.scissor;
-    q.scissor_box = saved.0.scissor_box;
-    q.color_mask = saved.0.color_mask;
-    q.dirty = true;
-    r.frame.raster = q;
-    r.frame.viewport = [0, 0, 400, 240];
-    r.frame.drawable = true;
-    r.frame.viewport_dirty = true;
-    r.frame.fog.enabled = false;
-    r.frame.textures.suspended = true;
-    // RGBA8, nearest, clamped; TexEnv stage 0 replaces color and alpha by the texel.
-    r.frame.textures.set_image(Some(crate::texture::Packet {
-        enabled: true,
-        complete: true,
-        address: texture.physical(),
-        dimensions: (tw as u32) << 16 | th as u32,
-        parameters: 0,
-        replace: true,
-        scale: [1.; 2],
-        tev: [3 | 3 << 16, 0, 0, u32::MAX, 0],
-        lod: 0,
-        format: 0,
-        flip: false,
-        one_d: false,
-    }));
-    r.matrices.texture_dirty = true;
-
-    let (sw, sh) = (2. / 400., 2. / 240.);
-    let (x0, x1) = (x as f32 * sw - 1., (x + w) as f32 * sw - 1.);
-    let (y0, y1) = (y as f32 * sh - 1., (y + h) as f32 * sh - 1.);
-    let (s1, t1) = (w as f32 / tw as f32, h as f32 / th as f32);
-    let corner = |px: f32, py: f32, s: f32, t: f32| GpuVertex {
-        position: [px, py, 0., 1.],
-        color: [255.; 4],
-        texcoord: [s, t, 0., 1.],
-        extra_texcoords: [[0., 0., 0., 1.]; 2],
-    };
-    let vertices = [
-        corner(x0, y0, 0., 0.),
-        corner(x1, y0, s1, 0.),
-        corner(x1, y1, s1, t1),
-        corner(x0, y1, 0., t1),
-    ];
-    let result = draw_transient(r, &vertices, &[0u16, 1, 2, 0, 2, 3], 6, true, 0.);
-
-    r.frame.raster = saved.0;
-    r.frame.raster.dirty = true;
-    r.frame.viewport = saved.1;
-    r.frame.drawable = saved.2;
-    r.frame.viewport_dirty = true;
-    r.frame.fog.enabled = saved.3;
-    r.frame.textures.suspended = false;
-    r.frame.textures.set_image(None);
-    r.matrices.texture_dirty = true;
-    // The queued draw samples the texture until the frame is collected.
-    let kept = r.frame.textures.retire(texture);
-    result?;
-    kept
+    let (sw, sh) = (x as f32, y as f32);
+    let (x1, y1) = ((x + w) as f32, (y + h) as f32);
+    draw_pixel_quad(
+        r,
+        PixelQuad {
+            mode: PixelMode::Image,
+            format: PixelFormat::Rgba8,
+            size: (tw, th),
+            fill: &mut |p| fill(p, tw, th),
+            wx: [sw, x1, x1, sw],
+            wy: [sh, sh, y1, y1],
+            s: [0., w as f32 / tw as f32, w as f32 / tw as f32, 0.],
+            t: [0., 0., h as f32 / th as f32, h as f32 / th as f32],
+            user_state: false,
+        },
+    )
 }
 
 impl Renderer {

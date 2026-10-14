@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "f57b20912a3de071d685911a4dd00ecdd5d334da26ceb6a518f3e31e150b21d2",
+  "images": {
+    "c3dgl-old-accum-native.ppm": "fde1644a3bbc7958dd33c2856a32d6960c35e06b25cbc4c571dda93ce22c3f91"
+  },
+  "process_exit": -9
+}

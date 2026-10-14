@@ -26,6 +26,7 @@ The interactive original main and unsupported pages are not run yet. This is a
 | clipplane | the eight cells of the original main loop | API self-test (needs GLES fixed-point calls) |
 | lists | the first frame through display lists (`createLists()`, `setupScene()`, extracted from main unchanged) | immediate-mode toggle, input and statistics |
 | select | frame after picking a cube (GL_SELECT with gluPickMatrix, then GL_FEEDBACK outline), cursor walked to a hit | input, statistics |
+| pixels | a frame of the original main loop (`setupScene()`, `drawFrame()`, extracted unchanged): cube with glBitmap label (3D raster position, depth tested), glCopyPixels reflection with zoom, color index glDrawPixels with glPixelMap palette and pixel transfer, luminance image with zoom -1, bitmap font display lists | input, statistics |
 | accum | frames 1..5 of the original main loop (`setupScene()`, `makeLens()`, `drawFrame()`, extracted unchanged): motion blur (GL_MULT/GL_ACCUM/GL_RETURN) and depth of field (GL_LOAD/GL_ACCUM) | input, statistics |
 | stipple | the first frame of the original main loop (`createTexture()`, `setupScene()`, `drawFrame()`, extracted unchanged): stippled lines, line loop, halftone rectangles, screen-door cube | input, statistics |
 | glu0, glu1, glu2 | the original glu example pages (`drawQuadricsPage` etc., bodies extracted unchanged): scale/mipmap checks, quadrics, NURBS and tessellation | input, statistics |

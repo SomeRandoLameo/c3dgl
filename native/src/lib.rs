@@ -31,6 +31,8 @@ mod lines;
 mod lists;
 #[cfg(any(target_os = "horizon", test))]
 mod matrix;
+#[cfg(any(target_os = "horizon", test))]
+mod pixels;
 mod platform;
 #[cfg(any(target_os = "horizon", test))]
 mod polygon;

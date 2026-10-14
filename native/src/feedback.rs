@@ -107,6 +107,10 @@ impl Select {
         }
     }
 
+    pub(crate) fn hit(&mut self, z: f32) {
+        self.select_hit(z);
+    }
+
     fn select_hit(&mut self, z: f32) {
         self.hit = true;
         self.hit_min = self.hit_min.min(z);
@@ -211,6 +215,21 @@ unsafe fn write_vertex(s: &mut Select, win: [f32; 3], w: f32, color: [f32; 4], t
             s.feedback_value(t);
         }
     }
+}
+
+/// glBitmap, glDrawPixels, glCopyPixels in feedback mode: the token and the raster position.
+pub(crate) unsafe fn raster_token(
+    s: &mut Select,
+    token: u32,
+    pos: [f32; 4],
+    color: [f32; 4],
+    tex: [f32; 4],
+) {
+    if s.mode != FEEDBACK {
+        return;
+    }
+    s.feedback_value(token as f32);
+    write_vertex(s, [pos[0], pos[1], pos[2]], pos[3], color, tex);
 }
 
 /// A clipped primitive: token (and vertex count for polygons) with its vertices, or a hit.
