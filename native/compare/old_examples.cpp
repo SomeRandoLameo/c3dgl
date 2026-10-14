@@ -1,9 +1,15 @@
 // Shared capture entry point. Geometry, textures and GL draw calls come directly
 // from the existing example TU; the interactive main is not selected here.
 #define main c3dglOriginalInteractiveMain
-#if defined(C3DGL_OLD_PRIMITIVES)
+#if defined(C3DGL_OLD_PRIMITIVES) || defined(C3DGL_OLD_PRIMITIVES2) || defined(C3DGL_OLD_PRIMITIVES3)
 #include "../../examples/primitives/main.cpp"
+#ifdef C3DGL_OLD_PRIMITIVES3
+#define CASE "primitives3"
+#elif defined(C3DGL_OLD_PRIMITIVES2)
+#define CASE "primitives2"
+#else
 #define CASE "primitives"
+#endif
 #elif defined(C3DGL_OLD_TEXTURE) || defined(C3DGL_OLD_TEXCOORDS) || defined(C3DGL_OLD_TEXMATRIX) || defined(C3DGL_OLD_MULTITEXTURE) || defined(C3DGL_OLD_MIPMAP) || defined(C3DGL_OLD_COMPRESSED)
 #include "../../examples/texture/main.cpp"
 #ifdef C3DGL_OLD_COMPRESSED
@@ -41,12 +47,36 @@ int main() {
     if(!report) {gfxExit();return 1;}
     if(!c3dglInit()) {fprintf(report,"FAIL renderer init\n");fclose(report);gfxExit();return 1;}
     glClearColor(.12f,.12f,.15f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-#if defined(C3DGL_OLD_PRIMITIVES)
+#if defined(C3DGL_OLD_PRIMITIVES3)
+    // Page 3 of the original main loop, call for call
+    const GLuint checker=createChecker();
+    beginCell(0,0);drawEvalCurve();
+    beginCell(1,0);drawEvalColorCurve();
+    beginCell(2,0);drawEvalPoints();
+    beginCell(3,0);drawEvalRational();
+    drawEvalSurfaces(checker);
+    glDeleteTextures(1,&checker);
+#elif defined(C3DGL_OLD_PRIMITIVES2)
+    // Page 2 of the original main loop, call for call
+    beginCell(0,0);drawFlatFan();
+    beginCell(1,0);drawFlatPolygon();
+    beginCell(2,0);drawLineMode();
+    beginCell(3,0);drawPointMode();
+    beginCell(0,1);drawFrontBack();
+    beginCell(1,1);drawEdgeFlags();
+    beginCell(2,1);drawPolygonOffset();
+    beginCell(3,1);drawDepthRange();
+#elif defined(C3DGL_OLD_PRIMITIVES)
+    // Page 1 of the original main loop, call for call
     glEnable(GL_CULL_FACE);glCullFace(GL_BACK);glFrontFace(GL_CCW);
+    beginCell(0,0);drawPoints();
+    beginCell(1,0);drawLineStrip();
+    beginCell(2,0);drawLineLoop();
     beginCell(3,0);drawTriangleStrip();
     beginCell(0,1);drawTriangleFan();
     beginCell(1,1);drawQuadStrip();
     beginCell(2,1);drawPolygon();
+    beginCell(3,1);drawElements();
     glDisable(GL_CULL_FACE);
 #elif defined(C3DGL_OLD_COMPRESSED)
     const CompressedTextures comp=createCompressedTextures();const GLuint tex=comp.rgb8;drawCompressedPage(comp);
@@ -87,7 +117,7 @@ int main() {
         }
         fclose(image);
     }
-#if !defined(C3DGL_OLD_PRIMITIVES)
+#if !defined(C3DGL_OLD_PRIMITIVES) && !defined(C3DGL_OLD_PRIMITIVES2) && !defined(C3DGL_OLD_PRIMITIVES3)
     glDeleteTextures(1,&tex);
 #endif
     c3dglClose();

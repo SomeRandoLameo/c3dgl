@@ -7,6 +7,7 @@ extern "C" {
 #endif
 typedef unsigned char GLboolean;
 typedef unsigned char GLubyte;
+typedef short GLshort;
 typedef unsigned int GLuint;
 typedef void GLvoid;
 typedef ptrdiff_t GLsizeiptr;
@@ -105,6 +106,18 @@ void glBlendEquation(GLenum mode);
 void glBlendEquationSeparate(GLenum rgb, GLenum alpha);
 void glBlendColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
 #define GL_DEPTH_TEST 0x0b71
+#define GL_FLAT 0x1d00
+#define GL_SMOOTH 0x1d01
+#define GL_SHADE_MODEL 0x0b54
+#define GL_POINT 0x1b00
+#define GL_LINE 0x1b01
+#define GL_FILL 0x1b02
+#define GL_POLYGON_MODE 0x0b40
+#define GL_POLYGON_OFFSET_FACTOR 0x8038
+#define GL_POLYGON_OFFSET_UNITS 0x2a00
+#define GL_POLYGON_OFFSET_POINT 0x2a01
+#define GL_POLYGON_OFFSET_LINE 0x2a02
+#define GL_POLYGON_OFFSET_FILL 0x8037
 #define GL_POINT_SIZE 0x0b11
 #define GL_LINE_WIDTH 0x0b21
 #define GL_SCISSOR_BOX 0x0c10
@@ -138,6 +151,40 @@ void glDepthMask(GLboolean flag);
 void glDepthFunc(GLenum func);
 void glAlphaFunc(GLenum func, GLfloat ref);
 void glLineWidth(GLfloat width);
+void glShadeModel(GLenum mode);
+void glPolygonMode(GLenum face, GLenum mode);
+void glPolygonOffset(GLfloat factor, GLfloat units);
+void glEdgeFlag(GLboolean flag);
+void glEdgeFlagv(const GLboolean *flag);
+void glRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2);
+void glRectd(GLdouble x1, GLdouble y1, GLdouble x2, GLdouble y2);
+void glRecti(GLint x1, GLint y1, GLint x2, GLint y2);
+void glRects(GLshort x1, GLshort y1, GLshort x2, GLshort y2);
+void glRectfv(const GLfloat *v1, const GLfloat *v2);
+#define GL_AUTO_NORMAL 0x0d80
+#define GL_MAP1_COLOR_4 0x0d90
+#define GL_MAP1_VERTEX_3 0x0d97
+#define GL_MAP1_VERTEX_4 0x0d98
+#define GL_MAP2_COLOR_4 0x0db0
+#define GL_MAP2_TEXTURE_COORD_2 0x0db4
+#define GL_MAP2_VERTEX_3 0x0db7
+#define GL_MAP2_VERTEX_4 0x0db8
+#define GL_COEFF 0x0a00
+#define GL_ORDER 0x0a01
+#define GL_DOMAIN 0x0a02
+void glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat *points);
+void glMap1d(GLenum target, GLdouble u1, GLdouble u2, GLint stride, GLint order, const GLdouble *points);
+void glMap2f(GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLint uorder, GLfloat v1, GLfloat v2, GLint vstride, GLint vorder, const GLfloat *points);
+void glMap2d(GLenum target, GLdouble u1, GLdouble u2, GLint ustride, GLint uorder, GLdouble v1, GLdouble v2, GLint vstride, GLint vorder, const GLdouble *points);
+void glMapGrid1f(GLint un, GLfloat u1, GLfloat u2);
+void glMapGrid2f(GLint un, GLfloat u1, GLfloat u2, GLint vn, GLfloat v1, GLfloat v2);
+void glEvalCoord1f(GLfloat u);
+void glEvalCoord2f(GLfloat u, GLfloat v);
+void glEvalPoint1(GLint i);
+void glEvalPoint2(GLint i, GLint j);
+void glEvalMesh1(GLenum mode, GLint i1, GLint i2);
+void glEvalMesh2(GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2);
+void glGetMapfv(GLenum target, GLenum query, GLfloat *v);
 void glPointSize(GLfloat size);
 void glScissor(GLint x, GLint y, GLsizei width, GLsizei height);
 void glDepthRange(GLdouble nearValue, GLdouble farValue);

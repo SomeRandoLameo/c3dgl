@@ -7,7 +7,18 @@ use crate::{
 pub const COLOR: u32 = 0x4000;
 pub const DEPTH: u32 = 0x0100;
 
+/// Polygon state handled on the CPU (see polygon.rs).
+pub struct PolyState {
+    pub flat: bool,
+    pub modes: [u32; 2],
+    pub offset: [bool; 3],
+    pub factor: f32,
+    pub units: f32,
+}
+
 pub struct FrameState {
+    pub eval: crate::evaluator::Evaluators,
+    pub poly: PolyState,
     pub raster: crate::raster::Raster,
     pub textures: crate::texture::Textures,
     pub viewport: [i32; 4],
@@ -22,6 +33,14 @@ pub struct FrameState {
 impl FrameState {
     pub fn new() -> Self {
         Self {
+            eval: crate::evaluator::Evaluators::new(),
+            poly: PolyState {
+                flat: false,
+                modes: [crate::polygon::FILL; 2],
+                offset: [false; 3],
+                factor: 0.,
+                units: 0.,
+            },
             raster: crate::raster::Raster::new(),
             textures: crate::texture::Textures::new(),
             viewport: [0, 0, 400, 240],
@@ -38,6 +57,46 @@ impl FrameState {
         let [x, y, w, h] = self.viewport;
         w > 0 && h > 0 && x < 400 && y < 240 && x as i64 + w as i64 > 0 && y as i64 + h as i64 > 0
     }
+}
+
+pub(crate) fn offset_index(cap: u32) -> usize {
+    match cap {
+        0x8037 => 0,
+        0x2a02 => 1,
+        _ => 2,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glShadeModel(mode: u32) {
+    with_frame(|s, m| match mode {
+        0x1d00 | 0x1d01 => s.poly.flat = mode == 0x1d00,
+        _ => m.fail(0x0500),
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glPolygonMode(face: u32, mode: u32) {
+    with_frame(|s, m| {
+        if !matches!(face, 0x0404 | 0x0405 | 0x0408) || !matches!(mode, 0x1b00..=0x1b02) {
+            m.fail(0x0500);
+            return;
+        }
+        if face != 0x0405 {
+            s.poly.modes[0] = mode;
+        }
+        if face != 0x0404 {
+            s.poly.modes[1] = mode;
+        }
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glPolygonOffset(factor: f32, units: f32) {
+    with_frame(|s, _| {
+        s.poly.factor = factor;
+        s.poly.units = units;
+    });
 }
 
 fn byte(x: f32) -> u32 {
@@ -137,6 +196,32 @@ fn query(s: &FrameState, m: &Matrices, pname: u32) -> Option<([f64; 16], usize)>
         0x0b73 => {
             v[0] = s.clear_depth as f64;
 
+            1
+        }
+
+        0x0b54 => {
+            v[0] = if s.poly.flat { 0x1d00 } else { 0x1d01 } as f64;
+            1
+        }
+
+        0x0b40 => {
+            v[0] = s.poly.modes[0] as f64;
+            v[1] = s.poly.modes[1] as f64;
+            2
+        }
+
+        0x8038 => {
+            v[0] = s.poly.factor as f64;
+            1
+        }
+
+        0x2a00 => {
+            v[0] = s.poly.units as f64;
+            1
+        }
+
+        0x8037 | 0x2a02 | 0x2a01 => {
+            v[0] = s.poly.offset[offset_index(pname)] as u8 as f64;
             1
         }
 

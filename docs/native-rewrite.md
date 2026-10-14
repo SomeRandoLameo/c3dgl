@@ -266,3 +266,24 @@ the C framebuffer exactly (`native-results/lines-step/`, one run each). Open: li
 stipple, smooth lines, point sprites/attenuation/size arrays, polygon modes and
 offset, user clip planes, and a scissored `glClear` (the memory fill still clears the
 whole buffer). Host tests: 34 pass.
+
+
+## Polygon pipeline and evaluator checkpoint
+
+`glShadeModel`, `glPolygonMode` (per face), `glPolygonOffset`, `glEdgeFlag` and
+`glRect*` are implemented, with GL provoking vertices (last vertex, first for
+`GL_POLYGON`). When any of them is active, primitives are assembled on the CPU:
+fills stay object-space triangles, outlines and vertices become clip-space quads that
+are culled on the CPU, edge flags select outline edges and vertices. The polygon
+offset of filled polygons is folded into the z row of the uploaded MVP (z' = z + bias w),
+one draw per bias, with no shader change. Evaluators (`glMap1/2`, `glMapGrid`,
+`glEvalCoord/Point/Mesh`, `glGetMap`) evaluate Bezier maps on the CPU into immediate
+vertices (colors, texcoords, rational vertices). The complete unchanged pages 1, 2 and
+3 of `examples/primitives/main.cpp` (points, lines, strips and fans, elements; flat
+shading, polygon modes, edge flags, polygon offset, depth range; curves, rational
+curve, colored/wire/textured bicubic patches and point meshes) match the C
+framebuffer exactly, as do the eleven selected original scenes
+(`native-results/primitives-step/`, one run each). Open: line stipple and smooth
+lines, point sprites/attenuation/size arrays, edge-flag arrays, evaluated normals
+(no lighting yet), two-sided lighting, user clip planes, scissored `glClear` and the
+remaining examples. Host tests: 40 pass.

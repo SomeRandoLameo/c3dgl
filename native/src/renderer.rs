@@ -99,6 +99,8 @@ pub(crate) struct Renderer {
     error: i32,
     /// The GPU currently holds the clip-space state (identity matrix, no culling).
     clip_applied: bool,
+    /// Polygon offset folded into the uploaded matrix.
+    bias_applied: f32,
 }
 
 // Boxed: the renderer is large and the 3DS main thread stack is only 32 KiB.
@@ -254,6 +256,7 @@ impl Renderer {
         core::ptr::addr_of_mut!((*slot).stats).write(Stats::default());
         core::ptr::addr_of_mut!((*slot).error).write(0);
         core::ptr::addr_of_mut!((*slot).clip_applied).write(false);
+        core::ptr::addr_of_mut!((*slot).bias_applied).write(0.);
         Some(alloc::boxed::Box::from_raw(slot))
     }
 
@@ -277,6 +280,7 @@ impl Renderer {
 
         self.generation = generation;
         self.clip_applied = false;
+        self.bias_applied = 0.;
         self.matrices.dirty = true;
         self.frame.viewport_dirty = true;
         self.frame.raster.dirty = true;
@@ -462,8 +466,9 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
         || r.matrices.texture_dirty
         || r.frame.raster.dirty
         || r.frame.textures.dirty
-        || r.clip_applied)
-        && update_draw_state(r, false).is_err()
+        || r.clip_applied
+        || r.bias_applied != 0.)
+        && update_draw_state(r, false, 0.).is_err()
     {
         r.error = -4;
         return -4;
@@ -485,8 +490,9 @@ pub unsafe extern "C" fn c3dglNativeDraw(first: usize, count: usize) -> i32 {
 
 // Keep matrix/viewport packet work out of the unchanged-state draw loop.
 #[inline(never)]
-unsafe fn update_draw_state(r: &mut Renderer, clip: bool) -> Result<(), ()> {
+unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(), ()> {
     let clip_changed = clip != r.clip_applied;
+    let bias = if clip { 0. } else { bias };
     let viewport = if r.frame.viewport_dirty {
         Some(r.frame.viewport)
     } else {
@@ -496,7 +502,7 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool) -> Result<(), ()> {
     // Clip-space draws (expanded lines and points) carry NDC positions: identity projection.
     let update = if clip {
         clip_changed.then_some(crate::matrix::IDENTITY)
-    } else if r.matrices.dirty || clip_changed {
+    } else if r.matrices.dirty || clip_changed || bias != r.bias_applied {
         Some(r.matrices.combined())
     } else {
         None
@@ -549,14 +555,17 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool) -> Result<(), ()> {
     }
 
     if let Some(matrix) = update {
-        if gpu::matrix(&mut commands, &matrix).is_err() {
+        if gpu::matrix(&mut commands, &matrix, bias).is_err() {
             return Err(());
         }
     }
 
     r.used = commands.used;
     r.clip_applied = clip;
-    if !clip {
+    if clip {
+        r.bias_applied = 0.;
+    } else {
+        r.bias_applied = bias;
         r.matrices.dirty = false;
     }
     r.matrices.texture_dirty = false;
@@ -1118,6 +1127,39 @@ fn line_style(r: &Renderer) -> crate::lines::Style {
     }
 }
 
+fn poly_settings(r: &Renderer) -> crate::polygon::Settings {
+    let (poly, raster) = (&r.frame.poly, &r.frame.raster);
+    crate::polygon::Settings {
+        flat: poly.flat,
+        modes: poly.modes,
+        offset: poly.offset,
+        factor: poly.factor,
+        units: poly.units,
+        front_ccw: raster.front == 0x0901,
+        cull: raster.cull,
+        cull_face: raster.face,
+        range: raster.range,
+        style: line_style(r),
+    }
+}
+
+unsafe fn draw_items(
+    r: &mut Renderer,
+    items: alloc::vec::Vec<crate::polygon::Item>,
+) -> Result<(), u32> {
+    for item in items {
+        match item {
+            crate::polygon::Item::Fill { vertices, bias } => {
+                draw_transient(r, &vertices, &[], vertices.len() as u32, false, bias)?
+            }
+            crate::polygon::Item::Clip { vertices, indices } => {
+                draw_transient(r, &vertices, &indices, indices.len() as u32, true, 0.)?
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Upload vertices (and indices) for one draw of the frame and draw them. `clip`: positions are
 /// already NDC (expanded lines and points).
 unsafe fn draw_transient(
@@ -1126,6 +1168,7 @@ unsafe fn draw_transient(
     indices: &[u16],
     count: u32,
     clip: bool,
+    bias: f32,
 ) -> Result<(), u32> {
     r.transient.try_reserve(1).map_err(|_| 0x0505u32)?;
     let bytes = vertices.len() * core::mem::size_of::<GpuVertex>();
@@ -1142,7 +1185,7 @@ unsafe fn draw_transient(
         return Err(0x0502);
     }
 
-    update_draw_state(r, clip).map_err(|_| 0x0505u32)?;
+    update_draw_state(r, clip, bias).map_err(|_| 0x0505u32)?;
     let mut c = r.commands();
     gpu::geometry(
         &mut c,
@@ -1178,19 +1221,34 @@ pub(crate) unsafe fn end_immediate() {
             }
 
             if batch.primitive < 4 {
-                let (vertices, indices) =
-                    crate::lines::expand(batch.primitive, &batch.vertices, &line_style(r))?;
+                let (vertices, indices) = crate::lines::expand(
+                    batch.primitive,
+                    &batch.vertices,
+                    &line_style(r),
+                    r.frame.poly.flat,
+                )?;
                 if indices.is_empty() {
                     return Ok(());
                 }
-                return draw_transient(r, &vertices, &indices, indices.len() as u32, true);
+                return draw_transient(r, &vertices, &indices, indices.len() as u32, true, 0.);
+            }
+
+            let settings = poly_settings(r);
+            if settings.needed() {
+                let items = crate::polygon::assemble(
+                    batch.primitive,
+                    &batch.vertices,
+                    &batch.edges,
+                    &settings,
+                )?;
+                return draw_items(r, items);
             }
 
             if !r.frame.raster.drawable() {
                 return Ok(());
             }
 
-            draw_transient(r, &batch.vertices, &batch.indices, batch.count, false)
+            draw_transient(r, &batch.vertices, &batch.indices, batch.count, false, 0.)
         })();
 
         if let Err(e) = result {
@@ -1238,11 +1296,28 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                     r.immediate.texcoord,
                     r.immediate.extra_texcoords,
                 )?;
-                let (vertices, tris) = crate::lines::expand(mode, &source, &line_style(r))?;
+                let (vertices, tris) =
+                    crate::lines::expand(mode, &source, &line_style(r), r.frame.poly.flat)?;
                 if tris.is_empty() {
                     return Ok(());
                 }
-                return draw_transient(r, &vertices, &tris, tris.len() as u32, true);
+                return draw_transient(r, &vertices, &tris, tris.len() as u32, true, 0.);
+            }
+
+            let settings = poly_settings(r);
+            if settings.needed() {
+                let source = r.arrays.gather(
+                    first as usize,
+                    count,
+                    kind,
+                    indices,
+                    r.immediate.color,
+                    r.immediate.texcoord,
+                    r.immediate.extra_texcoords,
+                )?;
+                let edges = alloc::vec![true; source.len()];
+                let items = crate::polygon::assemble(mode, &source, &edges, &settings)?;
+                return draw_items(r, items);
             }
 
             if !r.frame.raster.drawable() {
@@ -1260,7 +1335,7 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                 r.immediate.extra_texcoords,
             )?;
 
-            update_draw_state(r, false).map_err(|_| 0x0505u32)?;
+            update_draw_state(r, false, 0.).map_err(|_| 0x0505u32)?;
             let mut c = r.commands();
             gpu::geometry(&mut c, address, 0, draw_count, index).map_err(|_| 0x0505u32)?;
             r.used = c.used;

@@ -162,6 +162,18 @@ unsafe fn enable(cap: u32, on: bool) {
         return;
     }
 
+    if matches!(cap, 0x0d80 | 0x0d90..=0x0d98 | 0x0db0..=0x0db8) {
+        with_frame(|s, _| {
+            s.eval.set_enabled(cap, on);
+        });
+        return;
+    }
+
+    if matches!(cap, 0x8037 | 0x2a02 | 0x2a01) {
+        with_frame(|s, _| s.poly.offset[crate::frame::offset_index(cap)] = on);
+        return;
+    }
+
     with_frame(|s, m| {
         let r = &mut s.raster;
         let value = match cap {
@@ -202,6 +214,10 @@ pub unsafe extern "C" fn glIsEnabled(cap: u32) -> u8 {
             0x0b44 => s.raster.cull as u8,
             0x0bc0 => s.raster.alpha as u8,
             0x0c11 => s.raster.scissor as u8,
+            0x8037 | 0x2a02 | 0x2a01 => s.poly.offset[crate::frame::offset_index(cap)] as u8,
+            0x0d80 | 0x0d90..=0x0d98 | 0x0db0..=0x0db8 => {
+                s.eval.is_enabled(cap).unwrap_or(false) as u8
+            }
             0x0be2 => s.raster.blend.enabled as u8,
             0x0de1 => s.textures.enabled() as u8,
             _ => {

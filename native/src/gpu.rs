@@ -149,7 +149,8 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
 }
 
 /// Float32 uniform vectors are sent w,z,y,x; rows implement PICA screen/depth mapping.
-pub fn matrix(c: &mut Commands<'_>, m: &[f32; 16]) -> Result<(), ()> {
+/// `bias`: polygon offset added to the PICA NDC depth (folded into the z row: z' = z + bias * w).
+pub fn matrix(c: &mut Commands<'_>, m: &[f32; 16], bias: f32) -> Result<(), ()> {
     if c.words.len() - c.used < 20 + DRAW_WORDS + FINISH_WORDS {
         return Err(());
     }
@@ -160,7 +161,7 @@ pub fn matrix(c: &mut Commands<'_>, m: &[f32; 16]) -> Result<(), ()> {
             let value = match row {
                 0 => m[col * 4 + 1],
                 1 => -m[col * 4],
-                2 => (m[col * 4 + 2] - m[col * 4 + 3]) * 0.5,
+                2 => (m[col * 4 + 2] - m[col * 4 + 3]) * 0.5 + bias * m[col * 4 + 3],
                 _ => m[col * 4 + 3],
             };
 
@@ -436,7 +437,7 @@ mod tests {
     fn matrix_uniform_layout_and_overflow() {
         let mut words = [0; 64];
         let mut c = Commands::new(&mut words);
-        matrix(&mut c, &crate::matrix::IDENTITY).unwrap();
+        matrix(&mut c, &crate::matrix::IDENTITY, 0.).unwrap();
         let encoded = c.as_slice();
         assert_eq!(encoded.len(), 20);
         assert_eq!(encoded[0], 0x80000000);
@@ -447,7 +448,7 @@ mod tests {
         );
         assert_eq!(encoded[11], (-0.5f32).to_bits());
         let before = encoded.to_vec();
-        assert!(matrix(&mut c, &crate::matrix::IDENTITY).is_err());
+        assert!(matrix(&mut c, &crate::matrix::IDENTITY, 0.).is_err());
         assert_eq!(c.as_slice(), before);
     }
 

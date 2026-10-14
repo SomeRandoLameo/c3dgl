@@ -13,7 +13,7 @@ The interactive original main and unsupported pages are not run yet. This is a
 
 | Example | Exact original functions currently selected | Remaining full-example gaps |
 |---|---|---|
-| primitives | `beginCell`, `drawTriangleStrip`, `drawTriangleFan`, `drawQuadStrip`, `drawPolygon` | points/lines, flat/polygon modes, edge flags, polygon offset, evaluators |
+| primitives, primitives2, primitives3 | all three complete pages of the original main loop, call for call | line stipple/smooth lines, point sprites, edge-flag arrays, printed pages and input |
 | texture | `createF(16)`, `drawCell(0,0,texture)` | multitexturing/combine, mipmaps, compression |
 | multitexture | complete original `drawMultitexturePage`, eight cells | mipmap and compression pages remain separate |
 | mipmap | complete original `drawMipmapPage`, eight floor cells (levels, trilinear, GL_GENERATE_MIPMAP, RGB565) | compressed page remains separate |

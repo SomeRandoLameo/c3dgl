@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 pub(crate) struct Batch {
     pub vertices: Vec<GpuVertex>,
     pub indices: Vec<u16>,
+    pub edges: Vec<bool>,
     pub count: u32,
     /// GL mode of the batch; modes below 4 (points, lines) carry raw vertices for expansion.
     pub primitive: u32,
@@ -15,8 +16,10 @@ pub(crate) struct Immediate {
     pub color: [f32; 4],
     pub texcoord: [f32; 4],
     pub extra_texcoords: [[f32; 4]; 2],
+    pub edge: bool,
     mode: u32,
     vertices: Vec<GpuVertex>,
+    edges: Vec<bool>,
 }
 
 impl Immediate {
@@ -26,8 +29,10 @@ impl Immediate {
             color: [1.; 4],
             texcoord: [0., 0., 0., 1.],
             extra_texcoords: [[0., 0., 0., 1.]; 2],
+            edge: true,
             mode: 4,
             vertices: Vec::new(),
+            edges: Vec::new(),
         }
     }
 
@@ -42,6 +47,7 @@ impl Immediate {
             .try_reserve(4096usize.saturating_sub(self.vertices.len()))
             .map_err(|_| 0x0505u32)?;
         self.vertices.clear();
+        self.edges.clear();
         self.active = true;
         self.mode = mode;
 
@@ -49,6 +55,16 @@ impl Immediate {
     }
 
     fn vertex(&mut self, position: [f32; 4]) -> Result<(), u32> {
+        self.vertex_with(position, None, None)
+    }
+
+    /// A vertex whose color and texcoord replace the current ones (evaluators).
+    pub fn vertex_with(
+        &mut self,
+        position: [f32; 4],
+        color: Option<[f32; 4]>,
+        texcoord: Option<[f32; 4]>,
+    ) -> Result<(), u32> {
         if !self.active {
             return Err(0x0502);
         }
@@ -57,10 +73,11 @@ impl Immediate {
             return Err(0x0505);
         }
 
+        self.edges.push(self.edge);
         self.vertices.push(GpuVertex {
             position,
-            color: self.color.map(gpu_color_component),
-            texcoord: self.texcoord,
+            color: color.unwrap_or(self.color).map(gpu_color_component),
+            texcoord: texcoord.unwrap_or(self.texcoord),
             extra_texcoords: self.extra_texcoords,
         });
 
@@ -75,7 +92,9 @@ impl Immediate {
         self.active = false;
         let plan = crate::primitive::Plan::new(self.mode, self.vertices.len())?;
         self.vertices.truncate(plan.consumed);
+        self.edges.truncate(plan.consumed);
         let vertices = core::mem::take(&mut self.vertices);
+        let edges = core::mem::take(&mut self.edges);
         let indices = if self.mode <= 4 {
             Vec::new()
         } else {
@@ -85,6 +104,7 @@ impl Immediate {
         Ok(Batch {
             vertices,
             indices,
+            edges,
             count: if self.mode < 4 {
                 plan.consumed as u32
             } else {
@@ -252,6 +272,55 @@ mod tests {
             s.vertex([0.; 4]).unwrap();
         }
         assert_eq!(s.vertex([0.; 4]), Err(0x0505));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glEdgeFlag(flag: u8) {
+    with_immediate(|r| r.immediate.edge = flag != 0);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glEdgeFlagv(flag: *const u8) {
+    if flag.is_null() {
+        with_immediate(|r| r.matrices.fail(0x0501));
+    } else {
+        glEdgeFlag(flag.read());
+    }
+}
+
+/// A counter-clockwise quad from (x1, y1) to (x2, y2) at z = 0.
+#[no_mangle]
+pub unsafe extern "C" fn glRectf(x1: f32, y1: f32, x2: f32, y2: f32) {
+    glBegin(7);
+    glVertex2f(x1, y1);
+    glVertex2f(x2, y1);
+    glVertex2f(x2, y2);
+    glVertex2f(x1, y2);
+    glEnd();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glRectd(x1: f64, y1: f64, x2: f64, y2: f64) {
+    glRectf(x1 as f32, y1 as f32, x2 as f32, y2 as f32);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glRecti(x1: i32, y1: i32, x2: i32, y2: i32) {
+    glRectf(x1 as f32, y1 as f32, x2 as f32, y2 as f32);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glRects(x1: i16, y1: i16, x2: i16, y2: i16) {
+    glRectf(x1 as f32, y1 as f32, x2 as f32, y2 as f32);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glRectfv(v1: *const f32, v2: *const f32) {
+    if v1.is_null() || v2.is_null() {
+        with_immediate(|r| r.matrices.fail(0x0501));
+    } else {
+        glRectf(v1.read(), v1.add(1).read(), v2.read(), v2.add(1).read());
     }
 }
 

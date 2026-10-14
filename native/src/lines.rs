@@ -78,9 +78,10 @@ fn quad(out: &mut Vec<GpuVertex>, indices: &mut Vec<u16>, q: [GpuVertex; 4]) -> 
     Ok(())
 }
 
-fn point(
+pub(crate) fn point(
     s: &Style,
     v: &GpuVertex,
+    z_bias: f32,
     out: &mut Vec<GpuVertex>,
     indices: &mut Vec<u16>,
 ) -> Result<(), u32> {
@@ -88,7 +89,7 @@ fn point(
     if c[3] < CLIP_W_MIN {
         return Ok(());
     }
-    let p = [c[0] / c[3], c[1] / c[3], c[2] / c[3]];
+    let p = [c[0] / c[3], c[1] / c[3], c[2] / c[3] + z_bias];
     let r = 0.5 * s.point_size.clamp(1., MAX_POINT_SIZE);
     let (rx, ry) = (2. * r / s.viewport[2] as f32, 2. * r / s.viewport[3] as f32);
     // Bottom left, top left, top right, bottom right (NDC y points up).
@@ -100,10 +101,11 @@ fn point(
     )
 }
 
-fn segment(
+pub(crate) fn segment(
     s: &Style,
     a: &GpuVertex,
     b: &GpuVertex,
+    z_bias: f32,
     out: &mut Vec<GpuVertex>,
     indices: &mut Vec<u16>,
 ) -> Result<(), u32> {
@@ -125,8 +127,8 @@ fn segment(
         }
         vb = lerp(b, a, t);
     }
-    let pa = [ca[0] / ca[3], ca[1] / ca[3], ca[2] / ca[3]];
-    let pb = [cb[0] / cb[3], cb[1] / cb[3], cb[2] / cb[3]];
+    let pa = [ca[0] / ca[3], ca[1] / ca[3], ca[2] / ca[3] + z_bias];
+    let pb = [cb[0] / cb[3], cb[1] / cb[3], cb[2] / cb[3] + z_bias];
 
     // Direction in pixels, then half the line width back to NDC (perpendicular, and along the
     // line for square caps).
@@ -155,31 +157,56 @@ fn segment(
     )
 }
 
+/// The color of `pv` on `v` (flat shading).
+pub(crate) fn shaded(v: &GpuVertex, pv: &GpuVertex) -> GpuVertex {
+    GpuVertex {
+        color: pv.color,
+        ..*v
+    }
+}
+
 /// Expand `v` (consumed vertices of a point or line mode) into NDC vertices and indices.
+/// `flat`: segments take the color of their last vertex (the first one closing a loop).
 pub(crate) fn expand(
     mode: u32,
     v: &[GpuVertex],
     s: &Style,
+    flat: bool,
 ) -> Result<(Vec<GpuVertex>, Vec<u16>), u32> {
     let (mut out, mut indices) = (Vec::new(), Vec::new());
+    let mut line = |a: &GpuVertex, b: &GpuVertex, pv: &GpuVertex| {
+        if flat {
+            segment(
+                s,
+                &shaded(a, pv),
+                &shaded(b, pv),
+                0.,
+                &mut out,
+                &mut indices,
+            )
+        } else {
+            segment(s, a, b, 0., &mut out, &mut indices)
+        }
+    };
     match mode {
         0 => {
             for p in v {
-                point(s, p, &mut out, &mut indices)?;
+                point(s, p, 0., &mut out, &mut indices)?;
             }
+            return Ok((out, indices));
         }
         1 => {
             for pair in v.chunks_exact(2) {
-                segment(s, &pair[0], &pair[1], &mut out, &mut indices)?;
+                line(&pair[0], &pair[1], &pair[1])?;
             }
         }
         2 | 3 => {
             for pair in v.windows(2) {
-                segment(s, &pair[0], &pair[1], &mut out, &mut indices)?;
+                line(&pair[0], &pair[1], &pair[1])?;
             }
             // A loop closes with the segment from the last vertex to the first.
             if mode == 2 && v.len() >= 2 {
-                segment(s, &v[v.len() - 1], &v[0], &mut out, &mut indices)?;
+                line(&v[v.len() - 1], &v[0], &v[0])?;
             }
         }
         _ => return Err(0x0500),
@@ -212,7 +239,7 @@ mod tests {
     #[test]
     fn horizontal_line_widens_perpendicular_and_with_square_caps() {
         let v = [vertex(-0.5, 0., 0., 1.), vertex(0.5, 0., 0., 1.)];
-        let (out, indices) = expand(1, &v, &style(4., 1.)).unwrap();
+        let (out, indices) = expand(1, &v, &style(4., 1.), false).unwrap();
         assert_eq!(indices, [0, 1, 2, 0, 2, 3]);
         // Half width 2 px: 2/200 in x, 2/120 in y.
         let (ex, ny) = (2. / 200., 2. / 120.);
@@ -238,21 +265,27 @@ mod tests {
             vertex(0.5, -0.5, 0., 1.),
             vertex(0., 0.5, 0., 1.),
         ];
-        assert_eq!(expand(2, &v, &style(1., 1.)).unwrap().0.len(), 12);
-        assert_eq!(expand(3, &v, &style(1., 1.)).unwrap().0.len(), 8);
-        assert_eq!(expand(1, &v[..2], &style(1., 1.)).unwrap().0.len(), 4);
+        assert_eq!(expand(2, &v, &style(1., 1.), false).unwrap().0.len(), 12);
+        assert_eq!(expand(3, &v, &style(1., 1.), false).unwrap().0.len(), 8);
+        assert_eq!(
+            expand(1, &v[..2], &style(1., 1.), false).unwrap().0.len(),
+            4
+        );
         assert_eq!(consumed(1, 5), 4);
-        let (points, idx) = expand(0, &v, &style(1., 8.)).unwrap();
+        let (points, idx) = expand(0, &v, &style(1., 8.), false).unwrap();
         assert_eq!((points.len(), idx.len()), (12, 18));
         // A size-8 point is 8 px wide: 8/400*... half 4 px = 4/200 in NDC.
         assert!((points[2].position[0] - points[0].position[0] - 8. / 200.).abs() < 1e-6);
         // Behind the viewer: dropped; one end behind: clipped at w = CLIP_W_MIN.
         let behind = [vertex(0., 0., 0., -1.)];
-        assert!(expand(0, &behind, &style(1., 1.)).unwrap().0.is_empty());
+        assert!(expand(0, &behind, &style(1., 1.), false)
+            .unwrap()
+            .0
+            .is_empty());
         let half = [vertex(0., 0., 0., 1.), vertex(0., 0., 0., -1.)];
-        let (out, _) = expand(1, &half, &style(1., 1.)).unwrap();
+        let (out, _) = expand(1, &half, &style(1., 1.), false).unwrap();
         assert_eq!(out.len(), 4);
         assert!(out.iter().all(|v| v.position.iter().all(|c| c.is_finite())));
-        assert!(expand(4, &v, &style(1., 1.)).is_err());
+        assert!(expand(4, &v, &style(1., 1.), false).is_err());
     }
 }

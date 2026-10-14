@@ -6,6 +6,8 @@ mod arrays;
 #[cfg(any(target_os = "horizon", test))]
 mod blend;
 #[cfg(any(target_os = "horizon", test))]
+mod evaluator;
+#[cfg(any(target_os = "horizon", test))]
 mod frame;
 #[cfg(any(target_os = "horizon", test))]
 mod gpu;
@@ -16,6 +18,8 @@ mod lines;
 #[cfg(any(target_os = "horizon", test))]
 mod matrix;
 mod platform;
+#[cfg(any(target_os = "horizon", test))]
+mod polygon;
 #[cfg(any(target_os = "horizon", test))]
 mod primitive;
 #[cfg(any(target_os = "horizon", test))]
