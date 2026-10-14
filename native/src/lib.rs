@@ -35,6 +35,8 @@ mod renderer;
 #[cfg(any(target_os = "horizon", test))]
 mod shader;
 #[cfg(any(target_os = "horizon", test))]
+mod texgen;
+#[cfg(any(target_os = "horizon", test))]
 mod texture;
 
 /// PICA command encoding is independent of GPU services and memory allocation.

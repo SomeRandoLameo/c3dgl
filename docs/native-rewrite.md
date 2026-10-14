@@ -303,3 +303,16 @@ match the C framebuffer exactly, as do the eleven earlier scenes
 (`native-results/lighting-step/`, one run each). New state of later features (fog,
 stencil, clip planes, stipple, pixel state, lists) must join the snapshot when added.
 Host tests: 44 pass.
+
+
+## Texture coordinate generation checkpoint
+
+`glTexGen*`/`glGetTexGen*` and `GL_TEXTURE_GEN_S/T/R/Q` are implemented per unit with
+object-linear, eye-linear and sphere-map modes, ported with the C renderer's folding of
+planes, modelview and texture matrix so rounding is identical. Units with generated
+coordinates get an identity texture matrix in the shader and unit 0 samples in projection
+mode, like the C renderer; generated draws use the CPU vertex path. `GL_CLAMP` is
+accepted as a wrap mode (clamp to edge). The original `examples/texgen/main.cpp` now keeps
+its scene setup and one frame in `setupScene()` and `drawFrame()` (bodies unchanged apart
+from indentation; `main` calls them): the first frame matches the C framebuffer exactly,
+as do the twelve earlier scenes (`native-results/texgen-step/`, one run each). Host tests: 47 pass.

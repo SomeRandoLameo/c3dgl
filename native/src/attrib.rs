@@ -48,6 +48,7 @@ pub(crate) struct Saved {
     light: Lighting,
     eval: EvalSave,
     textures: TexSave,
+    texgen: crate::texgen::TexGen,
     mode: usize,
 }
 
@@ -96,6 +97,7 @@ pub unsafe extern "C" fn glPushAttrib(mask: u32) {
             light: f.light.clone(),
             eval: f.eval.save(),
             textures: f.textures.save(),
+            texgen: f.texgen.clone(),
             mode: r.matrices.mode(),
         };
         r.stacks.attribs.push(saved);
@@ -157,6 +159,7 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         f.poly.offset = a.poly.offset;
         f.light.restore_enables(&a.light);
         f.eval.restore_enables(&a.eval);
+        f.texgen.restore_enables(&a.texgen);
     }
     if mask & COLOR_BUFFER != 0 {
         f.raster.alpha = a.raster.alpha;
@@ -167,6 +170,7 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
     }
     if mask & TEXTURE != 0 {
         f.textures.restore(&a.textures, true, true);
+        f.texgen = a.texgen.clone();
         r.matrices.active_texture(f.textures.active);
     } else if mask & ENABLE != 0 {
         f.textures.restore(&a.textures, true, false);

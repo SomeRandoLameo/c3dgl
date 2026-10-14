@@ -365,7 +365,7 @@ impl Textures {
                 s.dimensions = (tw as u32) << 16 | th as u32;
                 s.scale = [o.width as f32 / tw as f32, o.height as f32 / th as f32];
                 let wrap = |v| match v {
-                    0x812f => 0,
+                    0x812f | 0x2900 => 0,
                     0x2901 => 2,
                     _ => 3,
                 };
@@ -1097,7 +1097,7 @@ pub unsafe extern "C" fn glTexParameteri(kind: u32, pname: u32, value: i32) {
         let valid = match pname {
             0x2801 => matches!(value, 0x2600 | 0x2601 | 0x2700..=0x2703),
             0x2800 => matches!(value, 0x2600 | 0x2601),
-            0x2802 | 0x2803 => matches!(value, 0x2901 | 0x812f | 0x8370),
+            0x2802 | 0x2803 => matches!(value, 0x2900 | 0x2901 | 0x812f | 0x8370),
             0x8191 => true,
             _ => false,
         };

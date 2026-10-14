@@ -1,0 +1,249 @@
+{
+  "accum": {
+    "source": "examples/accum/main.cpp",
+    "missing_symbols": [
+      "glAccum",
+      "glClearAccum"
+    ],
+    "static_scan_only": true
+  },
+  "api": {
+    "source": "examples/api/main.c",
+    "missing_symbols": [
+      "glAccum",
+      "glAreTexturesResident",
+      "glArrayElement",
+      "glBitmap",
+      "glCallList",
+      "glCallLists",
+      "glClearAccum",
+      "glClearStencil",
+      "glClipPlane",
+      "glColor3b",
+      "glColor4us",
+      "glColorMask",
+      "glCopyPixels",
+      "glCopyTexImage1D",
+      "glCopyTexImage2D",
+      "glCopyTexSubImage1D",
+      "glCopyTexSubImage2D",
+      "glDeleteLists",
+      "glDrawBuffer",
+      "glDrawPixels",
+      "glEndList",
+      "glFeedbackBuffer",
+      "glGenLists",
+      "glGetBufferParameteriv",
+      "glGetDoublev",
+      "glGetFixedv",
+      "glGetPixelMapfv",
+      "glGetPixelMapuiv",
+      "glGetPixelMapusv",
+      "glGetPointerv",
+      "glGetPolygonStipple",
+      "glGetString",
+      "glGetTexImage",
+      "glGetTexLevelParameteriv",
+      "glGetTexParameterfv",
+      "glInitNames",
+      "glInterleavedArrays",
+      "glIsBuffer",
+      "glIsList",
+      "glLineStipple",
+      "glLineWidthx",
+      "glListBase",
+      "glLoadMatrixd",
+      "glLoadName",
+      "glLogicOp",
+      "glNewList",
+      "glPassThrough",
+      "glPixelMapfv",
+      "glPixelMapuiv",
+      "glPixelMapusv",
+      "glPixelTransferf",
+      "glPixelTransferi",
+      "glPixelZoom",
+      "glPolygonStipple",
+      "glPopName",
+      "glPrioritizeTextures",
+      "glPushName",
+      "glRasterPos",
+      "glRasterPos2f",
+      "glRasterPos2i",
+      "glRasterPos3f",
+      "glRasterPos4f",
+      "glReadBuffer",
+      "glReadPixels",
+      "glRenderMode",
+      "glRotated",
+      "glSampleCoverage",
+      "glSampleCoveragex",
+      "glScaled",
+      "glScalex",
+      "glSelectBuffer",
+      "glStencilFunc",
+      "glStencilMask",
+      "glTexCoord2i",
+      "glTexEnvx",
+      "glTexImage1D",
+      "glTexParameterf",
+      "glTexParameterfv",
+      "glTexSubImage1D",
+      "glTranslated",
+      "glTranslatex",
+      "glVertex2i",
+      "glVertex2sv"
+    ],
+    "static_scan_only": true
+  },
+  "clipplane": {
+    "source": "examples/clipplane/main.cpp",
+    "missing_symbols": [
+      "glClipPlane",
+      "glClipPlanef",
+      "glClipPlanex",
+      "glGetClipPlane",
+      "glGetClipPlanef",
+      "glGetClipPlanex"
+    ],
+    "static_scan_only": true
+  },
+  "cube": {
+    "source": "examples/cube/main.cpp",
+    "missing_symbols": [],
+    "static_scan_only": true
+  },
+  "fog": {
+    "source": "examples/fog/main.cpp",
+    "missing_symbols": [
+      "glFogf",
+      "glFogfv",
+      "glFogi",
+      "glFogiv",
+      "glFogx",
+      "glFogxv",
+      "glGetFixedv"
+    ],
+    "static_scan_only": true
+  },
+  "fragment": {
+    "source": "examples/fragment/main.cpp",
+    "missing_symbols": [
+      "glClearStencil",
+      "glColorMask",
+      "glStencilFunc",
+      "glStencilMask",
+      "glStencilOp"
+    ],
+    "static_scan_only": true
+  },
+  "glu": {
+    "source": "examples/glu/main.cpp",
+    "missing_symbols": [
+      "glGetDoublev",
+      "glGetTexLevelParameteriv",
+      "glVertex2d"
+    ],
+    "static_scan_only": true
+  },
+  "lighting": {
+    "source": "examples/lighting/main.cpp",
+    "missing_symbols": [
+      "glGetFixedv",
+      "glGetMaterialxv",
+      "glLightModelx",
+      "glLightModelxv",
+      "glLightx",
+      "glMaterialxv"
+    ],
+    "static_scan_only": true
+  },
+  "lists": {
+    "source": "examples/lists/main.cpp",
+    "missing_symbols": [
+      "glCallList",
+      "glDeleteLists",
+      "glEndList",
+      "glGenLists",
+      "glNewList"
+    ],
+    "static_scan_only": true
+  },
+  "pixels": {
+    "source": "examples/pixels/main.cpp",
+    "missing_symbols": [
+      "glBitmap",
+      "glCallLists",
+      "glCopyPixels",
+      "glDrawPixels",
+      "glEndList",
+      "glGenLists",
+      "glListBase",
+      "glNewList",
+      "glPixelMapfv",
+      "glPixelTransferf",
+      "glPixelTransferi",
+      "glPixelZoom",
+      "glRasterPos2f",
+      "glRasterPos2i",
+      "glRasterPos3f"
+    ],
+    "static_scan_only": true
+  },
+  "points": {
+    "source": "examples/points/main.cpp",
+    "missing_symbols": [
+      "glFrustumf",
+      "glGetFixedv",
+      "glGetPointerv",
+      "glGetString",
+      "glGetTexEnvxv",
+      "glOrthof",
+      "glPointParameterf",
+      "glPointParameterfv",
+      "glPointParameteri",
+      "glPointParameteriv",
+      "glPointParameterx",
+      "glPointParameterxv",
+      "glPointSizePointerOES",
+      "glTexEnvx"
+    ],
+    "static_scan_only": true
+  },
+  "primitives": {
+    "source": "examples/primitives/main.cpp",
+    "missing_symbols": [],
+    "static_scan_only": true
+  },
+  "select": {
+    "source": "examples/select/main.cpp",
+    "missing_symbols": [
+      "glFeedbackBuffer",
+      "glInitNames",
+      "glLoadName",
+      "glPopName",
+      "glPushName",
+      "glRenderMode",
+      "glSelectBuffer"
+    ],
+    "static_scan_only": true
+  },
+  "stipple": {
+    "source": "examples/stipple/main.cpp",
+    "missing_symbols": [
+      "glLineStipple",
+      "glPolygonStipple"
+    ],
+    "static_scan_only": true
+  },
+  "texgen": {
+    "source": "examples/texgen/main.cpp",
+    "missing_symbols": [],
+    "static_scan_only": true
+  },
+  "texture": {
+    "source": "examples/texture/main.cpp",
+    "missing_symbols": [],
+    "static_scan_only": true
+  }
+}

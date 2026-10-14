@@ -74,7 +74,7 @@ impl Immediate {
         texcoord: Option<[f32; 4]>,
     ) -> Result<(), u32> {
         let color = color.unwrap_or(self.color).map(gpu_color_component);
-        self.push(position, color, None, texcoord)
+        self.push(position, color, None, texcoord, None)
     }
 
     /// A vertex with its final (possibly lit) GPU color bytes and optional back color.
@@ -84,6 +84,7 @@ impl Immediate {
         color: [f32; 4],
         back: Option<[f32; 4]>,
         texcoord: Option<[f32; 4]>,
+        extra: Option<[[f32; 4]; 2]>,
     ) -> Result<(), u32> {
         if !self.active {
             return Err(0x0502);
@@ -101,7 +102,7 @@ impl Immediate {
             position,
             color,
             texcoord: texcoord.unwrap_or(self.texcoord),
-            extra_texcoords: self.extra_texcoords,
+            extra_texcoords: extra.unwrap_or(self.extra_texcoords),
         });
 
         Ok(())

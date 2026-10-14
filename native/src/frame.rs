@@ -18,6 +18,7 @@ pub struct PolyState {
 }
 
 pub struct FrameState {
+    pub texgen: crate::texgen::TexGen,
     pub light: crate::lighting::Lighting,
     pub eval: crate::evaluator::Evaluators,
     pub poly: PolyState,
@@ -35,6 +36,7 @@ pub struct FrameState {
 impl FrameState {
     pub fn new() -> Self {
         Self {
+            texgen: crate::texgen::TexGen::new(),
             light: crate::lighting::Lighting::new(),
             eval: crate::evaluator::Evaluators::new(),
             poly: PolyState {

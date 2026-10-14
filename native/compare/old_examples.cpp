@@ -28,6 +28,9 @@
 #elif defined(C3DGL_OLD_LIGHTING)
 #include "../../examples/lighting/main.cpp"
 #define CASE "lighting"
+#elif defined(C3DGL_OLD_TEXGEN)
+#include "../../examples/texgen/main.cpp"
+#define CASE "texgen"
 #else
 #include "../../examples/cube/main.cpp"
 #ifdef C3DGL_OLD_OVERLAY
@@ -94,6 +97,13 @@ int main() {
     const GLuint tex=createF(16);drawTexcoordPage(tex);
 #elif defined(C3DGL_OLD_TEXTURE)
     const GLuint tex=createF(16);drawCell(0,0,tex);
+#elif defined(C3DGL_OLD_TEXGEN)
+    // The first frame of the original main loop: initial angle, scroll offset and tilt
+    setupScene();
+    const Torus torus(1.0f,0.45f,32,16);
+    const GLuint environment=makeEnvironment(),stripes=makeStripes(),tex=environment;
+    drawFrame(torus,environment,stripes,0.0f,0.0f,30.0f,0.0f);
+    glDeleteTextures(1,&stripes);
 #elif defined(C3DGL_OLD_LIGHTING)
     // The cells of the original main loop, call for call
     const GLuint tex=0;const Sphere sphere=createSphere(24,16);

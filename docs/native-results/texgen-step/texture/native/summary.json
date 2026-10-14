@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "8ba6ef06b6ccec4d21ed4d128494bcdf41af2d2be42e385a7154698f8f17a501",
+  "images": {
+    "c3dgl-old-texture-native.ppm": "8769c18bde15d7d0a7c98721d245f8b9c2f86b51a6f175f25a9589a04fadf1db"
+  },
+  "process_exit": -9
+}

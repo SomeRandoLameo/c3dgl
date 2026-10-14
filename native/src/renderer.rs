@@ -511,17 +511,29 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
     };
 
     let raster = (r.frame.raster.dirty || clip_changed).then_some(r.frame.raster);
-    let projective = r.frame.textures.q_used || {
-        let m = r.matrices.texture_for(0);
-        m[3] != 0. || m[7] != 0. || m[15] != 1.
+    let texgen_units = r.frame.texgen.unit_mask();
+    let tex_matrix = |unit: usize| {
+        if texgen_units >> unit & 1 != 0 {
+            crate::matrix::IDENTITY
+        } else {
+            r.matrices.texture_for(unit)
+        }
     };
+    // Unit 0 divides by q per pixel after a texcoord with q != 1, a projective texture matrix
+    // or generated coordinates.
+    let projective = r.frame.textures.q_used
+        || (texgen_units & 1 != 0 && r.frame.textures.packets()[0].enabled)
+        || {
+            let m = tex_matrix(0);
+            m[3] != 0. || m[7] != 0. || m[15] != 1.
+        };
 
     let texture =
         (r.frame.textures.dirty || r.matrices.texture_dirty).then(|| r.frame.textures.packets());
     let texmatrix = (r.matrices.texture_dirty || texture.is_some()).then(|| {
         let packets = r.frame.textures.packets();
         (
-            core::array::from_fn(|unit| r.matrices.texture_for(unit)),
+            core::array::from_fn(tex_matrix),
             core::array::from_fn(|unit| packets[unit].scale),
             core::array::from_fn(|unit| packets[unit].flip),
         )
@@ -1132,19 +1144,61 @@ pub(crate) unsafe fn emit_vertex(
         .unwrap_or(r.immediate.color)
         .map(crate::immediate::gpu_color_component);
     let mut back = None;
+    // Lighting and texture generation work on the homogeneous position divided by w.
+    let p = if position[3] != 1. && position[3] != 0. {
+        [
+            position[0] / position[3],
+            position[1] / position[3],
+            position[2] / position[3],
+            1.,
+        ]
+    } else {
+        position
+    };
+    let mv = r.matrices.modelview();
     if r.frame.light.enabled {
-        let mv = r.matrices.modelview();
         let bytes = gpu.map(|c| c as u8);
         let (front, b) = r
             .frame
             .light
-            .light_vertex(&mv, position, r.immediate.normal, bytes);
+            .light_vertex(&mv, p, r.immediate.normal, bytes);
         gpu = front.map(|c| c as f32);
         back = b.map(|b| b.map(|c| c as f32));
     }
-    if let Err(e) = r.immediate.push(position, gpu, back, texcoord) {
+    let (mut tex, mut extra) = (
+        texcoord.unwrap_or(r.immediate.texcoord),
+        r.immediate.extra_texcoords,
+    );
+    let generated = r.frame.texgen.active();
+    if generated {
+        texgen_vertex(r, &mv, p, r.immediate.normal, &mut tex, &mut extra);
+    }
+    let extra = generated.then_some(extra);
+    if let Err(e) = r.immediate.push(position, gpu, back, Some(tex), extra) {
         r.matrices.fail(e);
     }
+}
+
+/// Texture coordinate generation of one vertex (see texgen.rs).
+unsafe fn texgen_vertex(
+    r: &mut Renderer,
+    mv: &[f32; 16],
+    position: [f32; 4],
+    normal: [f32; 3],
+    tex: &mut [f32; 4],
+    extra: &mut [[f32; 4]; 2],
+) {
+    let textures: [[f32; 16]; 3] = core::array::from_fn(|u| r.matrices.texture_for(u));
+    let Renderer { frame, .. } = r;
+    let light = &mut frame.light;
+    frame.texgen.generate(
+        mv,
+        &textures,
+        position,
+        || light.eye_normal_of(mv, normal),
+        tex,
+        extra,
+    );
 }
 
 /// Light every vertex of a draw in place; the back colors with two-sided lighting (else empty).
@@ -1341,7 +1395,8 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
 
             let settings = poly_settings(r);
             let lit = r.frame.light.enabled;
-            if mode < 4 || lit || settings.needed() {
+            let generated = r.frame.texgen.active();
+            if mode < 4 || lit || generated || settings.needed() {
                 let (mut source, normals) = r.arrays.gather(
                     first as usize,
                     count,
@@ -1352,6 +1407,21 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                     r.immediate.extra_texcoords,
                     r.immediate.normal,
                 )?;
+                if generated {
+                    let mv = r.matrices.modelview();
+                    for (v, n) in source.iter_mut().zip(&normals) {
+                        let p = if v.position[3] != 1. && v.position[3] != 0. {
+                            let w = v.position[3];
+                            [v.position[0] / w, v.position[1] / w, v.position[2] / w, 1.]
+                        } else {
+                            v.position
+                        };
+                        let (mut tex, mut extra) = (v.texcoord, v.extra_texcoords);
+                        texgen_vertex(r, &mv, p, *n, &mut tex, &mut extra);
+                        v.texcoord = tex;
+                        v.extra_texcoords = extra;
+                    }
+                }
                 let backs = light_vertices(r, &mut source, &normals);
                 if mode < 4 {
                     let (vertices, tris) =

@@ -162,6 +162,21 @@ unsafe fn enable(cap: u32, on: bool) {
         return;
     }
 
+    if matches!(cap, 0x0c60..=0x0c63) {
+        crate::renderer::with_immediate(|r| {
+            if r.immediate.active {
+                r.matrices.fail(0x0502);
+                return;
+            }
+            let unit = r.frame.textures.active;
+            r.frame
+                .texgen
+                .set_enabled(unit, (cap - 0x0c60) as usize, on);
+            r.frame.textures.dirty = true;
+        });
+        return;
+    }
+
     if matches!(cap, 0x0b50 | 0x4000..=0x4007 | 0x0b57 | 0x0ba1 | 0x803a) {
         crate::renderer::with_immediate(|r| {
             if r.immediate.active {
