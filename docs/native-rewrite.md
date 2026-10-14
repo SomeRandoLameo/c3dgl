@@ -342,3 +342,16 @@ original fragment main loop (alpha test, cutouts, TexEnv modes, blend add; stenc
 inside/count/invert, scissored, color-masked and partial clears) match the C framebuffer
 exactly, as do all earlier scenes (`native-results/fragment-step/`, one run each). Stencil
 and color-mask state join the attribute stack. Host tests: 49 pass.
+
+
+## User clip plane checkpoint
+
+`glClipPlane/glClipPlanef`, `glGetClipPlane*` and `GL_CLIP_PLANE0..5` clip on the CPU in
+object space, as in the C renderer: points are kept or dropped whole, segments are cut
+before expansion, polygons are clipped Sutherland-Hodgman before fill, outline or vertex
+output (edges along a plane get no outline; attributes and back colors interpolate linearly,
+colors truncated to bytes). Clipping forces the CPU polygon path. The planes join the
+attribute stack (GL_TRANSFORM_BIT and GL_ENABLE_BIT). All eight cells of the original
+clipplane main loop (gradient, transformed plane, six planes, lines and points, outlines,
+sphere, textured hexagon, floor) match the C framebuffer exactly, as do all earlier scenes
+(`native-results/clipplane-step/`, one run each). Host tests: 50 pass.

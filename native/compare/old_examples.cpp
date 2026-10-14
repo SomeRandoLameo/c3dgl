@@ -35,6 +35,9 @@
 #else
 #define CASE "fragment"
 #endif
+#elif defined(C3DGL_OLD_CLIPPLANE)
+#include "../../examples/clipplane/main.cpp"
+#define CASE "clipplane"
 #elif defined(C3DGL_OLD_FOG)
 #include "../../examples/fog/main.cpp"
 #define CASE "fog"
@@ -107,6 +110,17 @@ int main() {
     const GLuint tex=createF(16);drawTexcoordPage(tex);
 #elif defined(C3DGL_OLD_TEXTURE)
     const GLuint tex=createF(16);drawCell(0,0,tex);
+#elif defined(C3DGL_OLD_CLIPPLANE)
+    // The cells of the original main loop, call for call
+    createChecker();const GLuint tex=checkerTexture;
+    beginCell(0,0);drawGradient();endCell();
+    beginCell(1,0);drawTransformed();endCell();
+    beginCell(2,0);drawSixPlanes();endCell();
+    beginCell(3,0);drawLinesPoints();endCell();
+    beginCell(0,1);drawOutlines();endCell();
+    beginCell(1,1);drawSphere();endCell();
+    beginCell(2,1);drawHexagon();endCell();
+    beginCell(3,1);drawFloor();endCell();
 #elif defined(C3DGL_OLD_FRAGMENT2)
     // Page 2 of the original main loop, call for call
     const GLuint tex=0;

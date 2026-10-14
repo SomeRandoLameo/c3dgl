@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "c414818198c3c0648338885fca65235a6142433ca38310f94edcc0f0992d16b2",
+  "images": {
+    "c3dgl-old-fragment-native.ppm": "831728d80f10b768a71fd2c0b6b20bb21ba1eb6b7b8d29bb214140cb8554763f"
+  },
+  "process_exit": -9
+}

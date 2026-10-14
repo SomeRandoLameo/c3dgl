@@ -38,6 +38,7 @@ impl Settings {
     pub fn needed(&self) -> bool {
         self.flat
             || self.two_sided
+            || self.style.clip.any()
             || self.modes_active()
             || ((self.factor != 0. || self.units != 0.) && self.offset.iter().any(|o| *o))
     }
@@ -164,9 +165,29 @@ impl Builder<'_> {
         pv: Option<usize>,
     ) -> Result<(), u32> {
         let s = self.s;
-        let n = idx.len();
-        let vs: Vec<GpuVertex> = idx.iter().map(|i| src.v[*i]).collect();
         let two_sided = !src.backs.is_empty();
+        let mut vs: Vec<GpuVertex> = idx.iter().map(|i| src.v[*i]).collect();
+        let mut bs: Vec<[f32; 4]> = if two_sided {
+            idx.iter().map(|i| src.backs[*i]).collect()
+        } else {
+            Vec::new()
+        };
+        let mut edges = edges.to_vec();
+        // The flat shading colors, before clipping creates new vertices.
+        let flat = pv.map(|i| {
+            (
+                src.v[i].color,
+                if two_sided { src.backs[i] } else { [0.; 4] },
+            )
+        });
+        if s.style.clip.any() {
+            let (v, b, e) = s.style.clip.polygon(&vs, &bs, &edges);
+            if v.len() < 3 {
+                return Ok(());
+            }
+            (vs, bs, edges) = (v, b, e);
+        }
+        let n = vs.len();
         let active = s.modes_active();
         let front = !(active || two_sided) || (area(s, &vs) > 0.) == s.front_ccw;
         let back = two_sided && !front;
@@ -192,11 +213,18 @@ impl Builder<'_> {
         };
         // The vertex with the color of the provoking vertex (flat shading) or of the side seen.
         let shade = |k: usize| {
-            let color_of = |i: usize| if back { src.backs[i] } else { src.v[i].color };
-            GpuVertex {
-                color: color_of(pv.unwrap_or(idx[k])),
-                ..vs[k]
-            }
+            let color = match flat {
+                Some((front_color, back_color)) => {
+                    if back {
+                        back_color
+                    } else {
+                        front_color
+                    }
+                }
+                None if back => bs[k],
+                None => vs[k].color,
+            };
+            GpuVertex { color, ..vs[k] }
         };
         match mode {
             FILL => {
@@ -338,6 +366,7 @@ mod tests {
                 viewport: [0, 0, 400, 240],
                 line_width: 1.,
                 point_size: 1.,
+                clip: Default::default(),
             },
         }
     }

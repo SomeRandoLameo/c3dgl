@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "03768f0fd492c56b15866f22922f555dfc2526702cfb0cbc9161f94516c67746",
+  "images": {
+    "c3dgl-old-lighting-native.ppm": "02623bcc0b363a69ad7468d01397b646f4c0193461df2cb5c0fcf780f64b82aa"
+  },
+  "process_exit": -9
+}

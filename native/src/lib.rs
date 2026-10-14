@@ -8,6 +8,8 @@ mod attrib;
 #[cfg(any(target_os = "horizon", test))]
 mod blend;
 #[cfg(any(target_os = "horizon", test))]
+mod clip;
+#[cfg(any(target_os = "horizon", test))]
 mod evaluator;
 #[cfg(any(target_os = "horizon", test))]
 mod fog;

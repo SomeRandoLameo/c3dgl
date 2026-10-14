@@ -1332,6 +1332,7 @@ fn line_style(r: &Renderer) -> crate::lines::Style {
         viewport: r.frame.viewport,
         line_width: r.frame.line_width,
         point_size: r.frame.point_size,
+        clip: r.frame.clip.object_planes(&r.matrices.modelview()),
     }
 }
 

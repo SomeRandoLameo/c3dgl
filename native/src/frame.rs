@@ -18,6 +18,7 @@ pub struct PolyState {
 }
 
 pub struct FrameState {
+    pub clip: crate::clip::ClipState,
     pub fog: crate::fog::Fog,
     pub texgen: crate::texgen::TexGen,
     pub light: crate::lighting::Lighting,
@@ -40,6 +41,7 @@ pub struct FrameState {
 impl FrameState {
     pub fn new() -> Self {
         Self {
+            clip: crate::clip::ClipState::new(),
             fog: crate::fog::Fog::new(),
             texgen: crate::texgen::TexGen::new(),
             light: crate::lighting::Lighting::new(),
@@ -245,6 +247,11 @@ fn query(s: &FrameState, m: &Matrices, pname: u32) -> Option<([f64; 16], usize)>
 
         0x8037 | 0x2a02 | 0x2a01 => {
             v[0] = s.poly.offset[offset_index(pname)] as u8 as f64;
+            1
+        }
+
+        0x0d32 => {
+            v[0] = crate::clip::MAX_PLANES as f64;
             1
         }
 

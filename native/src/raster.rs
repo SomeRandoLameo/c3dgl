@@ -234,6 +234,18 @@ unsafe fn enable(cap: u32, on: bool) {
         return;
     }
 
+    if matches!(cap, 0x3000..=0x3005) {
+        with_frame(|s, _| {
+            let bit = 1 << (cap - 0x3000);
+            s.clip.enabled = if on {
+                s.clip.enabled | bit
+            } else {
+                s.clip.enabled & !bit
+            };
+        });
+        return;
+    }
+
     if cap == 0x0b60 {
         with_frame(|s, _| s.fog.enabled = on);
         return;

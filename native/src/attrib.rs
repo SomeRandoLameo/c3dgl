@@ -53,6 +53,7 @@ pub(crate) struct Saved {
     textures: TexSave,
     texgen: crate::texgen::TexGen,
     fog: crate::fog::Fog,
+    clip: crate::clip::ClipState,
     mode: usize,
 }
 
@@ -104,6 +105,7 @@ pub unsafe extern "C" fn glPushAttrib(mask: u32) {
             textures: f.textures.save(),
             texgen: f.texgen.clone(),
             fog: f.fog,
+            clip: f.clip,
             mode: r.matrices.mode(),
         };
         r.stacks.attribs.push(saved);
@@ -167,6 +169,7 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
     if mask & TRANSFORM != 0 {
         r.matrices.set_mode(a.mode);
         f.light.restore_normalization(&a.light);
+        f.clip = a.clip;
     }
     if mask & ENABLE != 0 {
         f.raster.alpha = a.raster.alpha;
@@ -178,6 +181,7 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         f.poly.offset = a.poly.offset;
         f.light.restore_enables(&a.light);
         f.fog.enabled = a.fog.enabled;
+        f.clip.enabled = a.clip.enabled;
         f.eval.restore_enables(&a.eval);
         f.texgen.restore_enables(&a.texgen);
     }

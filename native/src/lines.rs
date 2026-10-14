@@ -13,6 +13,8 @@ pub(crate) struct Style {
     pub viewport: [i32; 4],
     pub line_width: f32,
     pub point_size: f32,
+    /// User clip planes in object space.
+    pub clip: crate::clip::Planes,
 }
 
 /// Vertices a primitive mode of `count` vertices consumes (0 points, 1 lines, 2 loop, 3 strip).
@@ -48,12 +50,16 @@ fn transform(m: &[f32; 16], p: [f32; 4]) -> [f32; 4] {
     core::array::from_fn(|r| (0..4).map(|c| m[c * 4 + r] * p[c]).sum())
 }
 
-fn lerp(a: &GpuVertex, b: &GpuVertex, t: f32) -> GpuVertex {
+pub(crate) fn lerp(a: &GpuVertex, b: &GpuVertex, t: f32) -> GpuVertex {
     let mix = |x: f32, y: f32| x + (y - x) * t;
+    // Colors are bytes: truncated like the C renderer.
+    let mix_color = |x: [f32; 4], y: [f32; 4]| -> [f32; 4] {
+        core::array::from_fn(|i| mix(x[i], y[i]) as u8 as f32)
+    };
     let mix4 = |x: [f32; 4], y: [f32; 4]| core::array::from_fn(|i| mix(x[i], y[i]));
     GpuVertex {
         position: mix4(a.position, b.position),
-        color: mix4(a.color, b.color),
+        color: mix_color(a.color, b.color),
         texcoord: mix4(a.texcoord, b.texcoord),
         extra_texcoords: core::array::from_fn(|i| mix4(a.extra_texcoords[i], b.extra_texcoords[i])),
     }
@@ -85,6 +91,9 @@ pub(crate) fn point(
     out: &mut Vec<GpuVertex>,
     indices: &mut Vec<u16>,
 ) -> Result<(), u32> {
+    if s.clip.point_clipped(v) {
+        return Ok(());
+    }
     let c = transform(&s.pmv, v.position);
     if c[3] < CLIP_W_MIN {
         return Ok(());
@@ -109,6 +118,10 @@ pub(crate) fn segment(
     out: &mut Vec<GpuVertex>,
     indices: &mut Vec<u16>,
 ) -> Result<(), u32> {
+    let Some((a, b)) = s.clip.segment(a, b) else {
+        return Ok(());
+    };
+    let (a, b) = (&a, &b);
     let (mut ca, mut cb) = (transform(&s.pmv, a.position), transform(&s.pmv, b.position));
     if ca[3] < CLIP_W_MIN && cb[3] < CLIP_W_MIN {
         return Ok(());
@@ -233,6 +246,7 @@ mod tests {
             viewport: [0, 0, 400, 240],
             line_width: width,
             point_size: size,
+            clip: Default::default(),
         }
     }
 
