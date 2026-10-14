@@ -187,3 +187,17 @@ The texcoord, texture and cube scenes also match. An initial primitives timeout
 is retained separately from its retry; see `native-results/texmatrix-step/`.
 29 host tests and existing C/C++/rust3ds builds/audits pass. Multitexturing,
 mipmaps, compression, repeated CPU measurements and hardware gates remain open.
+
+
+## Stack-frame regression and TexEnv groundwork checkpoint
+
+The TexEnv/multitexture groundwork (larger `GpuVertex`, per-unit state) grew
+`Renderer` to 11 KiB and `c3dglInit`'s stack frame to 33 KiB, overflowing the
+32 KiB 3DS main-thread stack: every native program crashed in `c3dglInit`. The
+renderer is now allocated and initialized in place on the heap (frame: 196 bytes)
+and `check.sh` rejects `c3dglInit` frames above 8 KiB. The attribute stride is
+derived from `GpuVertex`. The earlier `rg`-based symbol audits were vacuous on
+machines without ripgrep and now use `grep`. All five unchanged original scenes
+(primitives, texture, cube, texcoords, texmatrix) match the C framebuffer exactly;
+see `native-results/texenv-step/` (one run each). The per-unit TEV words are
+computed but not yet emitted to the GPU; multitexturing is not yet functional.
