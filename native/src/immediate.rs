@@ -249,6 +249,27 @@ pub unsafe extern "C" fn glTexCoord2f(s: f32, t: f32) {
     with_immediate(|r| r.immediate.texcoord = [s, t, 0., 1.]);
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn glTexCoord3f(s: f32, t: f32, r: f32) {
+    glTexCoord4f(s, t, r, 1.);
+}
+#[no_mangle]
+pub unsafe extern "C" fn glTexCoord4f(s: f32, t: f32, r: f32, q: f32) {
+    with_immediate(|state| state.immediate.texcoord = [s, t, r, q]);
+}
+#[no_mangle]
+pub unsafe extern "C" fn glTexCoord3fv(v: *const f32) {
+    if let Some([s, t, r]) = vector(v) {
+        glTexCoord3f(s, t, r);
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn glTexCoord4fv(v: *const f32) {
+    if let Some([s, t, r, q]) = vector(v) {
+        glTexCoord4f(s, t, r, q);
+    }
+}
+
 unsafe fn vector<T: Copy, const N: usize>(values: *const T) -> Option<[T; N]> {
     if values.is_null() {
         with_immediate(|r| r.matrices.fail(0x0501));

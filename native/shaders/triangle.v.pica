@@ -1,7 +1,8 @@
 ; Object-space position; c0..c3 hold rows of the tilted GL MVP matrix.
 .out outpos position
 .out outclr color
-.out outtex texcoord0
+.out outtex texcoord0.st
+.out - texcoord0w outtex.p
 .alias inpos v0
 .alias inclr v1
 .alias intex v2
@@ -14,5 +15,7 @@
     dp4 outpos.w, matrix[3], inpos
     mul outclr, color_scale.xxxx, inclr
     mul outtex.xy, c4, intex
+    mov outtex.z, intex.w
+    mov outtex.w, c4.w
     end
 .end

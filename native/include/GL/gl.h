@@ -17,6 +17,8 @@ typedef int GLint;
 typedef int GLsizei;
 typedef float GLfloat;
 typedef double GLdouble;
+#define GL_DOUBLE 0x140a
+#define GL_FIXED 0x140c
 #define GL_FALSE 0
 #define GL_TRUE 1
 #define GL_TEXTURE_2D 0x0de1
@@ -57,6 +59,10 @@ void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params);
 void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels);
 void glTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels);
 void glTexCoord2f(GLfloat s, GLfloat t);
+void glTexCoord3f(GLfloat s, GLfloat t, GLfloat r);
+void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q);
+void glTexCoord3fv(const GLfloat *v);
+void glTexCoord4fv(const GLfloat *v);
 void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer);
 #define GL_BLEND 0x0be2
 #define GL_ZERO 0

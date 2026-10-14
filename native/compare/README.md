@@ -14,7 +14,8 @@ The interactive original main and unsupported pages are not run yet. This is a
 | Example | Exact original functions currently selected | Remaining full-example gaps |
 |---|---|---|
 | primitives | `beginCell`, `drawTriangleStrip`, `drawTriangleFan`, `drawQuadStrip`, `drawPolygon` | points/lines, flat/polygon modes, edge flags, polygon offset, evaluators |
-| texture | `createF(16)`, `drawCell(0,0,texture)` | texture matrix, projective coordinates, more coordinate types, multitexturing/combine, mipmaps, compression |
+| texture | `createF(16)`, `drawCell(0,0,texture)` | texture matrix,  multitexturing/combine, mipmaps, compression |
+| texcoords | complete original `drawTexcoordPage(createF(16))`, all eight cells | texture matrix and subsequent pages remain separate |
 | cube | `createCheckerTexture()`, `drawCube(texture,0,0,0,200,240,true)` | full main also uses PNG/ROMFS, scissor, lines and Citro3D statistics |
 
 The C renderer uses `C3DGL_W_DEPTH=0` to select the same Z-depth convention as Rust.
@@ -31,7 +32,7 @@ python3 native/scripts/compare_old_examples.py \
   --emulator /path/to/azahar --sdmc /path/to/sdmc
 ```
 
-Default: three pairs, one run per backend/case (six launches, no repetitions).
+Default: four pairs, one run per backend/case (eight launches, no repetitions).
 `--case texture` limits it to one pair. The exact-match gate returns nonzero on
 any GL error or pixel difference; one-channel-level differences are reported,
 not silently accepted. Original displayed GPU images and guest reports are kept.

@@ -126,7 +126,7 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
         c,
         r::SH_OUTMAP_TOTAL,
         &[
-            3, 0x03020100, 0x0b0a0908, 0x1f1f0d0c, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f,
+            3, 0x03020100, 0x0b0a0908, 0x1f100d0c, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f, 0x1f1f1f1f,
         ],
     )?;
     one(c, r::SH_OUTATTR_MODE, 1)?;
@@ -470,7 +470,13 @@ pub(crate) fn texture(c: &mut Commands<'_>, t: crate::texture::Packet) -> Result
     seq(
         c,
         0x0081,
-        &[0, t.dimensions, t.parameters, 0, t.address >> 3],
+        &[
+            0,
+            t.dimensions,
+            t.parameters | 0x30000000,
+            0,
+            t.address >> 3,
+        ],
     )?;
     one(c, 0x008e, 0)?; // Resident uploads are converted to RGBA8.
     let source = if !t.enabled {

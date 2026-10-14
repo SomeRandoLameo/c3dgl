@@ -161,3 +161,17 @@ cube scenes are included as regression comparisons. See
 `native-results/color-parity-step/`; 26 host tests and all consumer builds/audits
 pass. This does not complete full original programs, repeated performance or
 hardware gates.
+
+
+## Original texcoord page checkpoint
+
+The complete unchanged `drawTexcoordPage` from `examples/texture/main.cpp` now
+runs through the shared adapter and matches the C framebuffer exactly, with
+zero GL errors. It covers projective q interpolation, nonprojective coordinates,
+ignored r, SHORT/BYTE/FIXED/FLOAT/DOUBLE arrays and sizes 1, 2 and 4.
+Rust implements `glTexCoord3f/4f` and vector variants, array sizes 1..4 and the
+additional coordinate types. PICA unit 0 receives q and divides per fragment;
+texture matrices and other texture units remain pending. See
+`native-results/texcoord-step/`; 27 host tests and all existing consumer
+builds/audits pass. These are one-run emulator comparisons, not repeated
+performance or hardware validation.

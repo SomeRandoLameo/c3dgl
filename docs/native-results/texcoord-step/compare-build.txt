@@ -1,0 +1,61 @@
+-- Configuring done (0.0s)
+-- Generating done (0.1s)
+-- Build files have been written to: /Users/elias/Documents/projekte/c3dgl/build-native-old-examples
+[  2%] Built target c3dgl_vsh
+[  9%] Built target c3dgl_shaders
+[ 14%] Built target c3dgl
+[ 17%] Building CXX object CMakeFiles/old_primitives_reference.dir/old_examples.o
+[ 19%] Linking CXX executable old_primitives_reference.elf
+[ 19%] Built target old_primitives_reference
+[ 21%] Building 3DSX executable target old_primitives_reference_3dsx
+[ 24%] Built target old_primitives_reference_3dsx
+[ 29%] Built target c3dgl_native_platform
+[ 31%] Generating cargo/armv6k-nintendo-3ds/release/libc3dgl.a
+   Compiling c3dgl-native v0.1.0 (/Users/elias/Documents/projekte/c3dgl/native)
+    Finished `release` profile [optimized] target(s) in 1.14s
+[ 31%] Built target c3dgl_native_build
+[ 34%] Building CXX object CMakeFiles/old_primitives_native.dir/old_examples.o
+[ 36%] Linking CXX executable old_primitives_native.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 36%] Built target old_primitives_native
+[ 39%] Building 3DSX executable target old_primitives_native_3dsx
+[ 41%] Built target old_primitives_native_3dsx
+[ 43%] Building CXX object CMakeFiles/old_texture_reference.dir/old_examples.o
+[ 46%] Linking CXX executable old_texture_reference.elf
+[ 46%] Built target old_texture_reference
+[ 48%] Building 3DSX executable target old_texture_reference_3dsx
+[ 51%] Built target old_texture_reference_3dsx
+[ 53%] Building CXX object CMakeFiles/old_texture_native.dir/old_examples.o
+[ 56%] Linking CXX executable old_texture_native.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 56%] Built target old_texture_native
+[ 58%] Building 3DSX executable target old_texture_native_3dsx
+[ 60%] Built target old_texture_native_3dsx
+[ 63%] Building CXX object CMakeFiles/old_cube_reference.dir/old_examples.o
+[ 65%] Linking CXX executable old_cube_reference.elf
+[ 65%] Built target old_cube_reference
+[ 68%] Building 3DSX executable target old_cube_reference_3dsx
+[ 70%] Built target old_cube_reference_3dsx
+[ 73%] Building CXX object CMakeFiles/old_cube_native.dir/old_examples.o
+[ 75%] Linking CXX executable old_cube_native.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 75%] Built target old_cube_native
+[ 78%] Building 3DSX executable target old_cube_native_3dsx
+[ 80%] Built target old_cube_native_3dsx
+[ 82%] Building CXX object CMakeFiles/old_texcoords_reference.dir/old_examples.o
+[ 85%] Linking CXX executable old_texcoords_reference.elf
+[ 85%] Built target old_texcoords_reference
+[ 87%] Generating old_texcoords_reference_3dsx.default.smdh
+[ 90%] Building 3DSX executable target old_texcoords_reference_3dsx
+[ 90%] Built target old_texcoords_reference_3dsx
+[ 92%] Building CXX object CMakeFiles/old_texcoords_native.dir/old_examples.o
+[ 95%] Linking CXX executable old_texcoords_native.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 95%] Built target old_texcoords_native
+[ 97%] Generating old_texcoords_native_3dsx.default.smdh
+[100%] Building 3DSX executable target old_texcoords_native_3dsx
+[100%] Built target old_texcoords_native_3dsx

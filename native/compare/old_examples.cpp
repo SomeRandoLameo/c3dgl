@@ -4,9 +4,13 @@
 #if defined(C3DGL_OLD_PRIMITIVES)
 #include "../../examples/primitives/main.cpp"
 #define CASE "primitives"
-#elif defined(C3DGL_OLD_TEXTURE)
+#elif defined(C3DGL_OLD_TEXTURE) || defined(C3DGL_OLD_TEXCOORDS)
 #include "../../examples/texture/main.cpp"
+#ifdef C3DGL_OLD_TEXCOORDS
+#define CASE "texcoords"
+#else
 #define CASE "texture"
+#endif
 #else
 #include "../../examples/cube/main.cpp"
 #define CASE "cube"
@@ -32,6 +36,8 @@ int main() {
     beginCell(1,1);drawQuadStrip();
     beginCell(2,1);drawPolygon();
     glDisable(GL_CULL_FACE);
+#elif defined(C3DGL_OLD_TEXCOORDS)
+    const GLuint tex=createF(16);drawTexcoordPage(tex);
 #elif defined(C3DGL_OLD_TEXTURE)
     const GLuint tex=createF(16);drawCell(0,0,tex);
 #else

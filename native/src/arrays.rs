@@ -127,6 +127,8 @@ impl Arrays {
             let q = source.add(i * width);
             *v = match a.kind {
                 0x1406 => ptr::read_unaligned(q.cast::<f32>()),
+                0x140a => ptr::read_unaligned(q.cast::<f64>()) as f32,
+                0x140c => ptr::read_unaligned(q.cast::<i32>()) as f32 * (1. / 65536.),
                 0x1400 => ptr::read(q.cast::<i8>()) as f32,
                 0x1401 => ptr::read(q) as f32,
                 0x1402 => ptr::read_unaligned(q.cast::<i16>()) as f32,
@@ -302,7 +304,8 @@ fn width(kind: u32) -> Option<usize> {
     match kind {
         0x1400 | 0x1401 => Some(1),
         0x1402 | 0x1403 => Some(2),
-        0x1406 => Some(4),
+        0x1406 | 0x140c => Some(4),
+        0x140a => Some(8),
         _ => None,
     }
 }
@@ -564,6 +567,46 @@ pub unsafe extern "C" fn glDrawElements(mode: u32, count: i32, kind: u32, indice
 mod tests {
     use super::*;
     #[test]
+    fn texcoord_dimensions_fixed_double_and_unaligned_stride() {
+        let a = Arrays::new();
+        unsafe {
+            let bytes = [-2i8, 3];
+            let mut array = Array {
+                size: 1,
+                kind: 0x1400,
+                stride: 0,
+                pointer: bytes.as_ptr() as usize,
+                buffer: 0,
+            };
+            assert_eq!(a.value(array, 1, false).unwrap(), [3., 0., 0., 1.]);
+            let fixed = [65536i32, -32768, 0, 131072];
+            array = Array {
+                size: 4,
+                kind: 0x140c,
+                stride: 0,
+                pointer: fixed.as_ptr() as usize,
+                buffer: 0,
+            };
+            assert_eq!(a.value(array, 0, false).unwrap(), [1., -0.5, 0., 2.]);
+            let values = [0.25f64, 0.75, -1., 2.];
+            let mut storage = [0u8; 33];
+            ptr::copy_nonoverlapping(
+                values.as_ptr().cast::<u8>(),
+                storage.as_mut_ptr().add(1),
+                32,
+            );
+            array = Array {
+                size: 2,
+                kind: 0x140a,
+                stride: 16,
+                pointer: storage.as_ptr().add(1) as usize,
+                buffer: 0,
+            };
+            assert_eq!(a.value(array, 1, false).unwrap(), [-1., 2., 0., 1.]);
+        }
+    }
+
+    #[test]
     fn formats_stride_and_buffer_bounds() {
         let mut a = Arrays::new();
         a.objects.push(Object {
@@ -611,16 +654,16 @@ pub unsafe extern "C" fn glTexCoordPointer(
     pointer: *const c_void,
 ) {
     api!(|a: &mut Arrays| {
-        if !matches!(kind, 0x1402 | 0x1406) {
+        if !matches!(kind, 0x1400 | 0x1402 | 0x1406 | 0x140a | 0x140c) {
             return Err(0x0500);
         }
 
-        if size != 2 || stride < 0 {
+        if !(1..=4).contains(&size) || stride < 0 {
             return Err(0x0501);
         }
 
         a.texcoord = Array {
-            size: 2,
+            size: size as usize,
             kind,
             stride: stride as usize,
             pointer: pointer as usize,
