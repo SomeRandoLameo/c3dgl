@@ -1,0 +1,36 @@
+{
+  "repetitions": 1,
+  "cases": {
+    "primitives": {
+      "source": "examples/primitives/main.cpp",
+      "source_sha256": "12a955c1ed58ff13fcda53aac0cd1c6b39c1f0c95ccce51c199d746828c43f4a",
+      "adapter_sha256": "ce262f9ea1ae7f7031abe157a56e17ca6ad0afb4aa4ed67912de83920420bfe7",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "c5cace99d54f6bf97ba5ac5e5bce868cc1d5603f58c5a12d613f8b19f7ed23e3",
+        "images": {
+          "c3dgl-old-primitives-reference.ppm": "2c9e0c0afcdae3c602a74887eb8f57bd2a22364af50a9db12316c53ecc542b87"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "b64273b08cd1dcd58e9a2e5569f2f19955f3ed6c07c969ab93a0aaf60eea8fcf",
+        "images": {
+          "c3dgl-old-primitives-native.ppm": "2c9e0c0afcdae3c602a74887eb8f57bd2a22364af50a9db12316c53ecc542b87"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    }
+  },
+  "whole_original_programs": false,
+  "native_dependency_audits_passed": true
+}

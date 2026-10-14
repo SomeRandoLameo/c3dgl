@@ -1,0 +1,45 @@
+C c3dgl + Citro3D reference
+Persistent cached indexed VBO
+workload=static draws=1 CPU 0.4244 GPU 0.2495
+total 16.7121 ms/frame
+workload=static draws=64 CPU 1.5889 GPU 0.2495
+total 16.7121 ms/frame
+workload=static draws=512 CPU 9.8684 GPU 0.2495
+total 16.7121 ms/frame
+workload=matrix draws=1 CPU 0.4260 GPU 0.2495
+total 16.7121 ms/frame
+workload=matrix draws=64 CPU 2.3446 GPU 0.2495
+total 16.7121 ms/frame
+workload=matrix draws=512 CPU 16.0412 GPU 0.2495
+total 16.7067 ms/frame
+workload=viewport draws=1 CPU 0.4248 GPU 0.2495
+total 16.7121 ms/frame
+workload=viewport draws=64 CPU 2.4759 GPU 0.2495
+total 16.7121 ms/frame
+workload=viewport draws=512 CPU 17.1262 GPU 0.2499
+total 17.1362 ms/frame
+workload=indexed draws=1 CPU 0.4247 GPU 0.2495
+total 16.7121 ms/frame
+workload=indexed draws=64 CPU 1.5890 GPU 0.2495
+total 16.7121 ms/frame
+workload=indexed draws=512 CPU 9.8686 GPU 0.2495
+total 16.7121 ms/frame
+workload=update draws=1 CPU 0.4255 GPU 0.2495
+total 16.7121 ms/frame
+workload=update draws=64 CPU 1.5898 GPU 0.2495
+total 16.7121 ms/frame
+workload=update draws=512 CPU 9.8693 GPU 0.2495
+total 16.7121 ms/frame
+workload=cube draws=1 CPU 0.5299 GPU 0.2495
+total 16.7121 ms/frame
+workload=cube draws=64 CPU 8.2143 GPU 0.2495
+total 16.7121 ms/frame
+workload=cube draws=512 CPU 63.0965 GPU 0.2502
+total 63.1066 ms/frame
+workload=raster draws=1 CPU 0.5299 GPU 0.2495
+total 16.7121 ms/frame
+workload=raster draws=64 CPU 9.1901 GPU 0.2495
+total 16.7121 ms/frame
+workload=raster draws=512 CPU 71.0413 GPU 0.2495
+total 71.0514 ms/frame
+FAIL depth cell 15: 255,0,0

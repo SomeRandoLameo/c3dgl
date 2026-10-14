@@ -1,0 +1,64 @@
+Rust native / no Citro3D
+GPU acceptance + performance
+cycle 1/8 errors=0
+cycle 2/8 errors=0
+cycle 3/8 errors=0
+cycle 4/8 errors=0
+cycle 5/8 errors=0
+cycle 6/8 errors=0
+cycle 7/8 errors=0
+cycle 8/8 errors=0
+PASS 240 frames, 8 init/close
+workload=static draws=1 CPU 0.3346 GPU 0.2494
+total 16.7122 ms/frame
+workload=static draws=64 CPU 0.4399 GPU 0.2494
+total 16.7122 ms/frame
+workload=static draws=512 CPU 1.1885 GPU 0.2494
+total 16.7122 ms/frame
+workload=matrix draws=1 CPU 0.3375 GPU 0.2494
+total 16.7122 ms/frame
+workload=matrix draws=64 CPU 0.6249 GPU 0.2494
+total 16.7122 ms/frame
+workload=matrix draws=512 CPU 2.6818 GPU 0.2494
+total 16.7122 ms/frame
+workload=viewport draws=1 CPU 0.3357 GPU 0.2494
+total 16.7122 ms/frame
+workload=viewport draws=64 CPU 0.5073 GPU 0.2494
+total 16.7122 ms/frame
+workload=viewport draws=512 CPU 1.7337 GPU 0.2494
+total 16.7122 ms/frame
+workload=indexed draws=1 CPU 0.3360 GPU 0.2494
+total 16.7122 ms/frame
+workload=indexed draws=64 CPU 0.5282 GPU 0.2494
+total 16.7122 ms/frame
+workload=indexed draws=512 CPU 1.8950 GPU 0.2494
+total 16.7122 ms/frame
+workload=update draws=1 CPU 0.4086 GPU 0.2494
+total 16.7122 ms/frame
+workload=update draws=64 CPU 0.6008 GPU 0.2494
+total 16.7122 ms/frame
+workload=update draws=512 CPU 1.9677 GPU 0.2494
+total 16.7122 ms/frame
+workload=cube draws=1 CPU 0.3382 GPU 0.2494
+total 16.7122 ms/frame
+workload=cube draws=64 CPU 0.5321 GPU 0.2494
+total 16.7122 ms/frame
+workload=cube draws=512 CPU 1.9106 GPU 0.2494
+total 16.7122 ms/frame
+workload=raster draws=1 CPU 0.3390 GPU 0.2494
+total 16.7122 ms/frame
+workload=raster draws=64 CPU 0.5876 GPU 0.2494
+total 16.7122 ms/frame
+workload=raster draws=512 CPU 2.3588 GPU 0.2494
+total 16.7122 ms/frame
+PASS array image client arrays
+PASS array image client u8 indices
+PASS array image client u16 indices
+PASS array image cached VBO elements
+PASS array image cached VBO elements
+PASS array image cached VBO elements
+PASS array image in-frame subdata preserves previous draw
+PASS array image in-frame data replacement and deletion
+PASS 20 depth/cull cells
+PASS VBO GPU memory recovery
+ALL CHECKS PASSED - START exits
