@@ -9,6 +9,52 @@ use core::{ffi::c_void, ptr};
 const TARGET: u32 = 0x0de1;
 const LIMIT: usize = 64;
 
+/// Texel storage of a texture chain.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+enum Fmt {
+    /// Resident RGBA8 (also used for RGB, luminance and alpha data).
+    #[default]
+    Rgba8,
+    Rgb565,
+    Rgba4,
+    Rgba5551,
+    /// ETC1 blocks, sampled natively.
+    Etc1,
+}
+
+impl Fmt {
+    fn bpp(self) -> usize {
+        match self {
+            Fmt::Rgba8 => 4,
+            Fmt::Etc1 => 0,
+            _ => 2,
+        }
+    }
+
+    fn packed(self) -> bool {
+        matches!(self, Fmt::Rgb565 | Fmt::Rgba4 | Fmt::Rgba5551)
+    }
+
+    /// PICA texture format register value.
+    fn gpu(self) -> u32 {
+        match self {
+            Fmt::Rgba8 => 0,
+            Fmt::Rgba5551 => 2,
+            Fmt::Rgb565 => 3,
+            Fmt::Rgba4 => 4,
+            Fmt::Etc1 => 12,
+        }
+    }
+
+    fn level_bytes(self, w: usize, h: usize) -> usize {
+        if self == Fmt::Etc1 {
+            w * h / 2
+        } else {
+            w * h * self.bpp()
+        }
+    }
+}
+
 /// GL definition of a mipmap level above 0 (level 0 lives in `Object`).
 #[derive(Clone, Copy, Default)]
 struct Level {
@@ -16,7 +62,7 @@ struct Level {
     width: usize,
     height: usize,
     base: u32,
-    packed: bool,
+    fmt: Fmt,
 }
 
 struct Object {
@@ -34,8 +80,7 @@ struct Object {
     levels: usize,
     defs: [Level; 12],
     generate: bool,
-    /// RGB565 storage (GL_UNSIGNED_SHORT_5_6_5 uploads): texels hold 5/6/5-bit precision.
-    packed: bool,
+    fmt: Fmt,
 }
 
 impl Object {
@@ -54,7 +99,7 @@ impl Object {
             levels: 1,
             defs: [Level::default(); 12],
             generate: false,
-            packed: false,
+            fmt: Fmt::Rgba8,
         }
     }
 
@@ -70,7 +115,7 @@ impl Object {
                 && d.width == level_size(self.width, l)
                 && d.height == level_size(self.height, l)
                 && d.base == self.base
-                && d.packed == self.packed)
+                && d.fmt == self.fmt)
             {
                 return false;
             }
@@ -98,6 +143,8 @@ pub(crate) struct Packet {
     pub lod: u32,
     /// PICA texture format register: 0 RGBA8, 3 RGB565.
     pub format: u32,
+    /// ETC1 is stored upside down: the texture matrix maps t to q - t.
+    pub flip: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -303,6 +350,7 @@ impl Textures {
             tev: [0; 5],
             lod: 0,
             format: 0,
+            flip: false,
         };
 
         if let Some(o) = self
@@ -329,7 +377,8 @@ impl Textures {
                     | wrap(o.wrap[1]) << 8
                     | wrap(o.wrap[0]) << 12
                     | (mip_linear as u32) << 24;
-                s.format = if o.packed { 3 } else { 0 };
+                s.format = o.fmt.gpu();
+                s.flip = o.fmt == Fmt::Etc1;
                 s.lod = if mip_filter(o.min) {
                     (o.levels as u32 - 1) << 16
                 } else {
@@ -418,7 +467,7 @@ fn target(t: u32) -> Result<(), u32> {
 }
 
 fn format(f: u32, t: u32) -> Result<usize, u32> {
-    if t == 0x8363 && f == 0x1907 {
+    if (t == 0x8363 && f == 0x1907) || (matches!(t, 0x8033 | 0x8034) && f == 0x1908) {
         return Ok(2);
     }
     if t != 0x1401 {
@@ -431,14 +480,6 @@ fn format(f: u32, t: u32) -> Result<usize, u32> {
         0x1909 | 0x1906 => Ok(1),
         0x190a => Ok(2),
         _ => Err(0x0500),
-    }
-}
-
-fn bpp_of(packed: bool) -> usize {
-    if packed {
-        2
-    } else {
-        4
     }
 }
 
@@ -455,8 +496,8 @@ fn max_stored(tw: usize, th: usize) -> usize {
     (tw.min(th).trailing_zeros() as usize).saturating_sub(3)
 }
 
-fn level_offset(tw: usize, th: usize, level: usize, bpp: usize) -> usize {
-    (0..level).map(|k| (tw >> k) * (th >> k) * bpp).sum()
+fn level_offset(tw: usize, th: usize, level: usize, fmt: Fmt) -> usize {
+    (0..level).map(|k| fmt.level_bytes(tw >> k, th >> k)).sum()
 }
 
 fn dimension(v: i32) -> bool {
@@ -517,95 +558,235 @@ unsafe fn padding_in(
     }
 }
 
-/// C `pack16` for GPU_RGB565 from 8-bit components.
-fn pack565(c: [u32; 3]) -> u16 {
-    (((c[0] * 31 + 127) / 255) << 11 | ((c[1] * 63 + 127) / 255) << 5 | ((c[2] * 31 + 127) / 255))
-        as u16
+/// C `pack16`: 8-bit RGBA components to a 16-bit texel of `fmt`.
+fn pack16(fmt: Fmt, c: [u32; 4]) -> u16 {
+    let v = match fmt {
+        Fmt::Rgb565 => {
+            ((c[0] * 31 + 127) / 255) << 11
+                | ((c[1] * 63 + 127) / 255) << 5
+                | ((c[2] * 31 + 127) / 255)
+        }
+        Fmt::Rgba5551 => {
+            ((c[0] * 31 + 127) / 255) << 11
+                | ((c[1] * 31 + 127) / 255) << 6
+                | ((c[2] * 31 + 127) / 255) << 1
+                | (c[3] >= 128) as u32
+        }
+        _ => {
+            ((c[0] * 15 + 127) / 255) << 12
+                | ((c[1] * 15 + 127) / 255) << 8
+                | ((c[2] * 15 + 127) / 255) << 4
+                | ((c[3] * 15 + 127) / 255)
+        }
+    };
+    v as u16
 }
 
-/// C `unpack16` for GPU_RGB565 to 8-bit components.
-fn unpack565(v: u16) -> [u32; 3] {
+/// C `unpack16`: a 16-bit texel of `fmt` to 8-bit RGBA components.
+fn unpack16(fmt: Fmt, v: u16) -> [u32; 4] {
     let v = v as u32;
-    [
-        (v >> 11) * 255 / 31,
-        ((v >> 5) & 63) * 255 / 63,
-        (v & 31) * 255 / 31,
-    ]
+    match fmt {
+        Fmt::Rgb565 => [
+            (v >> 11) * 255 / 31,
+            ((v >> 5) & 63) * 255 / 63,
+            (v & 31) * 255 / 31,
+            255,
+        ],
+        Fmt::Rgba5551 => [
+            (v >> 11) * 255 / 31,
+            ((v >> 6) & 31) * 255 / 31,
+            ((v >> 1) & 31) * 255 / 31,
+            (v & 1) * 255,
+        ],
+        _ => [
+            (v >> 12) * 17,
+            ((v >> 8) & 15) * 17,
+            ((v >> 4) & 15) * 17,
+            (v & 15) * 17,
+        ],
+    }
 }
 
-unsafe fn put565(out: *mut u8, tw: usize, th: usize, x: usize, y: usize, v: u16) {
+unsafe fn put16(out: *mut u8, tw: usize, th: usize, x: usize, y: usize, v: u16) {
     out.add(offset_bpp(tw, th, x, y, 2))
         .cast::<u16>()
         .write_unaligned(v);
 }
 
-unsafe fn get565(out: *const u8, tw: usize, th: usize, x: usize, y: usize) -> u16 {
+unsafe fn get16(out: *const u8, tw: usize, th: usize, x: usize, y: usize) -> u16 {
     out.add(offset_bpp(tw, th, x, y, 2))
         .cast::<u16>()
         .read_unaligned()
 }
 
-/// Upload GL_UNSIGNED_SHORT_5_6_5 texels (little endian) into RGB565 storage.
-unsafe fn upload565(
-    out: *mut u8,
-    tw: usize,
-    th: usize,
-    x0: usize,
-    y0: usize,
-    w: usize,
-    h: usize,
-    pixels: *const u8,
-    alignment: usize,
-) {
-    let stride = (w * 2 + alignment - 1) & !(alignment - 1);
-    for y in 0..h {
-        for x in 0..w {
-            let s = pixels.add(y * stride + x * 2);
-            put565(
-                out,
-                tw,
-                th,
-                x0 + x,
-                y0 + y,
-                u16::from_le_bytes([s.read(), s.add(1).read()]),
+/// Where the texels of an image come from.
+#[derive(Clone, Copy)]
+enum Source<'a> {
+    /// Client data in GL format `f` and type `ty`, `bpp` bytes per pixel.
+    Gl {
+        pixels: *const u8,
+        f: u32,
+        ty: u32,
+        bpp: usize,
+        alignment: usize,
+    },
+    /// Tightly packed RGBA bytes (expanded palette indices).
+    Rgba(&'a [u8]),
+    /// ETC1 blocks, row-major from t = 0.
+    Etc1(&'a [u8]),
+}
+
+/// One GL pixel as 8-bit RGBA (C `unpackColorImage`).
+unsafe fn read_rgba(p: *const u8, f: u32, ty: u32) -> [u32; 4] {
+    let at = |i: usize| p.add(i).read() as u32;
+    match ty {
+        0x8363 => unpack16(Fmt::Rgb565, u16::from_le_bytes([p.read(), p.add(1).read()])),
+        0x8033 => unpack16(Fmt::Rgba4, u16::from_le_bytes([p.read(), p.add(1).read()])),
+        0x8034 => unpack16(
+            Fmt::Rgba5551,
+            u16::from_le_bytes([p.read(), p.add(1).read()]),
+        ),
+        _ => match f {
+            0x1907 => [at(0), at(1), at(2), 255],
+            0x1908 => [at(0), at(1), at(2), at(3)],
+            0x1909 => [at(0), at(0), at(0), 255],
+            0x190a => [at(0), at(0), at(0), at(1)],
+            _ => [0, 0, 0, at(0)],
+        },
+    }
+}
+
+/// ETC1 blocks into a stored level: PICA groups 4x4 blocks into 8x8 tiles (Z order) and reads
+/// each block as a little-endian u64, so the bytes are reversed. The rows stay upside down;
+/// the texture matrix flips t instead.
+unsafe fn upload_etc1(out: *mut u8, tw: usize, w: usize, h: usize, data: &[u8]) {
+    let (bx, by) = ((w + 3) / 4, (h + 3) / 4);
+    for y in 0..by {
+        for x in 0..bx {
+            let (px, py) = (x * 4, y * 4);
+            let dst = out.add(
+                ((py >> 3) * (tw >> 3) + (px >> 3)) * 32 + (((px & 4) >> 2) | ((py & 4) >> 1)) * 8,
             );
+            for i in 0..8 {
+                dst.add(i).write(data[(y * bx + x) * 8 + 7 - i]);
+            }
         }
     }
 }
 
-/// Upload 8-bit GL data into RGB565 storage (red, green, blue rounded; luminance in all three).
-unsafe fn upload_to_565(
-    out: *mut u8,
+/// Write the image `src` of `w` x `h` at (`x0`, `y0`) of a level region stored `tw` x `th`.
+unsafe fn fill_level(
+    region: *mut u8,
     tw: usize,
     th: usize,
     x0: usize,
     y0: usize,
     w: usize,
     h: usize,
-    pixels: *const u8,
-    bpp: usize,
-    alignment: usize,
+    fmt: Fmt,
+    base: u32,
+    src: Source,
 ) {
-    let stride = (w * bpp + alignment - 1) & !(alignment - 1);
-    for y in 0..h {
-        for x in 0..w {
-            let s = pixels.add(y * stride + x * bpp);
-            let c = if bpp >= 3 {
-                [
-                    s.read() as u32,
-                    s.add(1).read() as u32,
-                    s.add(2).read() as u32,
-                ]
-            } else {
-                [s.read() as u32; 3]
-            };
-            put565(out, tw, th, x0 + x, y0 + y, pack565(c));
+    match (fmt, src) {
+        (Fmt::Etc1, Source::Etc1(data)) => upload_etc1(region, tw, w, h, data),
+        (
+            Fmt::Rgba8,
+            Source::Gl {
+                pixels,
+                f,
+                ty,
+                bpp,
+                alignment,
+            },
+        ) if ty != 0x1401 => {
+            // Packed client data into an RGBA8 chain: through 8-bit components.
+            if pixels.is_null() {
+                return;
+            }
+            let stride = (w * bpp + alignment - 1) & !(alignment - 1);
+            for y in 0..h {
+                for x in 0..w {
+                    let c = read_rgba(pixels.add(y * stride + x * bpp), f, ty);
+                    let d = region.add(offset(tw, th, x0 + x, y0 + y));
+                    d.write(c[3] as u8);
+                    d.add(1).write(c[2] as u8);
+                    d.add(2).write(c[1] as u8);
+                    d.add(3).write(c[0] as u8);
+                }
+            }
+            convert_base(region, tw, th, x0, y0, w, h, base);
         }
+        (
+            Fmt::Rgba8,
+            Source::Gl {
+                pixels,
+                f,
+                bpp,
+                alignment,
+                ..
+            },
+        ) => {
+            if !pixels.is_null() {
+                upload(
+                    region,
+                    tw,
+                    th,
+                    x0,
+                    y0,
+                    w,
+                    h,
+                    pixels,
+                    bpp,
+                    alignment,
+                    f == 0x1906,
+                );
+            }
+            convert_base(region, tw, th, x0, y0, w, h, base);
+        }
+        (
+            _,
+            Source::Gl {
+                pixels,
+                f,
+                ty,
+                bpp,
+                alignment,
+            },
+        ) if fmt.packed() => {
+            if pixels.is_null() {
+                return;
+            }
+            let stride = (w * bpp + alignment - 1) & !(alignment - 1);
+            for y in 0..h {
+                for x in 0..w {
+                    let c = read_rgba(pixels.add(y * stride + x * bpp), f, ty);
+                    put16(region, tw, th, x0 + x, y0 + y, pack16(fmt, c));
+                }
+            }
+        }
+        (_, Source::Rgba(data)) if fmt != Fmt::Etc1 => {
+            for y in 0..h {
+                for x in 0..w {
+                    let s = &data[(y * w + x) * 4..][..4];
+                    if fmt == Fmt::Rgba8 {
+                        let d = region.add(offset(tw, th, x0 + x, y0 + y));
+                        d.write(s[3]);
+                        d.add(1).write(s[2]);
+                        d.add(2).write(s[1]);
+                        d.add(3).write(s[0]);
+                    } else {
+                        let c = [s[0] as u32, s[1] as u32, s[2] as u32, s[3] as u32];
+                        put16(region, tw, th, x0 + x, y0 + y, pack16(fmt, c));
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
 /// GL_GENERATE_MIPMAP: every stored level from level 0 with a 2x2 box filter
-/// (`(sum + 2) / 4`; RGB565 textures averaged at 8-bit precision and repacked).
+/// (`(sum + 2) / 4`; packed textures averaged at 8-bit precision and repacked).
 unsafe fn generate(
     out: *mut u8,
     tw: usize,
@@ -613,17 +794,20 @@ unsafe fn generate(
     levels: usize,
     w: usize,
     h: usize,
-    packed: bool,
+    fmt: Fmt,
     wrap: [u32; 2],
 ) {
-    let bpp = if packed { 2 } else { 4 };
+    if fmt == Fmt::Etc1 {
+        return;
+    }
+    let bpp = fmt.bpp();
     for l in 1..levels {
         let (sw, sh) = (level_size(w, l - 1), level_size(h, l - 1));
         let (dw, dh) = (level_size(w, l), level_size(h, l));
         let (stw, sth) = (tw >> (l - 1), th >> (l - 1));
         let (dtw, dth) = (tw >> l, th >> l);
-        let src = out.add(level_offset(tw, th, l - 1, bpp));
-        let dst = out.add(level_offset(tw, th, l, bpp));
+        let src = out.add(level_offset(tw, th, l - 1, fmt));
+        let dst = out.add(level_offset(tw, th, l, fmt));
         for y in 0..dh.min(dth) {
             for x in 0..dw.min(dtw) {
                 let xs = [2 * x, if 2 * x + 1 < sw { 2 * x + 1 } else { 2 * x }];
@@ -631,9 +815,9 @@ unsafe fn generate(
                 let mut sum = [0u32; 4];
                 for i in 0..4 {
                     let (sx, sy) = (xs[i & 1], ys[i >> 1]);
-                    if packed {
-                        let c = unpack565(get565(src, stw, sth, sx, sy));
-                        for k in 0..3 {
+                    if fmt.packed() {
+                        let c = unpack16(fmt, get16(src, stw, sth, sx, sy));
+                        for k in 0..4 {
                             sum[k] += c[k];
                         }
                     } else {
@@ -644,8 +828,8 @@ unsafe fn generate(
                     }
                 }
                 let avg = sum.map(|v| (v + 2) / 4);
-                if packed {
-                    put565(dst, dtw, dth, x, y, pack565([avg[0], avg[1], avg[2]]));
+                if fmt.packed() {
+                    put16(dst, dtw, dth, x, y, pack16(fmt, avg));
                 } else {
                     let d = dst.add(offset(dtw, dth, x, y));
                     for k in 0..4 {
@@ -874,22 +1058,16 @@ unsafe fn chain_buffer(
     levels: usize,
     w: usize,
     h: usize,
-    packed: bool,
+    fmt: Fmt,
     keep: bool,
 ) -> Result<Buffer, u32> {
     let (tw, th) = (stored(w), stored(h));
-    let bytes = level_offset(tw, th, levels, bpp_of(packed));
+    let bytes = level_offset(tw, th, levels, fmt);
     let buffer = Buffer::new(bytes, false).ok_or(0x0505u32)?;
     ptr::write_bytes(buffer.pointer, 0, bytes);
     if keep {
         if let Some(old) = &o.storage {
-            let n = level_offset(
-                stored(o.width),
-                stored(o.height),
-                o.levels,
-                bpp_of(o.packed),
-            )
-            .min(bytes);
+            let n = level_offset(stored(o.width), stored(o.height), o.levels, o.fmt).min(bytes);
             ptr::copy_nonoverlapping(old.pointer, buffer.pointer, n);
         }
     }
@@ -905,7 +1083,7 @@ fn define_generated(o: &mut Object) {
             width: level_size(o.width, l),
             height: level_size(o.height, l),
             base: o.base,
-            packed: o.packed,
+            fmt: o.fmt,
         };
         l += 1;
     }
@@ -943,12 +1121,13 @@ pub unsafe extern "C" fn glTexParameteri(kind: u32, pname: u32, value: i32) {
         if current != value {
             let (w, h) = (o.width, o.height);
             let (tw, th) = (stored(w), stored(h));
-            if pname == 0x8191 && value != 0 && o.storage.is_some() {
+            let fmt = o.fmt;
+            if pname == 0x8191 && value != 0 && o.storage.is_some() && fmt != Fmt::Etc1 {
                 // Enabling generation rebuilds every level from level 0.
                 let levels = 1 + max_stored(tw, th);
-                let storage = chain_buffer(o, levels, w, h, o.packed, true)?;
-                generate(storage.pointer, tw, th, levels, w, h, o.packed, o.wrap);
-                let bytes = level_offset(tw, th, levels, bpp_of(o.packed));
+                let storage = chain_buffer(o, levels, w, h, fmt, true)?;
+                generate(storage.pointer, tw, th, levels, w, h, fmt, o.wrap);
+                let bytes = level_offset(tw, th, levels, fmt);
                 if p::c3dglPlatformFlush(storage.pointer, bytes as u32) < 0 {
                     return Err(0x0502);
                 }
@@ -958,25 +1137,25 @@ pub unsafe extern "C" fn glTexParameteri(kind: u32, pname: u32, value: i32) {
                 define_generated(o);
             } else if matches!(pname, 0x2802 | 0x2803)
                 && o.storage.is_some()
+                && fmt != Fmt::Etc1
                 && (0..o.levels).any(|l| level_size(w, l) != tw >> l || level_size(h, l) != th >> l)
             {
                 let mut wrap = o.wrap;
                 wrap[(pname == 0x2803) as usize] = value;
                 let levels = o.levels;
-                let bpp = bpp_of(o.packed);
-                let storage = chain_buffer(o, levels, w, h, o.packed, true)?;
+                let storage = chain_buffer(o, levels, w, h, fmt, true)?;
                 for l in 0..levels {
                     padding_in(
-                        storage.pointer.add(level_offset(tw, th, l, bpp)),
+                        storage.pointer.add(level_offset(tw, th, l, fmt)),
                         level_size(w, l),
                         level_size(h, l),
                         tw >> l,
                         th >> l,
                         wrap,
-                        bpp,
+                        fmt.bpp(),
                     );
                 }
-                if p::c3dglPlatformFlush(storage.pointer, level_offset(tw, th, levels, bpp) as u32)
+                if p::c3dglPlatformFlush(storage.pointer, level_offset(tw, th, levels, fmt) as u32)
                     < 0
                 {
                     return Err(0x0502);
@@ -1019,6 +1198,117 @@ pub unsafe extern "C" fn glGetTexParameteriv(kind: u32, pname: u32, out: *mut i3
         Ok(())
     });
 }
+
+fn level_valid(level: i32, w: i32, h: i32) -> bool {
+    (0..=10).contains(&level)
+        && dimension(w)
+        && dimension(h)
+        && w <= 1024 >> level
+        && h <= 1024 >> level
+}
+
+/// Define `level` of the bound texture and store its image (the shared part of glTexImage2D and
+/// glCompressedTexImage2D). Levels above 0 keep the chain's format when the base format matches.
+unsafe fn define_image(
+    t: &mut Textures,
+    level: usize,
+    base: u32,
+    fmt: Fmt,
+    w: usize,
+    h: usize,
+    src: Source,
+) -> Result<(), u32> {
+    let i = t.index()?;
+    if level > 0 {
+        // Levels before level 0 are ignored; levels below 8x8 only count for completeness.
+        let o = &t.objects[i];
+        if o.storage.is_none() || w == 0 || h == 0 {
+            return Ok(());
+        }
+        let (tw, th) = (stored(o.width), stored(o.height));
+        let fmt = match src {
+            Source::Gl { .. } if base == o.base && o.fmt != Fmt::Etc1 => o.fmt,
+            _ => fmt,
+        };
+        let fits = w == level_size(o.width, level)
+            && h == level_size(o.height, level)
+            && base == o.base
+            && fmt == o.fmt;
+        let o = &mut t.objects[i];
+        o.defs[level] = Level {
+            defined: true,
+            width: w,
+            height: h,
+            base,
+            fmt,
+        };
+        if fits && level <= max_stored(tw, th) {
+            let o = &t.objects[i];
+            let levels = 1 + max_stored(tw, th);
+            let storage = chain_buffer(o, levels, o.width, o.height, fmt, true)?;
+            let region = storage.pointer.add(level_offset(tw, th, level, fmt));
+            let (lw, lh) = (tw >> level, th >> level);
+            ptr::write_bytes(region, 0, fmt.level_bytes(lw, lh));
+            fill_level(region, lw, lh, 0, 0, w, h, fmt, base, src);
+            if fmt != Fmt::Etc1 {
+                padding_in(region, w, h, lw, lh, o.wrap, fmt.bpp());
+            }
+            if p::c3dglPlatformFlush(storage.pointer, level_offset(tw, th, levels, fmt) as u32) < 0
+            {
+                return Err(0x0502);
+            }
+            let (ow, oh) = (o.width, o.height);
+            t.replace(i, Some(storage), ow, oh)?;
+            t.objects[i].levels = levels;
+        }
+        t.dirty = true;
+        return Ok(());
+    }
+
+    if w == 0 || h == 0 {
+        let o = &mut t.objects[i];
+        o.levels = 1;
+        o.defs = [Level::default(); 12];
+        return t.replace(i, None, w, h);
+    }
+    let (tw, th) = (stored(w), stored(h));
+    let o = &t.objects[i];
+    let same =
+        o.storage.is_some() && o.width == w && o.height == h && o.base == base && o.fmt == fmt;
+    let generating = o.generate && fmt != Fmt::Etc1;
+    let levels = if generating && max_stored(tw, th) > 0 {
+        1 + max_stored(tw, th)
+    } else if same {
+        o.levels
+    } else {
+        1
+    };
+    let storage = chain_buffer(o, levels, w, h, fmt, same)?;
+    ptr::write_bytes(storage.pointer, 0, fmt.level_bytes(tw, th));
+    fill_level(storage.pointer, tw, th, 0, 0, w, h, fmt, base, src);
+    if fmt != Fmt::Etc1 {
+        padding_in(storage.pointer, w, h, tw, th, o.wrap, fmt.bpp());
+    }
+    if generating {
+        generate(storage.pointer, tw, th, levels, w, h, fmt, o.wrap);
+    }
+    if p::c3dglPlatformFlush(storage.pointer, level_offset(tw, th, levels, fmt) as u32) < 0 {
+        return Err(0x0502);
+    }
+    t.replace(i, Some(storage), w, h)?;
+    let o = &mut t.objects[i];
+    if !same {
+        o.defs = [Level::default(); 12];
+    }
+    o.base = base;
+    o.fmt = fmt;
+    o.levels = levels;
+    if generating {
+        define_generated(o);
+    }
+    Ok(())
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn glTexImage2D(
     kind: u32,
@@ -1037,133 +1327,154 @@ pub unsafe extern "C" fn glTexImage2D(
         if !matches!(internal, 0x1906..=0x190a) {
             return Err(0x0501);
         }
-        if !(0..=10).contains(&level)
-            || border != 0
-            || !dimension(w)
-            || !dimension(h)
-            || w > 1024 >> level
-            || h > 1024 >> level
-        {
+        if border != 0 || !level_valid(level, w, h) {
             return Err(0x0501);
         }
-        let i = t.index()?;
-        let (level, w, h) = (level as usize, w as usize, h as usize);
-        let (internal, packed_in) = (internal as u32, ty == 0x8363);
-        let alignment = t.alignment;
-        // Fill a level region of a chain stored `packed` (RGB565) or as RGBA8.
-        let fill = |region: *mut u8, tw: usize, th: usize, packed: bool| {
-            if !pixels.is_null() {
-                match (packed, packed_in) {
-                    (true, true) => upload565(region, tw, th, 0, 0, w, h, pixels.cast(), alignment),
-                    (true, false) => {
-                        upload_to_565(region, tw, th, 0, 0, w, h, pixels.cast(), bpp, alignment)
-                    }
-                    _ => upload(
-                        region,
-                        tw,
-                        th,
-                        0,
-                        0,
-                        w,
-                        h,
-                        pixels.cast(),
-                        bpp,
-                        alignment,
-                        f == 0x1906,
-                    ),
-                }
-            }
-            if !packed {
-                convert_base(region, tw, th, 0, 0, w, h, internal);
-            }
+        // Unsized RGB/RGBA formats keep packed 16-bit data in its own format.
+        let base = internal as u32;
+        let fmt = match (base, ty) {
+            (0x1907, 0x8363) => Fmt::Rgb565,
+            (0x1908, 0x8033) => Fmt::Rgba4,
+            (0x1908, 0x8034) => Fmt::Rgba5551,
+            _ => Fmt::Rgba8,
         };
+        let src = Source::Gl {
+            pixels: pixels.cast(),
+            f,
+            ty,
+            bpp,
+            alignment: t.alignment,
+        };
+        define_image(t, level as usize, base, fmt, w as usize, h as usize, src)
+    });
+}
 
-        if level > 0 {
-            // Levels before level 0 are ignored; levels below 8x8 only count for completeness.
-            let o = &t.objects[i];
-            if o.storage.is_none() || w == 0 || h == 0 {
-                return Ok(());
+/// GL_OES_compressed_paletted_texture entry: (index bits, storage, base format, GL format, type, bytes).
+fn palette_entry(internal: u32) -> Option<(usize, Fmt, u32, u32, u32, usize)> {
+    if !(0x8b90..=0x8b99).contains(&internal) {
+        return None;
+    }
+    let i = (internal - 0x8b90) as usize;
+    let bits = if i < 5 { 4 } else { 8 };
+    let (fmt, base, f, ty, size) = match i % 5 {
+        0 => (Fmt::Rgba8, 0x1907, 0x1907, 0x1401, 3),
+        1 => (Fmt::Rgba8, 0x1908, 0x1908, 0x1401, 4),
+        2 => (Fmt::Rgb565, 0x1907, 0x1907, 0x8363, 2),
+        3 => (Fmt::Rgba4, 0x1908, 0x1908, 0x8033, 2),
+        _ => (Fmt::Rgba5551, 0x1908, 0x1908, 0x8034, 2),
+    };
+    Some((bits, fmt, base, f, ty, size))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glCompressedTexImage2D(
+    kind: u32,
+    level: i32,
+    internal: u32,
+    w: i32,
+    h: i32,
+    border: i32,
+    size: i32,
+    data: *const c_void,
+) {
+    api!(|t: &mut Textures| {
+        target(kind)?;
+        let palette = palette_entry(internal);
+        if palette.is_none() && internal != 0x8d64 {
+            return Err(0x0500);
+        }
+        if border != 0 || w < 0 || h < 0 || size < 0 {
+            return Err(0x0501);
+        }
+        let (w, h, size) = (w as usize, h as usize, size as usize);
+        let data: Option<&[u8]> = if data.is_null() {
+            None
+        } else {
+            Some(core::slice::from_raw_parts(data.cast(), size))
+        };
+        if let Some((bits, fmt, base, f, ty, entry)) = palette {
+            // Levels 0..=-level share one palette; indices follow it, level 0 first.
+            let mut max_level = 0;
+            while w >> max_level > 1 || h >> max_level > 1 {
+                max_level += 1;
             }
-            let (tw, th) = (stored(o.width), stored(o.height));
-            let fits = w == level_size(o.width, level)
-                && h == level_size(o.height, level)
-                && internal == o.base;
-            let packed = o.packed;
-            let o = &mut t.objects[i];
-            o.defs[level] = Level {
-                defined: true,
-                width: w,
-                height: h,
-                base: internal,
-                packed: if fits { packed } else { packed_in },
-            };
-            if fits && level <= max_stored(tw, th) {
-                let o = &t.objects[i];
-                let levels = 1 + max_stored(tw, th);
-                let bpp = bpp_of(packed);
-                let storage = chain_buffer(o, levels, o.width, o.height, packed, true)?;
-                let region = storage.pointer.add(level_offset(tw, th, level, bpp));
-                let (lw, lh) = (tw >> level, th >> level);
-                ptr::write_bytes(region, 0, lw * lh * bpp);
-                fill(region, lw, lh, packed);
-                padding_in(region, w, h, lw, lh, o.wrap, bpp);
-                if p::c3dglPlatformFlush(storage.pointer, level_offset(tw, th, levels, bpp) as u32)
-                    < 0
-                {
-                    return Err(0x0502);
+            if level > 0 || (-level) as usize > max_level || w > 1024 || h > 1024 {
+                return Err(0x0501);
+            }
+            let count = (-level) as usize;
+            let palette_bytes = (1usize << bits) * entry;
+            let mut expected = palette_bytes;
+            for l in 0..=count {
+                expected += (level_size(w, l) * level_size(h, l) * bits + 7) / 8;
+            }
+            if size != expected {
+                return Err(0x0501);
+            }
+            let mut indices = data.map(|d| &d[palette_bytes..]);
+            for l in 0..=count {
+                let (lw, lh) = (level_size(w, l), level_size(h, l));
+                let mut rgba = alloc::vec![0u8; lw * lh * 4];
+                if let (Some(d), Some(idx)) = (data, indices) {
+                    for n in 0..lw * lh {
+                        let index = if bits == 8 {
+                            idx[n] as usize
+                        } else {
+                            ((idx[n / 2] >> if n & 1 == 1 { 0 } else { 4 }) & 15) as usize
+                        };
+                        let c = read_rgba(d.as_ptr().add(index * entry), f, ty);
+                        for k in 0..4 {
+                            rgba[n * 4 + k] = c[k] as u8;
+                        }
+                    }
+                    indices = Some(&idx[(lw * lh * bits + 7) / 8..]);
                 }
-                let (ow, oh) = (o.width, o.height);
-                t.replace(i, Some(storage), ow, oh)?;
-                t.objects[i].levels = levels;
+                define_image(t, l, base, fmt, lw, lh, Source::Rgba(&rgba))?;
             }
-            t.dirty = true;
             return Ok(());
         }
-
-        if w == 0 || h == 0 {
-            let o = &mut t.objects[i];
-            o.levels = 1;
-            o.defs = [Level::default(); 12];
-            return t.replace(i, None, w, h);
+        if !level_valid(level, w as i32, h as i32) || size != w.div_ceil(4) * h.div_ceil(4) * 8 {
+            return Err(0x0501);
         }
-        let (tw, th) = (stored(w), stored(h));
-        let o = &t.objects[i];
-        let same = o.storage.is_some()
-            && o.width == w
-            && o.height == h
-            && o.base == internal
-            && o.packed == packed_in;
-        let levels = if o.generate && max_stored(tw, th) > 0 {
-            1 + max_stored(tw, th)
-        } else if same {
-            o.levels
-        } else {
-            1
+        let zeros;
+        let blocks = match data {
+            Some(d) => d,
+            None => {
+                zeros = alloc::vec![0u8; size];
+                &zeros
+            }
         };
-        let bpp = bpp_of(packed_in);
-        let storage = chain_buffer(o, levels, w, h, packed_in, same)?;
-        ptr::write_bytes(storage.pointer, 0, tw * th * bpp);
-        fill(storage.pointer, tw, th, packed_in);
-        padding_in(storage.pointer, w, h, tw, th, o.wrap, bpp);
-        let generating = o.generate;
-        if generating {
-            generate(storage.pointer, tw, th, levels, w, h, packed_in, o.wrap);
-        }
-        if p::c3dglPlatformFlush(storage.pointer, level_offset(tw, th, levels, bpp) as u32) < 0 {
-            return Err(0x0502);
-        }
-        t.replace(i, Some(storage), w, h)?;
-        let o = &mut t.objects[i];
-        if !same {
-            o.defs = [Level::default(); 12];
-        }
-        o.base = internal;
-        o.packed = packed_in;
-        o.levels = levels;
-        if generating {
-            define_generated(o);
-        }
-        Ok(())
+        define_image(
+            t,
+            level as usize,
+            0x1907,
+            Fmt::Etc1,
+            w,
+            h,
+            Source::Etc1(blocks),
+        )
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glCompressedTexSubImage2D(
+    kind: u32,
+    _level: i32,
+    _x: i32,
+    _y: i32,
+    _w: i32,
+    _h: i32,
+    format: u32,
+    _size: i32,
+    _data: *const c_void,
+) {
+    // Neither paletted nor ETC1 images can be updated in part.
+    api!(|_: &mut Textures| {
+        target(kind)?;
+        Err::<(), u32>(if palette_entry(format).is_some() || format == 0x8d64 {
+            0x0502
+        } else {
+            0x0500
+        })
     });
 }
 
@@ -1190,7 +1501,7 @@ pub unsafe extern "C" fn glTexSubImage2D(
         let o = &t.objects[i];
         let level = level as usize;
         let (x, y, w, h) = (x as usize, y as usize, w as usize, h as usize);
-        if o.storage.is_none() {
+        if o.storage.is_none() || o.fmt == Fmt::Etc1 {
             return Err(0x0502);
         }
         let (iw, ih) = if level == 0 {
@@ -1214,33 +1525,18 @@ pub unsafe extern "C" fn glTexSubImage2D(
         // Copy on update: queued draws retain their previous texture image.
         let (tw, th) = (stored(o.width), stored(o.height));
         let (lw, lh) = (tw >> level, th >> level);
-        let (levels, packed) = (o.levels, o.packed);
-        let pbpp = bpp_of(packed);
-        let storage = chain_buffer(o, levels, o.width, o.height, packed, true)?;
-        let region = storage.pointer.add(level_offset(tw, th, level, pbpp));
-        match (packed, ty == 0x8363) {
-            (true, true) => upload565(region, lw, lh, x, y, w, h, pixels.cast(), t.alignment),
-            (true, false) => {
-                upload_to_565(region, lw, lh, x, y, w, h, pixels.cast(), bpp, t.alignment)
-            }
-            _ => {
-                upload(
-                    region,
-                    lw,
-                    lh,
-                    x,
-                    y,
-                    w,
-                    h,
-                    pixels.cast(),
-                    bpp,
-                    t.alignment,
-                    f == 0x1906,
-                );
-                convert_base(region, lw, lh, x, y, w, h, o.base);
-            }
-        }
-        padding_in(region, iw, ih, lw, lh, o.wrap, pbpp);
+        let (levels, fmt) = (o.levels, o.fmt);
+        let storage = chain_buffer(o, levels, o.width, o.height, fmt, true)?;
+        let region = storage.pointer.add(level_offset(tw, th, level, fmt));
+        let src = Source::Gl {
+            pixels: pixels.cast(),
+            f,
+            ty,
+            bpp,
+            alignment: t.alignment,
+        };
+        fill_level(region, lw, lh, x, y, w, h, fmt, o.base, src);
+        padding_in(region, iw, ih, lw, lh, o.wrap, fmt.bpp());
         if level == 0 && o.generate {
             generate(
                 storage.pointer,
@@ -1249,11 +1545,11 @@ pub unsafe extern "C" fn glTexSubImage2D(
                 levels,
                 o.width,
                 o.height,
-                packed,
+                fmt,
                 o.wrap,
             );
         }
-        if p::c3dglPlatformFlush(storage.pointer, level_offset(tw, th, levels, pbpp) as u32) < 0 {
+        if p::c3dglPlatformFlush(storage.pointer, level_offset(tw, th, levels, fmt) as u32) < 0 {
             return Err(0x0502);
         }
 
@@ -1308,40 +1604,98 @@ mod tests {
     }
 
     #[test]
-    fn mip_chain_sizes_box_filter_and_rgb565_rounding() {
+    fn mip_chain_sizes_box_filter_and_packed_formats() {
         assert_eq!(max_stored(8, 8), 0);
         assert_eq!(max_stored(64, 16), 1);
         assert_eq!(level_size(5, 3), 1);
-        assert_eq!(level_offset(16, 16, 2, 4), 16 * 16 * 4 + 8 * 8 * 4);
-        assert_eq!(level_offset(16, 16, 2, 2), 16 * 16 * 2 + 8 * 8 * 2);
-        // 16x16 RGBA8, 2x2 blocks of 0/4/8/9 average to (sum + 2) / 4 = 5.
-        let mut chain = alloc::vec![0u8; level_offset(16, 16, 2, 4)];
+        assert_eq!(level_offset(16, 16, 2, Fmt::Rgba8), 16 * 16 * 4 + 8 * 8 * 4);
+        assert_eq!(
+            level_offset(16, 16, 2, Fmt::Rgb565),
+            16 * 16 * 2 + 8 * 8 * 2
+        );
+        assert_eq!(
+            level_offset(32, 32, 2, Fmt::Etc1),
+            32 * 32 / 2 + 16 * 16 / 2
+        );
+        // 16x16 RGBA8, 2x2 blocks of 0/4/8/12 average to (sum + 2) / 4 = 6.
+        let mut chain = alloc::vec![0u8; level_offset(16, 16, 2, Fmt::Rgba8)];
         for y in 0..16 {
             for x in 0..16 {
                 let v = [0u8, 4][x & 1] + [0u8, 8][y & 1];
                 chain[offset(16, 16, x, y)..][..4].copy_from_slice(&[v, v, v, 200]);
             }
         }
-        unsafe { generate(chain.as_mut_ptr(), 16, 16, 2, 16, 16, false, [0x2901; 2]) };
-        let base = level_offset(16, 16, 1, 4);
+        unsafe {
+            generate(
+                chain.as_mut_ptr(),
+                16,
+                16,
+                2,
+                16,
+                16,
+                Fmt::Rgba8,
+                [0x2901; 2],
+            )
+        };
+        let base = level_offset(16, 16, 1, Fmt::Rgba8);
         assert_eq!(&chain[base + offset(8, 8, 3, 5)..][..4], &[6, 6, 6, 200]);
-        // RGB565: white and blue average at 8-bit precision, then repack.
-        assert_eq!(unpack565(0xffff), [255; 3]);
-        assert_eq!(unpack565(0x001f), [0, 0, 255]);
-        assert_eq!(pack565([128, 128, 255]), (16 << 11) | (32 << 5) | 31);
-        let mut packed = alloc::vec![0u8; level_offset(16, 16, 2, 2)];
+        // 16-bit formats round trip and average at 8-bit precision.
+        assert_eq!(unpack16(Fmt::Rgb565, 0xffff), [255, 255, 255, 255]);
+        assert_eq!(unpack16(Fmt::Rgb565, 0x001f), [0, 0, 255, 255]);
+        assert_eq!(
+            pack16(Fmt::Rgb565, [128, 128, 255, 255]),
+            (16 << 11) | (32 << 5) | 31
+        );
+        for fmt in [Fmt::Rgb565, Fmt::Rgba4, Fmt::Rgba5551] {
+            for v in [0u16, 0x1234, 0xffff, 0x8421] {
+                let c = unpack16(fmt, v);
+                assert_eq!(unpack16(fmt, pack16(fmt, c)), c, "{v:#x}");
+            }
+        }
+        let mut packed = alloc::vec![0u8; level_offset(16, 16, 2, Fmt::Rgb565)];
         for y in 0..16 {
             for x in 0..16 {
                 let v: u16 = if (x + y) % 2 == 0 { 0xffff } else { 0x001f };
-                unsafe { put565(packed.as_mut_ptr(), 16, 16, x, y, v) };
+                unsafe { put16(packed.as_mut_ptr(), 16, 16, x, y, v) };
             }
         }
-        unsafe { generate(packed.as_mut_ptr(), 16, 16, 2, 16, 16, true, [0x2901; 2]) };
-        let level1 = unsafe { packed.as_ptr().add(level_offset(16, 16, 1, 2)) };
+        unsafe {
+            generate(
+                packed.as_mut_ptr(),
+                16,
+                16,
+                2,
+                16,
+                16,
+                Fmt::Rgb565,
+                [0x2901; 2],
+            )
+        };
+        let level1 = unsafe { packed.as_ptr().add(level_offset(16, 16, 1, Fmt::Rgb565)) };
         assert_eq!(
-            unsafe { get565(level1, 8, 8, 2, 2) },
+            unsafe { get16(level1, 8, 8, 2, 2) },
             (16 << 11) | (32 << 5) | 31
         );
+    }
+
+    #[test]
+    fn etc1_blocks_use_pica_tile_order_with_reversed_bytes() {
+        // 8x8 image: four 4x4 blocks, each filled with its block number, row-major from t = 0.
+        let data: alloc::vec::Vec<u8> = (0..4u8)
+            .flat_map(|b| (0..8).map(move |i| b * 16 + i))
+            .collect();
+        let mut out = alloc::vec![0u8; 32];
+        unsafe { upload_etc1(out.as_mut_ptr(), 8, 8, 8, &data) };
+        // PICA order inside a tile: (0,0), (1,0), (0,1), (1,1); bytes reversed per block.
+        for (slot, block) in [0usize, 1, 2, 3].into_iter().enumerate() {
+            for i in 0..8 {
+                assert_eq!(out[slot * 8 + i], (block as u8) * 16 + 7 - i as u8);
+            }
+        }
+        let c = palette_entry(0x8b93).unwrap();
+        assert_eq!((c.0, c.1, c.2), (4, Fmt::Rgba4, 0x1908));
+        assert_eq!(palette_entry(0x8b95).unwrap().0, 8);
+        assert!(palette_entry(0x8b8f).is_none());
     }
 
     #[test]

@@ -105,6 +105,9 @@ void glBlendEquation(GLenum mode);
 void glBlendEquationSeparate(GLenum rgb, GLenum alpha);
 void glBlendColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
 #define GL_DEPTH_TEST 0x0b71
+#define GL_ALPHA_TEST 0x0bc0
+#define GL_ALPHA_TEST_FUNC 0x0bc1
+#define GL_ALPHA_TEST_REF 0x0bc2
 #define GL_DEPTH_WRITEMASK 0x0b72
 #define GL_DEPTH_FUNC 0x0b74
 #define GL_DEPTH_RANGE 0x0b70
@@ -129,6 +132,7 @@ void glDisable(GLenum cap);
 GLboolean glIsEnabled(GLenum cap);
 void glDepthMask(GLboolean flag);
 void glDepthFunc(GLenum func);
+void glAlphaFunc(GLenum func, GLfloat ref);
 void glDepthRange(GLdouble nearValue, GLdouble farValue);
 void glDepthRangef(GLfloat nearValue, GLfloat farValue);
 void glCullFace(GLenum face);

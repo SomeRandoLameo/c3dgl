@@ -232,3 +232,20 @@ selected original scenes, including the complete unchanged `drawMipmapPage`, mat
 the C framebuffer exactly; see `native-results/mipmap-step/` (one run each).
 Compressed (ETC1/paletted) textures, 1D textures and the remaining example groups
 are open. Host tests: 30 pass.
+
+
+## Compressed texture and alpha test checkpoint
+
+`glAlphaFunc`/`GL_ALPHA_TEST` write the PICA alpha-test register (queries included).
+Textures now have a storage format per chain: RGBA8, RGB565, RGBA4, RGBA5551 and
+native ETC1 (4x4 blocks reordered into PICA's 8x8 tile order, stored upside down with
+the texture matrix mapping t to q - t, as in the C renderer). `glCompressedTexImage2D`
+accepts ETC1 and the ten paletted OES formats, including paletted mip chains
+(negative levels); packed client types (5_6_5, 4_4_4_4, 5_5_5_1) keep their precision.
+Partial updates of compressed images report GL_INVALID_OPERATION. The complete
+unchanged `drawCompressedPage` (paletted RGB8/RGBA4 NPOT/RGBA8 with alpha test/paletted
+levels, ETC1, flipped ETC1 through the texture matrix, NPOT ETC1, ETC1 levels) and all
+eight selected original scenes match the C framebuffer exactly; see
+`native-results/compressed-step/` (one run each). 1D textures, sized internal formats,
+multiple texture environments beyond the example pages and the other examples remain
+open. Host tests: 32 pass.

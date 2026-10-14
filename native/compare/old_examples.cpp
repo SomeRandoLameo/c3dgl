@@ -4,9 +4,11 @@
 #if defined(C3DGL_OLD_PRIMITIVES)
 #include "../../examples/primitives/main.cpp"
 #define CASE "primitives"
-#elif defined(C3DGL_OLD_TEXTURE) || defined(C3DGL_OLD_TEXCOORDS) || defined(C3DGL_OLD_TEXMATRIX) || defined(C3DGL_OLD_MULTITEXTURE) || defined(C3DGL_OLD_MIPMAP)
+#elif defined(C3DGL_OLD_TEXTURE) || defined(C3DGL_OLD_TEXCOORDS) || defined(C3DGL_OLD_TEXMATRIX) || defined(C3DGL_OLD_MULTITEXTURE) || defined(C3DGL_OLD_MIPMAP) || defined(C3DGL_OLD_COMPRESSED)
 #include "../../examples/texture/main.cpp"
-#ifdef C3DGL_OLD_MIPMAP
+#ifdef C3DGL_OLD_COMPRESSED
+#define CASE "compressed"
+#elif defined(C3DGL_OLD_MIPMAP)
 #define CASE "mipmap"
 #elif defined(C3DGL_OLD_MULTITEXTURE)
 #define CASE "multitexture"
@@ -42,6 +44,8 @@ int main() {
     beginCell(1,1);drawQuadStrip();
     beginCell(2,1);drawPolygon();
     glDisable(GL_CULL_FACE);
+#elif defined(C3DGL_OLD_COMPRESSED)
+    const CompressedTextures comp=createCompressedTextures();const GLuint tex=comp.rgb8;drawCompressedPage(comp);
 #elif defined(C3DGL_OLD_MIPMAP)
     const MipTextures mip=createMipTextures();const GLuint tex=mip.levels;drawMipmapPage(mip);
 #elif defined(C3DGL_OLD_MULTITEXTURE)

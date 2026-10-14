@@ -309,7 +309,7 @@ mod tests {
         matrix[3] = 1.;
         let matrices = [matrix; 3];
         let scales = [[0.75, 0.5], [0.5, 0.25], [1., 1.]];
-        texture_matrix(&mut commands, &matrices, &scales).unwrap();
+        texture_matrix(&mut commands, &matrices, &scales, &[false; 3]).unwrap();
         let writes = decode(commands.as_slice());
         assert_eq!(writes[0], (r::VSH_FLOATUNIFORM_CONFIG as u32, 0x80000005));
         let data: alloc::vec::Vec<u32> = writes[1..].iter().map(|w| w.1).collect();
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(data[24..28], [0, 0, 1f32.to_bits(), 0]);
         let mut small = [7; TEXMATRIX_WORDS + DRAW_WORDS + 8 + FINISH_WORDS - 1];
         let mut commands = Commands::new(&mut small);
-        assert!(texture_matrix(&mut commands, &matrices, &scales).is_err());
+        assert!(texture_matrix(&mut commands, &matrices, &scales, &[false; 3]).is_err());
         assert_eq!(commands.used, 0);
         assert!(small.iter().all(|word| *word == 7));
     }
@@ -345,6 +345,7 @@ mod tests {
             tev: [0x00300030, 0, 0x00010001, 0xff000000, 0],
             lod: 0,
             format: 0,
+            flip: false,
         };
         let mut off = t;
         off.enabled = false;
@@ -399,11 +400,11 @@ mod tests {
         assert_eq!(c.as_slice()[8], 0x02000000);
         assert_eq!(c.as_slice()[10], pica_float(-(0.8f32 - 0.2), 16));
         assert_eq!(c.as_slice()[12], pica_float(1. - 0.8, 16));
-        let mut too_small = [7; 51];
+        let mut too_small = [7; 53];
         let mut c = Commands::new(&mut too_small);
         assert!(raster(&mut c, state).is_err());
         assert!(c.as_slice().is_empty());
-        assert_eq!(too_small, [7; 51]);
+        assert_eq!(too_small, [7; 53]);
     }
 
     #[test]
@@ -498,7 +499,7 @@ pub fn geometry(
     draw_index(c, first, count, index)
 }
 
-pub const RASTER_WORDS: usize = 14;
+pub const RASTER_WORDS: usize = 16;
 pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster) -> Result<(), ()> {
     if c.words.len() - c.used < RASTER_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
         return Err(());
@@ -520,7 +521,8 @@ pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster) -> Result<(
             pica_float(-(s.range[1] - s.range[0]), 16),
             pica_float(1. - s.range[1], 16),
         ],
-    )
+    )?;
+    one(c, r::FRAGOP_ALPHA_TEST, s.alpha_word())
 }
 
 pub const TEXTURE_WORDS: usize = 90;
@@ -594,6 +596,7 @@ pub(crate) fn texture_matrix(
     c: &mut Commands<'_>,
     matrices: &[[f32; 16]; 3],
     scales: &[[f32; 2]; 3],
+    flips: &[bool; 3],
 ) -> Result<(), ()> {
     if c.words.len() - c.used < TEXMATRIX_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
         return Err(());
@@ -605,7 +608,12 @@ pub(crate) fn texture_matrix(
         for (n, component) in rows.iter().enumerate() {
             for col in 0..4 {
                 let scaled = if n < 2 { scales[unit][n] } else { 1. };
-                data[slot * 4 + 3 - col] = (matrices[unit][col * 4 + component] * scaled).to_bits();
+                let mut value = matrices[unit][col * 4 + component] * scaled;
+                if n == 1 && flips[unit] {
+                    // ETC1 is stored upside down: t' = q - t.
+                    value = matrices[unit][col * 4 + 3] - value;
+                }
+                data[slot * 4 + 3 - col] = value.to_bits();
             }
             slot += 1;
         }

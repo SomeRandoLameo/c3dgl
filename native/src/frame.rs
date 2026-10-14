@@ -157,13 +157,16 @@ pub unsafe extern "C" fn glGetIntegerv(pname: u32, out: *mut i32) {
         match query(s, m, pname) {
             Some((v, n)) => {
                 for (i, value) in v[..n].iter().enumerate() {
-                    let integer =
-                        if pname == 0x0c22 || pname == 0x0b73 || pname == 0x0b70 || pname == 0x8005
-                        {
-                            (*value * 2147483647.) as i32
-                        } else {
-                            (*value + if *value >= 0. { 0.5 } else { -0.5 }) as i32
-                        };
+                    let integer = if pname == 0x0c22
+                        || pname == 0x0b73
+                        || pname == 0x0b70
+                        || pname == 0x0bc2
+                        || pname == 0x8005
+                    {
+                        (*value * 2147483647.) as i32
+                    } else {
+                        (*value + if *value >= 0. { 0.5 } else { -0.5 }) as i32
+                    };
 
                     out.add(i).write(integer);
                 }

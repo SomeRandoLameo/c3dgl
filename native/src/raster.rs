@@ -12,6 +12,9 @@ pub(crate) struct Raster {
     pub cull: bool,
     pub face: u32,
     pub front: u32,
+    pub alpha: bool,
+    pub alpha_func: u32,
+    pub alpha_ref: u8,
 }
 
 impl Raster {
@@ -26,7 +29,25 @@ impl Raster {
             cull: false,
             face: 0x0405,
             front: 0x0901,
+            alpha: false,
+            alpha_func: 0x0207,
+            alpha_ref: 0,
         }
+    }
+
+    /// FRAGOP_ALPHA_TEST: enable, PICA comparison (GL order mapped directly) and reference byte.
+    pub fn alpha_word(&self) -> u32 {
+        let function = match self.alpha_func {
+            0x0200 => 0,
+            0x0201 => 4,
+            0x0202 => 2,
+            0x0203 => 5,
+            0x0204 => 6,
+            0x0205 => 3,
+            0x0206 => 7,
+            _ => 1,
+        };
+        self.alpha as u32 | function << 4 | (self.alpha_ref as u32) << 8
     }
 
     pub fn drawable(&self) -> bool {
@@ -84,6 +105,9 @@ impl Raster {
             0x0b44 => self.cull as u8 as f64,
             0x0b45 => self.face as f64,
             0x0b46 => self.front as f64,
+            0x0bc0 => self.alpha as u8 as f64,
+            0x0bc1 => self.alpha_func as f64,
+            0x0bc2 => self.alpha_ref as f64 / 255.,
             0x0b70 => {
                 values[1] = self.range[1] as f64;
                 self.range[0] as f64
@@ -108,6 +132,7 @@ unsafe fn enable(cap: u32, on: bool) {
         let value = match cap {
             0x0b71 => &mut r.depth,
             0x0b44 => &mut r.cull,
+            0x0bc0 => &mut r.alpha,
             0x0be2 => &mut r.blend.enabled,
             _ => {
                 m.fail(0x0500);
@@ -139,6 +164,7 @@ pub unsafe extern "C" fn glIsEnabled(cap: u32) -> u8 {
         result = match cap {
             0x0b71 => s.raster.depth as u8,
             0x0b44 => s.raster.cull as u8,
+            0x0bc0 => s.raster.alpha as u8,
             0x0be2 => s.raster.blend.enabled as u8,
             0x0de1 => s.textures.enabled() as u8,
             _ => {
@@ -149,6 +175,30 @@ pub unsafe extern "C" fn glIsEnabled(cap: u32) -> u8 {
     });
 
     result
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glAlphaFunc(function: u32, reference: f32) {
+    with_frame(|s, m| {
+        if !(0x0200..=0x0207).contains(&function) {
+            m.fail(0x0500);
+            return;
+        }
+
+        let byte = if reference <= 0. || reference.is_nan() {
+            0
+        } else if reference >= 1. {
+            255
+        } else {
+            (reference * 255. + 0.5) as u8
+        };
+        let r = &mut s.raster;
+        if r.alpha_func != function || r.alpha_ref != byte {
+            r.alpha_func = function;
+            r.alpha_ref = byte;
+            r.dirty = true;
+        }
+    });
 }
 
 #[no_mangle]
@@ -235,6 +285,27 @@ pub unsafe extern "C" fn glDepthRangef(near: f32, far: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alpha_test_word_maps_gl_functions() {
+        let mut s = Raster::new();
+        assert_eq!(s.alpha_word(), 1 << 4);
+        s.alpha = true;
+        s.alpha_func = 0x0204;
+        s.alpha_ref = 128;
+        assert_eq!(s.alpha_word(), 1 | 6 << 4 | 128 << 8);
+        for (gl, pica) in [
+            (0x0200, 0),
+            (0x0201, 4),
+            (0x0202, 2),
+            (0x0203, 5),
+            (0x0205, 3),
+            (0x0206, 7),
+        ] {
+            s.alpha_func = gl;
+            assert_eq!(s.alpha_word() >> 4 & 7, pica);
+        }
+    }
 
     #[test]
     fn reversed_comparisons_and_winding() {

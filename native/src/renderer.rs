@@ -506,6 +506,7 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
         (
             core::array::from_fn(|unit| r.matrices.texture_for(unit)),
             core::array::from_fn(|unit| packets[unit].scale),
+            core::array::from_fn(|unit| packets[unit].flip),
         )
     });
 
@@ -529,8 +530,8 @@ unsafe fn update_draw_state(r: &mut Renderer) -> Result<(), ()> {
         gpu::texture(&mut commands, t, projective)?;
     }
 
-    if let Some((matrices, scales)) = texmatrix {
-        gpu::texture_matrix(&mut commands, &matrices, &scales)?;
+    if let Some((matrices, scales, flips)) = texmatrix {
+        gpu::texture_matrix(&mut commands, &matrices, &scales, &flips)?;
     }
     if let Some(v) = viewport {
         if gpu::viewport(&mut commands, v).is_err() {
