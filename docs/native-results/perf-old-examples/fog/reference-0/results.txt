@@ -1,0 +1,2 @@
+perf case=fog backend=reference frames=120 CPU 10.2897 GPU 0.9333 total 16.7118 cmd 8.5938
+ALL CHECKS PASSED: old example=fog backend=reference GL=0 readback=0 image=1

@@ -1,0 +1,2 @@
+perf case=overlay backend=native frames=120 CPU 0.5042 GPU 0.5200 total 16.7119 cmd 688.0000
+ALL CHECKS PASSED: old example=overlay backend=native GL=0 readback=0 image=1

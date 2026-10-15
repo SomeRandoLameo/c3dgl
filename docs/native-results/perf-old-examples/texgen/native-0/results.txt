@@ -1,0 +1,2 @@
+perf case=texgen backend=native frames=120 CPU 166.0547 GPU 1.6953 total 183.8487 cmd 1600.0000
+ALL CHECKS PASSED: old example=texgen backend=native GL=0 readback=0 image=1

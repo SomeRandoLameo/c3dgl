@@ -1,0 +1,2 @@
+perf case=multitexture backend=reference frames=120 CPU 0.9014 GPU 0.5200 total 16.7118 cmd 1.4771
+ALL CHECKS PASSED: old example=multitexture backend=reference GL=0 readback=0 image=1

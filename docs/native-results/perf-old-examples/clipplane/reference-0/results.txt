@@ -1,0 +1,2 @@
+perf case=clipplane backend=reference frames=120 CPU 10.5254 GPU 0.5838 total 16.7118 cmd 1.2817
+ALL CHECKS PASSED: old example=clipplane backend=reference GL=0 readback=0 image=1

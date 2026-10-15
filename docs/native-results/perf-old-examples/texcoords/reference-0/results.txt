@@ -1,0 +1,2 @@
+perf case=texcoords backend=reference frames=120 CPU 0.7483 GPU 0.5200 total 16.7118 cmd 0.8667
+ALL CHECKS PASSED: old example=texcoords backend=reference GL=0 readback=0 image=1

@@ -1,0 +1,2 @@
+perf case=accum backend=native frames=120 CPU 761.4435 GPU 13.3524 total 785.5412 cmd 87968.0000
+ALL CHECKS PASSED: old example=accum backend=native GL=0 readback=0 image=1

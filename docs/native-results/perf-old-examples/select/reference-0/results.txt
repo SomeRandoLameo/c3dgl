@@ -1,0 +1,2 @@
+perf case=select backend=reference frames=120 CPU 4.6195 GPU 0.7933 total 16.7118 cmd 0.6958
+ALL CHECKS PASSED: old example=select backend=reference GL=0 readback=0 image=1

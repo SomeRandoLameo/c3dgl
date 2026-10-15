@@ -62,8 +62,12 @@ foreach(example primitives texture cube texcoords texmatrix multitexture mipmap 
     endif()
     file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/old_${example}_source.json"
         CONTENT "{\"source_sha256\":\"${source_hash}\",\"adapter_sha256\":\"${example_adapter_hash}\"}\n")
+    foreach(variant old perf)
     foreach(backend reference native)
-        set(target old_${example}_${backend})
+        if(variant STREQUAL perf AND example STREQUAL api)
+            continue()
+        endif()
+        set(target ${variant}_${example}_${backend})
         if(example STREQUAL api)
             add_executable(${target} old_api.c)
             set_target_properties(${target} PROPERTIES C_STANDARD 99 C_EXTENSIONS ON)
@@ -78,6 +82,9 @@ foreach(example primitives texture cube texcoords texmatrix multitexture mipmap 
         target_include_directories(${target} BEFORE PRIVATE ../../include)
         string(TOUPPER ${example} upper)
         target_compile_definitions(${target} PRIVATE C3DGL_OLD_${upper}=1)
+        if(variant STREQUAL perf)
+            target_compile_definitions(${target} PRIVATE C3DGL_COMPARE_PERF=1)
+        endif()
         if(backend STREQUAL native)
             target_compile_definitions(${target} PRIVATE C3DGL_COMPARE_NATIVE=1)
             if(example STREQUAL select OR example MATCHES "^glu")
@@ -90,10 +97,14 @@ foreach(example primitives texture cube texcoords texmatrix multitexture mipmap 
             endif()
             target_link_libraries(${target} PRIVATE c3dgl::c3dgl citro3d PNG::PNG)
         endif()
-        add_custom_command(TARGET ${target} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy
-                "${CMAKE_CURRENT_BINARY_DIR}/old_${example}_source.json"
-                "${CMAKE_CURRENT_BINARY_DIR}/${target}_source.json")
+        if(variant STREQUAL old)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy
+                    "${CMAKE_CURRENT_BINARY_DIR}/old_${example}_source.json"
+                    "${CMAKE_CURRENT_BINARY_DIR}/${target}_source.json")
+        endif()
         ctr_create_3dsx(${target})
+    
     endforeach()
+endforeach()
 endforeach()

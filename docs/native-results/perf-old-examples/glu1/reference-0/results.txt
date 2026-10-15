@@ -1,0 +1,2 @@
+perf case=glu1 backend=reference frames=120 CPU 20.4636 GPU 1.0613 total 21.3852 cmd 1.9470
+ALL CHECKS PASSED: old example=glu1 backend=reference GL=0 readback=0 image=1

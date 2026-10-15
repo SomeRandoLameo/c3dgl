@@ -1,0 +1,2 @@
+perf case=texgen backend=reference frames=120 CPU 53.7343 GPU 1.3421 total 54.9353 cmd 0.4700
+ALL CHECKS PASSED: old example=texgen backend=reference GL=0 readback=0 image=1

@@ -290,6 +290,24 @@ pub unsafe extern "C" fn glEvalCoord2fv(uv: *const f32) {
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn glEvalCoord1dv(u: *const f64) {
+    if u.is_null() {
+        with_immediate(|r| r.matrices.fail(0x0501));
+    } else {
+        eval_coord1(u.read() as f32);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glEvalCoord2dv(uv: *const f64) {
+    if uv.is_null() {
+        with_immediate(|r| r.matrices.fail(0x0501));
+    } else {
+        eval_coord2(uv.read() as f32, uv.add(1).read() as f32);
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Source {
     F32(*const f32),

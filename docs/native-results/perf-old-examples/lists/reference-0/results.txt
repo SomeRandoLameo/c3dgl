@@ -1,0 +1,2 @@
+perf case=lists backend=reference frames=120 CPU 8.7791 GPU 0.7933 total 16.7118 cmd 0.3906
+ALL CHECKS PASSED: old example=lists backend=reference GL=0 readback=0 image=1

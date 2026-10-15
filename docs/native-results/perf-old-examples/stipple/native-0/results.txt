@@ -1,0 +1,2 @@
+perf case=stipple backend=native frames=120 CPU 7.4531 GPU 0.9550 total 16.7119 cmd 5088.0000
+ALL CHECKS PASSED: old example=stipple backend=native GL=0 readback=0 image=1
