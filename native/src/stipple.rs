@@ -70,8 +70,10 @@ pub unsafe extern "C" fn glLineStipple(factor: i32, pattern: u16) {
 /// Set the pattern from the 128 bytes of a 32x32 bitmap (display list execution).
 pub(crate) unsafe fn set_polygon_mask(mask: [u8; 128]) {
     with_frame(|s, _| {
-        s.stipple.mask = mask;
-        s.raster.dirty = true;
+        if s.stipple.mask != mask {
+            s.stipple.mask = mask;
+            s.raster.dirty = true;
+        }
     });
 }
 
@@ -82,6 +84,17 @@ unsafe fn unpack(mask: *const u8) -> [u8; 128] {
     let row_bytes = (store.row_length_or(32) + 7) / 8;
     let row_bytes = (row_bytes + store.alignment - 1) / store.alignment * store.alignment;
     let mut out = [0u8; 128];
+    if store.skip_pixels % 8 == 0 {
+        // Whole bytes: copied (bit reversed for LSB first).
+        for y in 0..32 {
+            let row = mask.add((store.skip_rows + y) * row_bytes + store.skip_pixels / 8);
+            for i in 0..4 {
+                let b = row.add(i).read();
+                out[4 * y + i] = if store.lsb_first { b.reverse_bits() } else { b };
+            }
+        }
+        return out;
+    }
     for y in 0..32 {
         for x in 0..32 {
             let col = store.skip_pixels + x;

@@ -38,6 +38,7 @@ pub(crate) struct Evaluators {
 }
 
 /// An evaluated vertex: position, and the values that replace the current color and texcoord.
+#[derive(Clone, Copy)]
 pub(crate) struct Evaluated {
     pub position: [f32; 4],
     pub color: Option<[f32; 4]>,
@@ -186,10 +187,43 @@ fn eval_map1(m: &Map, k: usize, u: f32) -> [f32; 4] {
     out
 }
 
+/// Bernstein bases recently computed (mesh points share their u and v): direct mapped by the
+/// degree and the parameter's bits, per axis.
+struct BasisCache {
+    keys: [(u32, u32); 32],
+    values: [[f32; MAX_ORDER]; 32],
+}
+
+static mut BASES: [BasisCache; 2] = [
+    BasisCache {
+        keys: [(0, 0); 32],
+        values: [[0.; MAX_ORDER]; 32],
+    },
+    BasisCache {
+        keys: [(0, 0); 32],
+        values: [[0.; MAX_ORDER]; 32],
+    },
+];
+
+/// `bernstein(n, t)` through the cache of `axis` (identical values).
+fn cached_bernstein(axis: usize, n: usize, t: f32) -> &'static [f32; MAX_ORDER] {
+    // Key 0 (n = 0) never occurs: maps have order >= 1.
+    let key = (n as u32, t.to_bits());
+    let slot = (t.to_bits() ^ t.to_bits() >> 11 ^ t.to_bits() >> 22 ^ n as u32) as usize & 31;
+    // The renderer runs on one thread.
+    let cache = unsafe { &mut *core::ptr::addr_of_mut!(BASES[axis]) };
+    if cache.keys[slot] != key {
+        let mut b = [0.; MAX_ORDER];
+        bernstein(n, t, &mut b);
+        cache.keys[slot] = key;
+        cache.values[slot] = b;
+    }
+    &cache.values[slot]
+}
+
 fn eval_map2(m: &Map, k: usize, u: f32, v: f32) -> [f32; 4] {
-    let (mut bu, mut bv) = ([0.; MAX_ORDER], [0.; MAX_ORDER]);
-    bernstein(m.uorder, (u - m.u[0]) / (m.u[1] - m.u[0]), &mut bu);
-    bernstein(m.vorder, (v - m.v[0]) / (m.v[1] - m.v[0]), &mut bv);
+    let bu = cached_bernstein(0, m.uorder, (u - m.u[0]) / (m.u[1] - m.u[0]));
+    let bv = cached_bernstein(1, m.vorder, (v - m.v[0]) / (m.v[1] - m.v[0]));
     // Sum over v first, then over u.
     let mut out = [0.; 4];
     let mut p = 0;
@@ -635,27 +669,78 @@ pub unsafe extern "C" fn glEvalMesh2(mode: u32, i1: i32, i2: i32, j1: i32, j2: i
     }
     match mode {
         0x1b02 => {
+            // Each grid point is evaluated once: a row is shared by the two strips around it.
+            let row = |j: i32| {
+                let mut out = Vec::new();
+                with_immediate(|r| {
+                    if out
+                        .try_reserve_exact((i2 - i1 + 1).max(0) as usize)
+                        .is_err()
+                    {
+                        r.matrices.fail(0x0505);
+                        return;
+                    }
+                    for i in i1..=i2 {
+                        let (u, v) = grid_point2(&r.frame.eval, i, j);
+                        out.push(r.frame.eval.eval2(u, v));
+                    }
+                });
+                out
+            };
+            let emit = |e: &Option<Evaluated>| {
+                with_immediate(|r| {
+                    if let (true, Some(e)) = (r.immediate.active, e) {
+                        submit(r, *e);
+                    }
+                })
+            };
+            let mut lower = if j1 < j2 { row(j1) } else { Vec::new() };
             for j in j1..j2 {
+                let upper = row(j + 1);
                 glBegin(8);
-                for i in i1..=i2 {
-                    glEvalPoint2(i, j);
-                    glEvalPoint2(i, j + 1);
+                for (a, b) in lower.iter().zip(&upper) {
+                    emit(a);
+                    emit(b);
                 }
                 glEnd();
+                lower = upper;
             }
         }
         0x1b01 => {
-            for j in j1..=j2 {
-                glBegin(3);
-                for i in i1..=i2 {
-                    glEvalPoint2(i, j);
+            // Rows, then columns of one evaluation of the grid.
+            let (nu, nv) = ((i2 - i1 + 1).max(0) as usize, (j2 - j1 + 1).max(0) as usize);
+            let mut grid = Vec::new();
+            with_immediate(|r| {
+                if grid.try_reserve_exact(nu * nv).is_err() {
+                    r.matrices.fail(0x0505);
+                    return;
                 }
+                for j in j1..=j2 {
+                    for i in i1..=i2 {
+                        let (u, v) = grid_point2(&r.frame.eval, i, j);
+                        grid.push(r.frame.eval.eval2(u, v));
+                    }
+                }
+            });
+            if nu == 0 || nv == 0 || grid.len() != nu * nv {
+                return;
+            }
+            let emit = |e: &Option<Evaluated>| {
+                with_immediate(|r| {
+                    if let (true, Some(e)) = (r.immediate.active, e) {
+                        submit(r, *e);
+                    }
+                })
+            };
+            for row in grid.chunks_exact(nu) {
+                glBegin(3);
+                row.iter().for_each(emit);
                 glEnd();
             }
-            for i in i1..=i2 {
+            for i in 0..nu {
                 glBegin(3);
-                for j in j1..=j2 {
-                    glEvalPoint2(i, j);
+                for j in 0..nv {
+                    emit(&grid[j * nu + i]);
                 }
                 glEnd();
             }

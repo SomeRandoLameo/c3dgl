@@ -1,4 +1,12 @@
-#![cfg_attr(not(any(test, feature = "host-tests", feature = "rust3ds", feature = "host-bench")), no_std)]
+#![cfg_attr(
+    not(any(
+        test,
+        feature = "host-tests",
+        feature = "rust3ds",
+        feature = "host-bench"
+    )),
+    no_std
+)]
 
 extern crate alloc;
 #[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
@@ -15,6 +23,8 @@ mod caps;
 mod clip;
 #[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod compat;
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
+mod dsp;
 #[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod evaluator;
 #[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
@@ -77,6 +87,19 @@ impl<'a> Commands<'a> {
         &self.words[..self.used]
     }
 
+    /// One value (the common case of `write`): the value and the header with count 0.
+    #[inline(always)]
+    pub fn write_one(&mut self, register: u16, mask: u8, value: u32) -> bool {
+        if register > 0x3ff || mask > 15 || self.words.len() - self.used < 2 {
+            return false;
+        }
+        let start = self.used;
+        self.words[start] = value;
+        self.words[start + 1] = u32::from(register) | (u32::from(mask) << 16);
+        self.used += 2;
+        true
+    }
+
     pub fn write(&mut self, register: u16, mask: u8, incremental: bool, values: &[u32]) -> bool {
         if register > 0x3ff || mask > 15 || values.is_empty() || values.len() > 256 {
             return false;
@@ -135,7 +158,12 @@ pub unsafe extern "C" fn c3dglNativeEncodeCommand(
     }
 }
 
-#[cfg(not(any(test, feature = "host-tests", feature = "rust3ds", feature = "host-bench")))]
+#[cfg(not(any(
+    test,
+    feature = "host-tests",
+    feature = "rust3ds",
+    feature = "host-bench"
+)))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {

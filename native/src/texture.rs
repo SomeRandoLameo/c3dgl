@@ -542,8 +542,10 @@ impl Textures {
         for unit in 0..3 {
             if let Some((name, one_d)) = self.sampling(unit) {
                 if let Some(i) = self.find(name, one_d) {
-                    if self.objects[i].complete() {
-                        self.objects[i].used = true;
+                    let o = &mut self.objects[i];
+                    // Already marked this frame: no completeness check per draw.
+                    if !o.used && o.complete() {
+                        o.used = true;
                     }
                 }
             }
@@ -913,6 +915,18 @@ fn offset(width: usize, height: usize, x: usize, y: usize) -> usize {
 }
 
 /// Byte offset of a texel in Morton-tiled storage with `bpp` bytes per texel.
+/// The part of `offset_bpp` that depends on x (the tile column and x's Morton bits).
+pub(crate) fn tiled_x(x: usize, bpp: usize) -> usize {
+    ((x / 8) * 64 + ((x & 1) | ((x & 2) << 1) | ((x & 4) << 2))) * bpp
+}
+
+/// The part of `offset_bpp` that depends on y: `offset_bpp(w, h, x, y, b) == tiled_x(x, b) +
+/// tiled_y(w, h, y, b)` (the Morton bits of x and y are disjoint).
+pub(crate) fn tiled_y(width: usize, height: usize, y: usize, bpp: usize) -> usize {
+    let y = height - 1 - y;
+    ((y / 8) * (width / 8) * 64 + (((y & 1) << 1) | ((y & 2) << 2) | ((y & 4) << 3))) * bpp
+}
+
 pub(crate) fn offset_bpp(width: usize, height: usize, x: usize, y: usize, bpp: usize) -> usize {
     let y = height - 1 - y;
     let tile = (y / 8) * (width / 8) + x / 8;
@@ -2453,6 +2467,22 @@ mod tests {
         assert_eq!((c.0, c.1, c.2), (4, Fmt::Rgba4, 0x1908));
         assert_eq!(palette_entry(0x8b95).unwrap().0, 8);
         assert!(palette_entry(0x8b8f).is_none());
+    }
+
+    #[test]
+    fn tiled_offsets_split_into_row_and_column_parts() {
+        for (w, h) in [(8, 8), (16, 8), (256, 64), (32, 256)] {
+            for y in 0..h {
+                for x in 0..w {
+                    for bpp in [1, 2, 4] {
+                        assert_eq!(
+                            offset_bpp(w, h, x, y, bpp),
+                            tiled_x(x, bpp) + tiled_y(w, h, y, bpp)
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -11,6 +11,9 @@ pub(crate) struct Batch {
     pub count: u32,
     /// GL mode of the batch; modes below 4 (points, lines) carry raw vertices for expansion.
     pub primitive: u32,
+    /// Flat shading is already in the vertex colors (separate triangles and quads: every vertex
+    /// has the color of its primitive's provoking vertex).
+    pub flat_applied: bool,
 }
 
 pub(crate) struct Immediate {
@@ -21,13 +24,29 @@ pub(crate) struct Immediate {
     pub edge: bool,
     pub normal: [f32; 3],
     mode: u32,
+    /// Flat shading of separate triangles or quads is applied to the colors as they arrive.
+    flat_colors: bool,
     vertices: Vec<GpuVertex>,
     edges: Vec<bool>,
     /// Back colors of two-sided lighting, parallel to `vertices` (empty without it).
     backs: Vec<[f32; 4]>,
+    /// The GPU bytes of the last `color` converted (most vertices share the current color).
+    gpu_cache: core::cell::Cell<([f32; 4], [u8; 4])>,
 }
 
 impl Immediate {
+    /// The current color as GPU color bytes.
+    #[inline]
+    pub fn gpu_color(&self) -> [u8; 4] {
+        let (from, gpu) = self.gpu_cache.get();
+        if from == self.color {
+            return gpu;
+        }
+        let gpu = self.color.map(gpu_color_byte);
+        self.gpu_cache.set((self.color, gpu));
+        gpu
+    }
+
     pub fn new() -> Self {
         Self {
             active: false,
@@ -37,27 +56,30 @@ impl Immediate {
             edge: true,
             normal: [0., 0., 1.],
             mode: 4,
+            flat_colors: false,
             vertices: Vec::new(),
             edges: Vec::new(),
             backs: Vec::new(),
+            gpu_cache: core::cell::Cell::new(([1.; 4], [255; 4])),
         }
     }
 
-    fn begin(&mut self, mode: u32) -> Result<(), u32> {
+    fn begin(&mut self, mode: u32, flat: bool) -> Result<(), u32> {
         if self.active {
             return Err(0x0502);
         }
 
         crate::primitive::Plan::new(mode, 0)?;
 
-        self.vertices
-            .try_reserve(4096usize.saturating_sub(self.vertices.len()))
-            .map_err(|_| 0x0505u32)?;
         self.vertices.clear();
         self.edges.clear();
+        // Room for the most vertices a batch takes: `push` writes without checks.
+        self.vertices.try_reserve(4096).map_err(|_| 0x0505u32)?;
+        self.edges.try_reserve(4096).map_err(|_| 0x0505u32)?;
         self.backs.clear();
         self.active = true;
         self.mode = mode;
+        self.flat_colors = flat && matches!(mode, 4 | 7);
 
         Ok(())
     }
@@ -73,15 +95,16 @@ impl Immediate {
         color: Option<[f32; 4]>,
         texcoord: Option<[f32; 4]>,
     ) -> Result<(), u32> {
-        let color = color.unwrap_or(self.color).map(gpu_color_component);
+        let color = color.unwrap_or(self.color).map(gpu_color_byte);
         self.push(position, color, None, texcoord, None)
     }
 
     /// A vertex with its final (possibly lit) GPU color bytes and optional back color.
+    #[inline]
     pub fn push(
         &mut self,
         position: [f32; 4],
-        color: [f32; 4],
+        color: [u8; 4],
         back: Option<[f32; 4]>,
         texcoord: Option<[f32; 4]>,
         extra: Option<[[f32; 4]; 2]>,
@@ -90,22 +113,60 @@ impl Immediate {
             return Err(0x0502);
         }
 
-        if self.vertices.len() == 4096 {
+        let n = self.vertices.len();
+        if n == 4096 {
             return Err(0x0505);
         }
 
-        self.edges.push(self.edge);
         if let Some(back) = back {
+            self.backs.try_reserve(1).map_err(|_| 0x0505u32)?;
             self.backs.push(back);
         }
-        self.vertices.push(GpuVertex {
-            position,
-            color,
-            texcoord: texcoord.unwrap_or(self.texcoord),
-            extra_texcoords: extra.unwrap_or(self.extra_texcoords),
-        });
+        // Capacity for 4096 reserved by `begin`.
+        unsafe {
+            self.edges.as_mut_ptr().add(n).write(self.edge);
+            self.edges.set_len(n + 1);
+            self.vertices.as_mut_ptr().add(n).write(GpuVertex {
+                position,
+                color,
+                texcoord: texcoord.unwrap_or(self.texcoord),
+                extra_texcoords: extra.unwrap_or(self.extra_texcoords),
+            });
+            self.vertices.set_len(n + 1);
+        }
+        // The provoking (last) vertex of a separate triangle or quad: its colors for the others.
+        let size = if self.mode == 4 { 3 } else { 4 };
+        if self.flat_colors && (n + 1) % size == 0 {
+            for k in n + 1 - size..n {
+                self.vertices[k].color = color;
+            }
+            if let Some(back) = back {
+                let first = self.backs.len() - size;
+                for b in &mut self.backs[first..first + size - 1] {
+                    *b = back;
+                }
+            }
+        }
 
         Ok(())
+    }
+
+    /// Whether the next vertex provokes the color of a primitive under flat shading (GL 1.1 table
+    /// 2.8, the vertices `polygon::visit` and `lines::expand` take): the others' colors are
+    /// never seen.
+    pub fn next_provokes(&self) -> bool {
+        let i = self.vertices.len();
+        match self.mode {
+            1 => i % 2 == 1,
+            3 => i >= 1,
+            4 => i % 3 == 2,
+            5 | 6 => i >= 2,
+            7 => i % 4 == 3,
+            8 => i >= 3 && i % 2 == 1,
+            9 => i == 0,
+            // Points; line loops (closed by the first vertex).
+            _ => true,
+        }
     }
 
     /// Take back the storage of a drawn batch (no allocation for the next glBegin).
@@ -154,6 +215,7 @@ impl Immediate {
                 plan.output as u32
             },
             primitive: self.mode,
+            flat_applied: self.flat_colors,
         })
     }
 }
@@ -164,7 +226,7 @@ pub unsafe extern "C" fn glBegin(mode: u32) {
         return;
     }
     with_immediate(|r| {
-        if let Err(e) = r.immediate.begin(mode) {
+        if let Err(e) = r.immediate.begin(mode, r.frame.poly.flat) {
             r.matrices.fail(e);
         }
     });
@@ -194,6 +256,11 @@ pub unsafe extern "C" fn glVertex3f(x: f32, y: f32, z: f32) {
 #[no_mangle]
 pub unsafe extern "C" fn glVertex2f(x: f32, y: f32) {
     glVertex4f(x, y, 0., 1.);
+}
+
+/// A color component as the byte the GPU gets.
+pub(crate) fn gpu_color_byte(value: f32) -> u8 {
+    (value.clamp(0., 1.) * 255. + 0.5) as u8
 }
 
 pub(crate) fn gpu_color_component(value: f32) -> f32 {
@@ -242,6 +309,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn byte_colors_round_trip_through_the_float_path() {
+        // The unsigned byte fast path of color arrays relies on this.
+        for c in 0..=255u8 {
+            assert_eq!(gpu_color_byte(c as f32 / 255.), c);
+        }
+    }
+
+    #[test]
     fn reference_byte_color_rounding_and_expansion() {
         assert_eq!(color_component(-1.), 0.);
         assert_eq!(color_component(2.), 1.);
@@ -268,7 +343,7 @@ mod tests {
     fn assembled_indices_preserve_vertex_attributes_and_current_state() {
         for mode in 5..=9 {
             let mut s = Immediate::new();
-            s.begin(mode).unwrap();
+            s.begin(mode, false).unwrap();
             for i in 0..5 {
                 s.color = [i as f32, 1., 0., 1.];
                 s.texcoord = [i as f32, 0.5, 0., 1.];
@@ -281,7 +356,7 @@ mod tests {
             for i in batch.indices {
                 let v = batch.vertices[i as usize];
                 assert_eq!(v.position[0], i as f32);
-                assert_eq!(v.color[0], if i == 0 { 0. } else { 255. });
+                assert_eq!(v.color[0], if i == 0 { 0 } else { 255 });
                 assert_eq!(v.texcoord[0], i as f32);
             }
             assert_eq!(s.color[0], 4.);
@@ -307,9 +382,9 @@ mod tests {
     fn assembly_and_errors() {
         let mut s = Immediate::new();
         assert_eq!(s.vertex([0.; 4]), Err(0x0502));
-        assert_eq!(s.begin(10), Err(0x0500));
-        s.begin(4).unwrap();
-        assert_eq!(s.begin(4), Err(0x0502));
+        assert_eq!(s.begin(10, false), Err(0x0500));
+        s.begin(4, false).unwrap();
+        assert_eq!(s.begin(4, false), Err(0x0502));
         s.color = [0., 1., 0., 1.];
         for _ in 0..4 {
             s.vertex([1., 2., 3., 1.]).unwrap();
@@ -318,9 +393,9 @@ mod tests {
         assert_eq!(v.vertices.len(), 3);
         assert_eq!(v.count, 3);
         assert!(v.indices.is_empty());
-        assert_eq!(v.vertices[0].color, [0., 255., 0., 255.]);
+        assert_eq!(v.vertices[0].color, [0, 255, 0, 255]);
         assert!(s.end().is_err());
-        s.begin(4).unwrap();
+        s.begin(4, false).unwrap();
         assert_eq!(s.color, [0., 1., 0., 1.]);
         for _ in 0..4096 {
             s.vertex([0.; 4]).unwrap();

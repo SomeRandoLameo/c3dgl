@@ -454,6 +454,47 @@ impl Arrays {
         }
     }
 
+    /// Element `index` of a color array as GPU color bytes; unsigned bytes are taken as they are
+    /// (what `value` and `gpu_color_byte` give for them).
+    #[inline]
+    unsafe fn color_bytes(&self, a: Array, index: usize) -> Result<[u8; 4], u32> {
+        if a.kind == 0x1401 && (a.size == 3 || a.size == 4) {
+            let step = if a.stride == 0 { a.size } else { a.stride };
+            let offset = index
+                .checked_mul(step)
+                .and_then(|n| n.checked_add(a.pointer))
+                .ok_or(0x0502u32)?;
+            let p = self.source(a.buffer, offset, a.size)?;
+            let alpha = if a.size == 4 { p.add(3).read() } else { 255 };
+            return Ok([p.read(), p.add(1).read(), p.add(2).read(), alpha]);
+        }
+        Ok(self
+            .value(a, index, true)?
+            .map(crate::immediate::gpu_color_byte))
+    }
+
+    /// Element `index` of a position array (`value` with a direct path for floats).
+    #[inline]
+    unsafe fn position(&self, a: Array, index: usize) -> Result<[f32; 4], u32> {
+        if a.kind == 0x1406 && (2..=4).contains(&a.size) {
+            let step = if a.stride == 0 { a.size * 4 } else { a.stride };
+            let offset = index
+                .checked_mul(step)
+                .and_then(|n| n.checked_add(a.pointer))
+                .ok_or(0x0502u32)?;
+            let p = self.source(a.buffer, offset, a.size * 4)?.cast::<f32>();
+            let mut out = [0., 0., 0., 1.];
+            for (i, v) in out.iter_mut().enumerate().take(a.size) {
+                *v = ptr::read_unaligned(p.add(i));
+            }
+            if !out.iter().all(|v| v.is_finite()) {
+                return Err(0x0501);
+            }
+            return Ok(out);
+        }
+        self.value(a, index, false)
+    }
+
     unsafe fn value(&self, a: Array, index: usize, color: bool) -> Result<[f32; 4], u32> {
         let width = width(a.kind).ok_or(0x0500u32)?;
         let step = if a.stride == 0 {
@@ -515,6 +556,41 @@ impl Arrays {
         extra_current: [[f32; 4]; 2],
         current_normal: [f32; 3],
     ) -> Result<(Vec<GpuVertex>, Vec<[f32; 3]>), u32> {
+        let mut out = Vec::new();
+        let mut normals = Vec::new();
+        self.gather_into(
+            first,
+            count,
+            kind,
+            indices,
+            current_color,
+            current_texcoord,
+            extra_current,
+            current_normal,
+            &mut out,
+            &mut normals,
+            None,
+        )?;
+        Ok((out, normals))
+    }
+
+    /// The vertices of a draw. With `elements` (indexed draws only) every referenced array element
+    /// is fetched once: `elements` receives the position of each index's vertex in `out`, so
+    /// per-vertex work (lighting, texture generation) runs once per shared vertex.
+    pub unsafe fn gather_into(
+        &self,
+        first: usize,
+        count: usize,
+        kind: u32,
+        indices: usize,
+        current_color: [f32; 4],
+        current_texcoord: [f32; 4],
+        extra_current: [[f32; 4]; 2],
+        current_normal: [f32; 3],
+        out: &mut Vec<GpuVertex>,
+        normals: &mut Vec<[f32; 3]>,
+        mut elements: Option<&mut Vec<u16>>,
+    ) -> Result<(), u32> {
         if !self.enabled[0] {
             return Err(0x0502);
         }
@@ -537,10 +613,20 @@ impl Arrays {
                 count.checked_mul(w).ok_or(0x0501u32)?,
             )?
         };
-        let mut out = Vec::new();
-        let mut normals = Vec::new();
+        out.clear();
+        normals.clear();
         out.try_reserve_exact(count).map_err(|_| 0x0505u32)?;
         normals.try_reserve_exact(count).map_err(|_| 0x0505u32)?;
+        let dedupe = kind != 0 && elements.is_some();
+        // Array element -> position in `out` (u16::MAX: not fetched yet).
+        let mut remap = Vec::new();
+        if dedupe {
+            remap.try_reserve_exact(4096).map_err(|_| 0x0505u32)?;
+            remap.resize(4096, u16::MAX);
+            let e = elements.as_mut().unwrap();
+            e.clear();
+            e.try_reserve_exact(count).map_err(|_| 0x0505u32)?;
+        }
         for i in 0..count {
             let n = match w {
                 0 => first + i,
@@ -550,6 +636,14 @@ impl Arrays {
             };
             if kind != 0 && n >= 4096 {
                 return Err(0x0501);
+            }
+            if dedupe {
+                if remap[n] != u16::MAX {
+                    elements.as_mut().unwrap().push(remap[n]);
+                    continue;
+                }
+                remap[n] = out.len() as u16;
+                elements.as_mut().unwrap().push(out.len() as u16);
             }
             let mut extra = extra_current;
             for unit in 0..2 {
@@ -563,12 +657,11 @@ impl Arrays {
                 current_normal
             });
             out.push(GpuVertex {
-                position: self.value(self.vertex, n, false)?,
+                position: self.position(self.vertex, n)?,
                 color: if self.enabled[1] {
-                    self.value(self.color, n, true)?
-                        .map(crate::immediate::gpu_color_component)
+                    self.color_bytes(self.color, n)?
                 } else {
-                    current_color.map(crate::immediate::gpu_color_component)
+                    current_color.map(crate::immediate::gpu_color_byte)
                 },
                 texcoord: if self.enabled[2] {
                     self.value(self.texcoord, n, false)?
@@ -578,7 +671,7 @@ impl Arrays {
                 extra_texcoords: extra,
             });
         }
-        Ok((out, normals))
+        Ok(())
     }
 
     /// Element `index` of the normal array: signed integers map to [-1, 1] like glColor.
@@ -622,6 +715,7 @@ impl Arrays {
         current_color: [f32; 4],
         current_texcoord: [f32; 4],
         extra_current: [[f32; 4]; 2],
+        arena: &mut crate::renderer::Arena,
     ) -> Result<(u32, Option<u32>, u32), u32> {
         if !self.enabled[0] {
             return Err(0x0502);
@@ -720,7 +814,18 @@ impl Arrays {
             index_data = plan.indices(|i| if kind == 0 { i as u16 } else { index_data[i] })?;
         }
         let offset = vertex_count * core::mem::size_of::<GpuVertex>();
-        let storage = Buffer::new(offset + index_data.len() * 2, false).ok_or(0x0505u32)?;
+        let total = offset + index_data.len() * 2;
+        // Client arrays change any time: their vertices live in frame memory (flushed with the
+        // commands). Buffer objects are converted once and kept.
+        let storage = if persistent {
+            Some(Buffer::new(total, false).ok_or(0x0505u32)?)
+        } else {
+            None
+        };
+        let (pointer, physical) = match &storage {
+            Some(s) => (s.pointer, s.physical()),
+            None => arena.alloc(total)?,
+        };
         for i in 0..vertex_count {
             let mut extra = extra_current;
             for unit in 0..2 {
@@ -728,13 +833,12 @@ impl Arrays {
                     extra[unit] = self.value(a, if kind == 0 { first + i } else { i }, false)?;
                 }
             }
-            storage.pointer.cast::<GpuVertex>().add(i).write(GpuVertex {
-                position: self.value(key.vertex, if kind == 0 { first + i } else { i }, false)?,
+            pointer.cast::<GpuVertex>().add(i).write(GpuVertex {
+                position: self.position(key.vertex, if kind == 0 { first + i } else { i })?,
                 color: if let Some(a) = key.color {
-                    self.value(a, if kind == 0 { first + i } else { i }, true)?
-                        .map(crate::immediate::gpu_color_component)
+                    self.color_bytes(a, if kind == 0 { first + i } else { i })?
                 } else {
-                    current_color.map(crate::immediate::gpu_color_component)
+                    current_color.map(crate::immediate::gpu_color_byte)
                 },
                 extra_texcoords: extra,
                 texcoord: if let Some(a) = key.texcoord {
@@ -747,30 +851,23 @@ impl Arrays {
 
         ptr::copy_nonoverlapping(
             index_data.as_ptr().cast::<u8>(),
-            storage.pointer.add(offset),
+            pointer.add(offset),
             index_data.len() * 2,
         );
 
-        if p::c3dglPlatformFlush(storage.pointer, (offset + index_data.len() * 2) as u32) < 0 {
-            return Err(0x0502);
-        }
-
-        let physical = storage.physical();
         let index_offset = (kind != 0 || mode != 4).then_some(offset as u32 | 0x80000000);
-        let mesh = Mesh {
-            key,
-            storage,
-            index_offset,
-        };
-
-        if persistent {
+        if let Some(storage) = storage {
+            if p::c3dglPlatformFlush(storage.pointer, total as u32) < 0 {
+                return Err(0x0502);
+            }
             if self.cache.len() >= 64 {
                 self.retired.push(self.cache.remove(0));
             }
-
-            self.cache.push(mesh);
-        } else {
-            self.retired.push(mesh);
+            self.cache.push(Mesh {
+                key,
+                storage,
+                index_offset,
+            });
         }
 
         Ok((physical, index_offset, plan.output as u32))

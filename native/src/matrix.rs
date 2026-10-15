@@ -29,6 +29,12 @@ pub struct Matrices {
     pub dirty: bool,
     pub texture_dirty: bool,
     error: u32,
+    /// Changes whenever the current modelview matrix may have changed (caches keyed by it).
+    pub modelview_serial: u32,
+    /// The same for the projection matrix.
+    projection_serial: u32,
+    /// projection x modelview for the serials it was computed with.
+    combined_cache: core::cell::Cell<Option<(u32, u32, [f32; 16])>>,
 }
 
 impl Matrices {
@@ -41,6 +47,9 @@ impl Matrices {
             dirty: true,
             texture_dirty: true,
             error: 0,
+            modelview_serial: 0,
+            projection_serial: 0,
+            combined_cache: core::cell::Cell::new(None),
         }
     }
 
@@ -56,6 +65,9 @@ impl Matrices {
         core::ptr::addr_of_mut!((*dst).dirty).write(true);
         core::ptr::addr_of_mut!((*dst).texture_dirty).write(true);
         core::ptr::addr_of_mut!((*dst).error).write(0);
+        core::ptr::addr_of_mut!((*dst).modelview_serial).write(0);
+        core::ptr::addr_of_mut!((*dst).projection_serial).write(0);
+        core::ptr::addr_of_mut!((*dst).combined_cache).write(core::cell::Cell::new(None));
     }
 
     pub(crate) fn fail(&mut self, error: u32) {
@@ -73,6 +85,12 @@ impl Matrices {
     }
 
     fn changed(&mut self) {
+        if self.mode == 0 {
+            self.modelview_serial = self.modelview_serial.wrapping_add(1);
+        }
+        if self.mode == 1 {
+            self.projection_serial = self.projection_serial.wrapping_add(1);
+        }
         if self.mode >= 2 {
             self.texture_dirty = true;
         } else {
@@ -143,10 +161,18 @@ impl Matrices {
     }
 
     pub fn combined(&self) -> [f32; 16] {
-        multiply(
+        let key = (self.modelview_serial, self.projection_serial);
+        if let Some((m, p, c)) = self.combined_cache.get() {
+            if (m, p) == key {
+                return c;
+            }
+        }
+        let c = multiply(
             &self.stacks[1][self.depths[1]],
             &self.stacks[0][self.depths[0]],
-        )
+        );
+        self.combined_cache.set(Some((key.0, key.1, c)));
+        c
     }
 }
 

@@ -1,7 +1,7 @@
 //! GL blend factors/equations mapped to PICA RGB and alpha fields.
 use crate::renderer::with_frame;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Blend {
     pub enabled: bool,
     pub factors: [u32; 4], // src RGB, dst RGB, src alpha, dst alpha

@@ -481,3 +481,44 @@ state (size, type, stride, buffer binding, enable flags, `glGetPointerv`) is que
 `drawFrame()` (extracted unchanged): all of its own checks pass on the native renderer and its
 frame matches the C framebuffer exactly, as do all earlier scenes (`native-results/points-step/`).
 Host tests: 54 pass.
+
+
+## CPU performance checkpoint
+
+The C renderer and Citro3D are no longer the target; the native renderer is. Every original example
+scene now has a performance ROM (`native/compare`, `perf_<case>_{reference,native}`: the unchanged
+scene statements for 30 warmup and 120 measured frames, setup outside the loop) and
+`native/scripts/perf_old_examples.py` compares the CPU time per frame (GPU/VBlank waiting excluded)
+in Azahar. `native/bench` builds the same scenes for the host with a mock platform for profiling with
+a sampling profiler (host time tracks Azahar time at roughly 250-350x; platform calls such as cache
+flushes and linear allocations, which are system calls on the 3DS, are counted separately).
+
+The first measurement (`native-results/perf-old-examples/`) had the native renderer 4-535% slower than
+the C renderer in every scene. The main causes and their fixes, all with bit-identical images (every
+scene still matches the C framebuffer exactly at resolution factor 1):
+
+* Geometry memory: a linear allocation, a cache flush (a GSP system call) and a free per draw. Now a
+  per-frame arena (128 KiB chunks reused every frame, one flush per command list submission) for
+  transient vertices, client array meshes, pixel rectangle and polygon stipple textures.
+* Immediate mode reserved 4096 vertices (320 KiB) per `glBegin` and gave the buffer away at `glEnd`;
+  the buffers are now reused and written without per-vertex capacity checks.
+* Display list recording built and dropped a command per GL call; a global flag now skips it.
+* Vertex size: colors are now unsigned bytes (68 instead of 80 bytes per vertex; the GPU attribute is
+  ubyte, scaled by the shader as before).
+* Indexed lit/texgen draws processed every index; each referenced element is now fetched, lit and
+  generated once. Immediate-mode lit vertices go through a lit-vertex cache (keyed by position,
+  normal, color, lighting state serial and modelview serial). Under flat shading only provoking
+  vertices are lit, and separate triangles/quads carry the provoking color so the GPU draws them
+  without CPU polygon assembly.
+* Texture generation computed its transforms per vertex; now once per draw.
+* Clipping, polygon assembly and feedback allocated vectors per polygon and copied every vertex per
+  plane; buffers are reused, wholly inside polygons skip the pass, filled polygons are indexed fans.
+* `glCopyPixels(GL_COLOR)` without a color transfer is a GX texture copy queued between split
+  command lists (as in the C renderer) instead of a CPU readback.
+* Pixel transfer and color index images through 256-entry tables; images converted row by row
+  straight into the tiled texture; tiled offsets split into row and column parts.
+* The accumulation buffer uses the ARMv6 SIMD/DSP instructions (`qadd16`, `smlawb`, `usat`, ...,
+  `native/src/dsp.rs`) like the C renderer; reads reuse one linear buffer.
+* No per-fragment division in line stipple (the ARM11 divides in software); fog tables are not
+  rebuilt when fog is re-enabled with the same parameters; `glPushAttrib` no longer copies the
+  accumulation buffer or the pixel maps.

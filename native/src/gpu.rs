@@ -13,16 +13,26 @@ fn write(c: &mut Commands<'_>, reg: u16, mask: u8, values: &[u32], inc: bool) ->
     }
 }
 
+#[inline(always)]
 fn one(c: &mut Commands<'_>, reg: u16, value: u32) -> Result<(), ()> {
-    write(c, reg, 15, &[value], false)
+    if c.write_one(reg, 15, value) {
+        Ok(())
+    } else {
+        Err(())
+    }
 }
 
 fn seq(c: &mut Commands<'_>, reg: u16, values: &[u32]) -> Result<(), ()> {
     write(c, reg, 15, values, true)
 }
 
+#[inline(always)]
 fn masked(c: &mut Commands<'_>, reg: u16, mask: u8, value: u32) -> Result<(), ()> {
-    write(c, reg, mask, &[value], false)
+    if c.write_one(reg, mask, value) {
+        Ok(())
+    } else {
+        Err(())
+    }
 }
 
 pub fn pica_float(value: f32, mantissa_bits: u32) -> u32 {
@@ -135,8 +145,8 @@ pub fn initialize(c: &mut Commands<'_>, color: u32, depth: u32, vertices: u32) -
     one(c, r::GSH_MISC0, 0)?;
     one(c, r::GSH_MISC1, 0)?;
     one(c, r::GSH_INPUTBUFFER_CONFIG, 0xa0000000)?;
-    // v0/v1/v2: float4 position/color/UV0/UV1/UV2.
-    seq(c, r::ATTRIBBUFFERS_FORMAT_LOW, &[0xfffff, 0x4fe00000])?;
+    // v0..v4: float4 position, ubyte4 color (0..255, scaled in the shader), float4 UV0/UV1/UV2.
+    seq(c, r::ATTRIBBUFFERS_FORMAT_LOW, &[0xfffdf, 0x4fe00000])?;
     masked(c, r::VSH_INPUTBUFFER_CONFIG, 11, 0xa0000004)?;
     one(c, r::VSH_NUM_ATTR, 4)?;
     seq(c, r::VSH_ATTRIBUTES_PERMUTATION_LOW, &[0x43210, 0])?;
@@ -524,6 +534,12 @@ pub(crate) fn fog(c: &mut Commands<'_>, state: Option<(u32, &[u32; 128])>) -> Re
             one(c, r::FOG_COLOR, 0)
         }
     }
+}
+
+/// Fog on with the table already loaded (see `fog`).
+pub(crate) fn fog_enable(c: &mut Commands<'_>, color: u32) -> Result<(), ()> {
+    masked(c, r::TEXENV_UPDATE_BUFFER, 7, 5 | (1 << 16))?;
+    one(c, r::FOG_COLOR, color)
 }
 
 pub const RASTER_WORDS: usize = 28;

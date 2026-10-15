@@ -7,7 +7,7 @@ use crate::{
     renderer::{
         draw_pixel_quad, read_color, with_renderer, PixelFormat, PixelMode, PixelQuad, Renderer,
     },
-    texture::{offset_bpp, PixelStore},
+    texture::PixelStore,
 };
 use alloc::vec::Vec;
 
@@ -298,7 +298,8 @@ pub(crate) fn color_layout(format: u32, ty: u32) -> Result<(usize, usize, usize)
 fn row_bytes(store: &PixelStore, width: usize, elem: usize, group: usize) -> usize {
     let bytes = store.row_length_or(width) * group;
     if elem < store.alignment {
-        (bytes + store.alignment - 1) / store.alignment * store.alignment
+        // The alignment is 1, 2, 4 or 8.
+        (bytes + store.alignment - 1) & !(store.alignment - 1)
     } else {
         bytes
     }
@@ -352,10 +353,22 @@ unsafe fn load_index(src: *const u8, ty: u32, swap: bool) -> i64 {
 }
 
 fn bitmap_bit(data: *const u8, store: &PixelStore, width: usize, x: usize, y: usize) -> bool {
+    let row = unsafe { data.add((store.skip_rows + y) * bitmap_row_bytes(store, width)) };
+    bitmap_row_bit(row, store, x)
+}
+
+/// Bytes per row of a `width` pixels wide bitmap.
+fn bitmap_row_bytes(store: &PixelStore, width: usize) -> usize {
     let bytes = (store.row_length_or(width) + 7) / 8;
-    let bytes = (bytes + store.alignment - 1) / store.alignment * store.alignment;
+    // The alignment is 1, 2, 4 or 8: rounded up with a mask (no division).
+    (bytes + store.alignment - 1) & !(store.alignment - 1)
+}
+
+/// Bit x of a bitmap row (the skipped pixels applied).
+#[inline(always)]
+fn bitmap_row_bit(row: *const u8, store: &PixelStore, x: usize) -> bool {
     let bit = store.skip_pixels + x;
-    let b = unsafe { data.add((store.skip_rows + y) * bytes + bit / 8).read() };
+    let b = unsafe { row.add(bit / 8).read() };
     (if store.lsb_first {
         b >> (bit & 7)
     } else {
@@ -398,6 +411,20 @@ impl Pixels {
         core::array::from_fn(|i| self.map_entry(I_TO_R + i, index))
     }
 
+    /// The color transfer of every byte value per component as GPU color bytes: identical to
+    /// `transfer_color` of byte / 255 (the components are independent).
+    fn byte_tables(&self) -> [[u8; 256]; 4] {
+        let mut t = [[0u8; 256]; 4];
+        for b in 0..256 {
+            let mut c = [b as f32 / 255.; 4];
+            self.transfer_color(&mut c);
+            for k in 0..4 {
+                t[k][b] = gpu_color_component(c[k]) as u8;
+            }
+        }
+        t
+    }
+
     /// RGBA scaled and biased, clamped to [0, 1], then looked up in R_TO_R .. A_TO_A with GL_MAP_COLOR.
     fn transfer_color(&self, c: &mut [f32; 4]) {
         let t = &self.transfer;
@@ -429,78 +456,187 @@ impl Pixels {
         format: u32,
         ty: u32,
     ) -> Result<Vec<u8>, u32> {
-        let (n, elem, group) = color_layout(format, ty)?;
-        let comp = components(format).unwrap_or(&[0]);
-        let row = row_bytes(store, w, elem, group);
-        let base = pixels.add(store.skip_rows * row + store.skip_pixels * group);
-        let packed = packed_format(ty) != 0;
-        let swap = store.swap_bytes && elem > 1;
-        let index = format == COLOR_INDEX;
-        let transfer = self.transfer.color_active();
+        let rows = self.color_rows(store, pixels, w, h, format, ty)?;
         let mut out = Vec::new();
         out.try_reserve_exact(w * h * 4).map_err(|_| 0x0505u32)?;
         out.resize(w * h * 4, 0);
         for y in 0..h {
-            for x in 0..w {
-                let src = base.add(y * row + x * group);
-                let dst = &mut out[(y * w + x) * 4..][..4];
-                if index || transfer {
-                    let mut c = [0., 0., 0., 1.];
-                    if index {
-                        let i = if ty == BITMAP {
-                            bitmap_bit(pixels, store, w, x, y) as i64
+            rows.row(y, 0, &mut out[y * w * 4..][..w * 4]);
+        }
+        Ok(out)
+    }
+
+    /// A converter of the rows of a color image to RGBA8 (see `unpack_color`), its tables built
+    /// once for the image.
+    pub(crate) unsafe fn color_rows(
+        &self,
+        store: &PixelStore,
+        pixels: *const u8,
+        w: usize,
+        h: usize,
+        format: u32,
+        ty: u32,
+    ) -> Result<ColorRows, u32> {
+        let (n, elem, group) = color_layout(format, ty)?;
+        let row = row_bytes(store, w, elem, group);
+        let index = format == COLOR_INDEX;
+        let packed = packed_format(ty) != 0;
+        let transfer = self.transfer.color_active();
+        let mut tables = Tables::None;
+        // Color index bytes through a table of their colors (shift, offset and maps per value).
+        if index && ty == 0x1401 && w * h >= 64 {
+            let mut table = [[0u8; 4]; 256];
+            for (i, t) in table.iter_mut().enumerate() {
+                let c = self.index_color(i as i64);
+                *t = c.map(|v| gpu_color_component(v) as u8);
+            }
+            tables = Tables::Index(table);
+        // Unsigned bytes through per-component tables (missing components are the bytes 0 and 255).
+        } else if transfer && !index && !packed && ty == 0x1401 && w * h >= 64 {
+            tables = Tables::Bytes(self.byte_tables());
+        }
+        Ok(ColorRows {
+            p: self,
+            store: *store,
+            pixels,
+            w,
+            format,
+            ty,
+            n,
+            elem,
+            group,
+            comp: components(format).unwrap_or(&[0]),
+            row,
+            base: pixels.add(store.skip_rows * row + store.skip_pixels * group),
+            packed,
+            swap: store.swap_bytes && elem > 1,
+            index,
+            transfer,
+            tables,
+        })
+    }
+}
+
+enum Tables {
+    None,
+    Index([[u8; 4]; 256]),
+    Bytes([[u8; 256]; 4]),
+}
+
+/// See `Pixels::color_rows`. Refers to the pixel state, which must not change while it is used.
+pub(crate) struct ColorRows {
+    p: *const Pixels,
+    store: PixelStore,
+    pixels: *const u8,
+    w: usize,
+    format: u32,
+    ty: u32,
+    n: usize,
+    elem: usize,
+    group: usize,
+    comp: &'static [usize],
+    row: usize,
+    base: *const u8,
+    packed: bool,
+    swap: bool,
+    index: bool,
+    transfer: bool,
+    tables: Tables,
+}
+
+impl ColorRows {
+    /// Pixels x0.. of row y as RGBA8 into `out` (4 bytes per pixel).
+    pub(crate) unsafe fn row(&self, y: usize, x0: usize, out: &mut [u8]) {
+        let _ = self.format;
+        let (ty, n, elem, group, comp) = (self.ty, self.n, self.elem, self.group, self.comp);
+        let line = self.base.add(y * self.row);
+        match &self.tables {
+            Tables::Index(table) => {
+                for (k, d) in out.chunks_exact_mut(4).enumerate() {
+                    d.copy_from_slice(&table[line.add((x0 + k) * group).read() as usize]);
+                }
+                return;
+            }
+            Tables::Bytes(tables) => {
+                for (k, d) in out.chunks_exact_mut(4).enumerate() {
+                    let s = line.add((x0 + k) * group);
+                    let mut c = [0u8, 0, 0, 255];
+                    for (i, kk) in comp.iter().enumerate().take(n) {
+                        let v = s.add(i).read();
+                        if *kk == 4 {
+                            c[0] = v;
+                            c[1] = v;
+                            c[2] = v;
                         } else {
-                            load_index(src, ty, swap)
-                        };
-                        c = self.index_color(i);
+                            c[*kk] = v;
+                        }
+                    }
+                    for j in 0..4 {
+                        d[j] = tables[j][c[j] as usize];
+                    }
+                }
+                return;
+            }
+            Tables::None => {}
+        }
+        for (k, dst) in out.chunks_exact_mut(4).enumerate() {
+            let x = x0 + k;
+            let src = line.add(x * group);
+            if self.index || self.transfer {
+                let mut c = [0., 0., 0., 1.];
+                if self.index {
+                    let i = if ty == BITMAP {
+                        bitmap_bit(self.pixels, &self.store, self.w, x, y) as i64
                     } else {
-                        if packed {
-                            let v = unpack16(ty, u16::from_le_bytes(element(src, swap)));
-                            c = v.map(|v| v as f32 / 255.);
-                        } else {
-                            for (i, k) in comp.iter().enumerate() {
-                                let v = load_raw(src.add(i * elem), ty, swap);
-                                if *k == 4 {
-                                    c[0] = v;
-                                    c[1] = v;
-                                    c[2] = v;
-                                } else {
-                                    c[*k] = v;
-                                }
+                        load_index(src, ty, self.swap)
+                    };
+                    c = (*self.p).index_color(i);
+                } else {
+                    if self.packed {
+                        let v = unpack16(ty, u16::from_le_bytes(element(src, self.swap)));
+                        c = v.map(|v| v as f32 / 255.);
+                    } else {
+                        for (i, kk) in comp.iter().enumerate() {
+                            let v = load_raw(src.add(i * elem), ty, self.swap);
+                            if *kk == 4 {
+                                c[0] = v;
+                                c[1] = v;
+                                c[2] = v;
+                            } else {
+                                c[*kk] = v;
                             }
                         }
-                        self.transfer_color(&mut c);
                     }
-                    for k in 0..4 {
-                        dst[k] = gpu_color_component(c[k]) as u8;
-                    }
-                    continue;
+                    (*self.p).transfer_color(&mut c);
                 }
-                if packed {
-                    let v = unpack16(ty, u16::from_le_bytes(element(src, swap)));
-                    for k in 0..4 {
-                        dst[k] = v[k] as u8;
-                    }
-                    continue;
+                for j in 0..4 {
+                    dst[j] = gpu_color_component(c[j]) as u8;
                 }
-                dst[3] = 255;
-                for (i, k) in comp.iter().enumerate().take(n) {
-                    let c = if ty == 0x1401 {
-                        src.add(i).read()
-                    } else {
-                        (load_clamped(src.add(i * elem), ty, swap) * 255. + 0.5) as u8
-                    };
-                    if *k == 4 {
-                        dst[0] = c;
-                        dst[1] = c;
-                        dst[2] = c;
-                    } else {
-                        dst[*k] = c;
-                    }
+                continue;
+            }
+            if self.packed {
+                let v = unpack16(ty, u16::from_le_bytes(element(src, self.swap)));
+                for j in 0..4 {
+                    dst[j] = v[j] as u8;
+                }
+                continue;
+            }
+            dst.copy_from_slice(&[0, 0, 0, 255]);
+            for (i, kk) in comp.iter().enumerate().take(n) {
+                let c = if ty == 0x1401 {
+                    src.add(i).read()
+                } else {
+                    (load_clamped(src.add(i * elem), ty, self.swap) * 255. + 0.5) as u8
+                };
+                if *kk == 4 {
+                    dst[0] = c;
+                    dst[1] = c;
+                    dst[2] = c;
+                } else {
+                    dst[*kk] = c;
                 }
             }
         }
-        Ok(out)
     }
 }
 
@@ -582,6 +718,7 @@ unsafe fn draw_rect(
                     format,
                     size: (texw, texh),
                     fill: &mut |p| fill(p, (texw, texh), (tx, ty), (tw, th)),
+                    prefilled: None,
                     wx: [x0, x1, x1, x0],
                     wy: [y0, y0, y1, y1],
                     s: [0., s1, s1, 0.],
@@ -614,14 +751,14 @@ unsafe fn draw_rgba(r: &mut Renderer, rgba: &[u8], w: usize, h: usize) -> Result
         th,
     )| {
         for yy in 0..th {
-            for xx in 0..tw {
-                let p = &rgba[((ty + yy) * w + tx + xx) * 4..][..4];
-                // PICA RGBA8 is ABGR.
-                let d = tex.add(offset_bpp(texw, texh, xx, yy, 4));
-                d.write(p[3]);
-                d.add(1).write(p[2]);
-                d.add(2).write(p[1]);
-                d.add(3).write(p[0]);
+            let row = &rgba[((ty + yy) * w + tx) * 4..][..tw * 4];
+            let line = tex.add(crate::texture::tiled_y(texw, texh, yy, 4));
+            for (xx, p) in row.chunks_exact(4).enumerate() {
+                // PICA RGBA8 is ABGR: the bytes reversed.
+                let v = u32::from_le_bytes([p[0], p[1], p[2], p[3]]).swap_bytes();
+                line.add(crate::texture::tiled_x(xx, 4))
+                    .cast::<u32>()
+                    .write_unaligned(v);
             }
         }
     })
@@ -964,8 +1101,7 @@ pub unsafe extern "C" fn glBitmap(
             && !bitmap.is_null()
             && (!s.alpha || compare(s.alpha_func, alpha as u32, s.alpha_ref as u32))
         {
-            let mut store = PixelStore::default();
-            store = r.frame.textures.unpack();
+            let store = r.frame.textures.unpack();
             let (w, h) = (width as usize, height as usize);
             let pos = r.frame.pixels.raster.pos;
             let (x, y) = (floorf(pos[0] - xorig), floorf(pos[1] - yorig));
@@ -981,14 +1117,15 @@ pub unsafe extern "C" fn glBitmap(
                 (x, y),
                 (1., 1.),
                 &mut |tex, (texw, texh), (tx, ty), (tw, th)| {
+                    // The texture is zero: only set bits are written.
+                    let bytes = bitmap_row_bytes(&store, w);
                     for yy in 0..th {
+                        let line = tex.add(crate::texture::tiled_y(texw, texh, yy, 1));
+                        let row = bitmap.add((store.skip_rows + ty + yy) * bytes);
                         for xx in 0..tw {
-                            let set = bitmap_bit(bitmap, &store, w, tx + xx, ty + yy);
-                            tex.add(offset_bpp(texw, texh, xx, yy, 1)).write(if set {
-                                255
-                            } else {
-                                0
-                            });
+                            if bitmap_row_bit(row, &store, tx + xx) {
+                                line.add(crate::texture::tiled_x(xx, 1)).write(255);
+                            }
                         }
                     }
                 },
@@ -1080,21 +1217,51 @@ pub unsafe extern "C" fn glDrawPixels(
             return;
         }
         let store = r.frame.textures.unpack();
-        let rgba = match r
-            .frame
-            .pixels
-            .unpack_color(&store, pixels, w, h, format, ty)
-        {
+        // Converted row by row straight into the textures.
+        let rows = match r.frame.pixels.color_rows(&store, pixels, w, h, format, ty) {
             Ok(v) => v,
             Err(e) => {
                 r.matrices.fail(e);
                 return;
             }
         };
-        if let Err(e) = draw_rgba(r, &rgba, w, h) {
+        if let Err(e) = draw_rows(r, &rows, w, h) {
             r.matrices.fail(e);
         }
     });
+}
+
+/// `draw_rgba` of an image converted row by row.
+unsafe fn draw_rows(r: &mut Renderer, rows: &ColorRows, w: usize, h: usize) -> Result<(), u32> {
+    let (x, y) = (r.frame.pixels.raster.pos[0], r.frame.pixels.raster.pos[1]);
+    let zoom = (r.frame.pixels.zoom[0], r.frame.pixels.zoom[1]);
+    let mut buf = [0u8; TILE * 4];
+    draw_rect(r, PixelMode::Image, (w, h), (x, y), zoom, &mut |tex,
+                                                               (
+        texw,
+        texh,
+    ),
+                                                               (
+        tx,
+        ty,
+    ),
+                                                               (
+        tw,
+        th,
+    )| {
+        for yy in 0..th {
+            let row = &mut buf[..tw * 4];
+            rows.row(ty + yy, tx, row);
+            let line = tex.add(crate::texture::tiled_y(texw, texh, yy, 4));
+            for (xx, p) in row.chunks_exact(4).enumerate() {
+                // PICA RGBA8 is ABGR: the bytes reversed.
+                let v = u32::from_le_bytes([p[0], p[1], p[2], p[3]]).swap_bytes();
+                line.add(crate::texture::tiled_x(xx, 4))
+                    .cast::<u32>()
+                    .write_unaligned(v);
+            }
+        }
+    })
 }
 
 /// A color image copied tightly packed (rows without padding), for display lists.
@@ -1140,20 +1307,20 @@ unsafe fn read_rgba(r: &mut Renderer, x: i32, y: i32, w: usize, h: usize) -> Res
     let line0 = x0 & !7;
     let fb = read_color(r, line0, ((x1 + 7) & !7) - line0)?;
     let transfer = r.frame.pixels.transfer.color_active();
+    let tables = transfer.then(|| r.frame.pixels.byte_tables());
     for wx in x0..x1 {
         for wy in y0..y1 {
             let p = fb.pointer.add((wx - line0) * HEIGHT * 4 + wy * 4);
             let (a, b, g, red) = (p.read(), p.add(1).read(), p.add(2).read(), p.add(3).read());
             let dst =
                 &mut out[((wy as i32 - y) as usize * w + (wx as i32 - x) as usize) * 4..][..4];
-            if transfer {
-                let mut c = [a, b, g, red].map(|v| v as f32 / 255.);
-                // Alpha, blue, green, red order -> red, green, blue, alpha.
-                c.reverse();
-                r.frame.pixels.transfer_color(&mut c);
-                for k in 0..4 {
-                    dst[k] = gpu_color_component(c[k]) as u8;
-                }
+            if let Some(t) = &tables {
+                dst.copy_from_slice(&[
+                    t[0][red as usize],
+                    t[1][g as usize],
+                    t[2][b as usize],
+                    t[3][a as usize],
+                ]);
             } else {
                 dst.copy_from_slice(&[red, g, b, a]);
             }
@@ -1232,6 +1399,13 @@ pub unsafe extern "C" fn glCopyPixels(x: i32, y: i32, width: i32, height: i32, t
             let result = copy_depth_stencil(r, x, y, w, h, stencil)
                 .and_then(|values| draw_depth_stencil(r, &values, w, h, stencil));
             if let Err(e) = result {
+                r.matrices.fail(e);
+            }
+            return;
+        }
+        // Without a color transfer the copy stays on the GPU.
+        if !r.frame.pixels.transfer.color_active() {
+            if let Err(e) = crate::renderer::copy_color(r, x, y, width, height) {
                 r.matrices.fail(e);
             }
             return;

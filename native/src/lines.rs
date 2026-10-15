@@ -19,6 +19,8 @@ pub(crate) struct Style {
     pub stipple: Option<(u32, u16)>,
     /// Fragments of the current strip so far (the stipple position carried between segments).
     pub counter: core::cell::Cell<u32>,
+    /// The last position transformed to clip space and the result (strips share endpoints).
+    pub last_clip: core::cell::Cell<Option<([f32; 4], [f32; 4])>>,
     /// Point parameters: size limits, distance attenuation (with the modelview matrix for the eye
     /// distance), the texture units whose coordinates a point sprite replaces, and the per-vertex
     /// sizes of a point size array (empty without one).
@@ -91,8 +93,8 @@ fn transform(m: &[f32; 16], p: [f32; 4]) -> [f32; 4] {
 pub(crate) fn lerp(a: &GpuVertex, b: &GpuVertex, t: f32) -> GpuVertex {
     let mix = |x: f32, y: f32| x + (y - x) * t;
     // Colors are bytes: truncated like the C renderer.
-    let mix_color = |x: [f32; 4], y: [f32; 4]| -> [f32; 4] {
-        core::array::from_fn(|i| mix(x[i], y[i]) as u8 as f32)
+    let mix_color = |x: [u8; 4], y: [u8; 4]| -> [u8; 4] {
+        core::array::from_fn(|i| mix(x[i] as f32, y[i] as f32) as u8)
     };
     let mix4 = |x: [f32; 4], y: [f32; 4]| core::array::from_fn(|i| mix(x[i], y[i]));
     GpuVertex {
@@ -110,14 +112,31 @@ fn at(v: &GpuVertex, x: f32, y: f32, z: f32) -> GpuVertex {
     }
 }
 
+#[inline(always)]
 fn quad(out: &mut Vec<GpuVertex>, indices: &mut Vec<u16>, q: [GpuVertex; 4]) -> Result<(), u32> {
+    quad_with(out, indices, |i| q[i])
+}
+
+/// A quad of the vertices `corner(0..4)`, built straight in the output (no copies of them).
+#[inline(always)]
+fn quad_with(
+    out: &mut Vec<GpuVertex>,
+    indices: &mut Vec<u16>,
+    mut corner: impl FnMut(usize) -> GpuVertex,
+) -> Result<(), u32> {
     if out.len() + 4 > 4096 {
         return Err(0x0505);
     }
     let base = out.len() as u16;
     out.try_reserve(4).map_err(|_| 0x0505u32)?;
     indices.try_reserve(6).map_err(|_| 0x0505u32)?;
-    out.extend(q);
+    unsafe {
+        let dst = out.as_mut_ptr().add(out.len());
+        for i in 0..4 {
+            dst.add(i).write(corner(i));
+        }
+        out.set_len(out.len() + 4);
+    }
     indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     Ok(())
 }
@@ -165,10 +184,8 @@ pub(crate) fn point(
     let (rx, ry) = (2. * r / s.viewport[2] as f32, 2. * r / s.viewport[3] as f32);
     // Bottom left, top left, top right, bottom right (NDC y points up).
     let corner = [(-1., -1.), (-1., 1.), (1., 1.), (1., -1.)];
-    quad(
-        out,
-        indices,
-        core::array::from_fn(|i| {
+    quad_with(out, indices, |i| {
+        {
             let mut q = at(v, p[0] + corner[i].0 * rx, p[1] + corner[i].1 * ry, p[2]);
             // Point sprites: the coordinates of the sprite units run from (0, 0) at the top left
             // to (1, 1) at the bottom right.
@@ -182,8 +199,28 @@ pub(crate) fn point(
                 }
             }
             q
-        }),
-    )
+        }
+    })
+}
+
+impl Style {
+    /// `pmv` times a position, reusing the last result (identical for an equal position).
+    fn clip_coords(&self, p: &[f32; 4]) -> [f32; 4] {
+        // Bitwise: -0 and 0 may transform differently.
+        if let Some((last, clip)) = self.last_clip.get() {
+            if last.map(f32::to_bits) == p.map(f32::to_bits) {
+                return clip;
+            }
+        }
+        let clip = transform(&self.pmv, *p);
+        self.last_clip.set(Some((*p, clip)));
+        clip
+    }
+}
+
+/// An empty `Style::last_clip`.
+pub(crate) fn no_clip_cache() -> core::cell::Cell<Option<([f32; 4], [f32; 4])>> {
+    core::cell::Cell::new(None)
 }
 
 pub(crate) fn segment(
@@ -194,28 +231,39 @@ pub(crate) fn segment(
     out: &mut Vec<GpuVertex>,
     indices: &mut Vec<u16>,
 ) -> Result<(), u32> {
-    let Some((a, b)) = s.clip.segment(a, b) else {
-        return Ok(());
+    // Copies only when user clip planes or the w clip change an endpoint.
+    let clipped;
+    let (a, b) = if s.clip.any() {
+        let Some(c) = s.clip.segment(a, b) else {
+            return Ok(());
+        };
+        clipped = c;
+        (&clipped.0, &clipped.1)
+    } else {
+        (a, b)
     };
-    let (a, b) = (&a, &b);
-    let (mut ca, mut cb) = (transform(&s.pmv, a.position), transform(&s.pmv, b.position));
+    let (mut ca, mut cb) = (s.clip_coords(&a.position), s.clip_coords(&b.position));
     if ca[3] < CLIP_W_MIN && cb[3] < CLIP_W_MIN {
         return Ok(());
     }
-    let (mut va, mut vb) = (*a, *b);
-    if ca[3] < CLIP_W_MIN {
+    let w_clipped;
+    let (va, vb) = if ca[3] < CLIP_W_MIN {
         let t = (CLIP_W_MIN - ca[3]) / (cb[3] - ca[3]);
         for i in 0..4 {
             ca[i] += (cb[i] - ca[i]) * t;
         }
-        va = lerp(a, b, t);
+        w_clipped = lerp(a, b, t);
+        (&w_clipped, b)
     } else if cb[3] < CLIP_W_MIN {
         let t = (CLIP_W_MIN - cb[3]) / (ca[3] - cb[3]);
         for i in 0..4 {
             cb[i] += (ca[i] - cb[i]) * t;
         }
-        vb = lerp(b, a, t);
-    }
+        w_clipped = lerp(b, a, t);
+        (a, &w_clipped)
+    } else {
+        (a, b)
+    };
     let pa = [ca[0] / ca[3], ca[1] / ca[3], ca[2] / ca[3] + z_bias];
     let pb = [cb[0] / cb[3], cb[1] / cb[3], cb[2] / cb[3] + z_bias];
 
@@ -239,7 +287,7 @@ pub(crate) fn segment(
         return stippled(
             s,
             (factor, pattern),
-            (&va, &vb),
+            (va, vb),
             (pa, pb),
             (-dy * r / half_w, dx * r / half_h),
             cap,
@@ -253,10 +301,10 @@ pub(crate) fn segment(
         out,
         indices,
         [
-            at(&va, pa[0] - ex - nx, pa[1] - ey - ny, pa[2]),
-            at(&va, pa[0] - ex + nx, pa[1] - ey + ny, pa[2]),
-            at(&vb, pb[0] + ex + nx, pb[1] + ey + ny, pb[2]),
-            at(&vb, pb[0] + ex - nx, pb[1] + ey - ny, pb[2]),
+            at(va, pa[0] - ex - nx, pa[1] - ey - ny, pa[2]),
+            at(va, pa[0] - ex + nx, pa[1] - ey + ny, pa[2]),
+            at(vb, pb[0] + ex + nx, pb[1] + ey + ny, pb[2]),
+            at(vb, pb[0] + ex - nx, pb[1] + ey - ny, pb[2]),
         ],
     )
 }
@@ -320,16 +368,11 @@ fn stippled(
     }
     at_start = (at_start + advance(first, k0)) % period;
 
-    let on = |k: u32| (pattern >> (((at_start + k) % period) / factor)) & 1 != 0;
     let n = (k1 - k0) as u32;
-    let mut k = 0;
-    while k < n {
-        let lit = on(k);
-        let mut run = k + 1;
-        while run < n && on(run) == lit {
-            run += 1;
-        }
-        if lit {
+    let mut runs = alloc::vec::Vec::new();
+    stipple_runs(pattern, factor, at_start, n, |k, run| runs.push((k, run)));
+    for (k, run) in runs {
+        {
             let u0 = (k0 + k as f32).max(ua - cap_u);
             let u1 = (k0 + run as f32).min(ub + cap_u);
             let (t0, t1) = ((u0 - ua) / (ub - ua), (u1 - ua) / (ub - ua));
@@ -350,9 +393,37 @@ fn stippled(
                 ],
             )?;
         }
-        k = run;
     }
     Ok(())
+}
+
+/// The runs [k, run) of drawn fragments among `n`: fragment k is drawn when pattern bit
+/// ((at_start + k) % (16 factor)) / factor is set. Walked bit by bit: no division per fragment
+/// (the ARM11 divides in software).
+fn stipple_runs(pattern: u16, factor: u32, at_start: u32, n: u32, mut f: impl FnMut(u32, u32)) {
+    let mut bit = at_start / factor % 16;
+    let mut sub = at_start % factor;
+    let mut k = 0;
+    while k < n {
+        let lit = (pattern >> bit) & 1 != 0;
+        let mut run = k;
+        loop {
+            run += factor - sub;
+            sub = 0;
+            bit = (bit + 1) & 15;
+            if run >= n {
+                run = n;
+                break;
+            }
+            if ((pattern >> bit) & 1 != 0) != lit {
+                break;
+            }
+        }
+        if lit {
+            f(k, run);
+        }
+        k = run;
+    }
 }
 
 /// The color of `pv` on `v` (flat shading).
@@ -372,35 +443,43 @@ pub(crate) fn expand(
     flat: bool,
 ) -> Result<(Vec<GpuVertex>, Vec<u16>), u32> {
     let (mut out, mut indices) = (Vec::new(), Vec::new());
+    expand_into(mode, v, s, flat, &mut out, &mut indices)?;
+    Ok((out, indices))
+}
+
+/// `expand` into reused buffers (cleared first).
+pub(crate) fn expand_into(
+    mode: u32,
+    v: &[GpuVertex],
+    s: &Style,
+    flat: bool,
+    out: &mut Vec<GpuVertex>,
+    indices: &mut Vec<u16>,
+) -> Result<(), u32> {
+    out.clear();
+    indices.clear();
+    // One quad per point or segment (stippled lines may need more).
+    let quads = v.len() + 1;
+    out.try_reserve((4 * quads).min(4096))
+        .map_err(|_| 0x0505u32)?;
+    indices
+        .try_reserve((6 * quads).min(6144))
+        .map_err(|_| 0x0505u32)?;
     // A primitive starts a strip.
     s.counter.set(0);
     let mut line = |a: &GpuVertex, b: &GpuVertex, pv: &GpuVertex| {
         if flat {
-            segment(
-                s,
-                &shaded(a, pv),
-                &shaded(b, pv),
-                0.,
-                &mut out,
-                &mut indices,
-            )
+            segment(s, &shaded(a, pv), &shaded(b, pv), 0., out, indices)
         } else {
-            segment(s, a, b, 0., &mut out, &mut indices)
+            segment(s, a, b, 0., out, indices)
         }
     };
     match mode {
         0 => {
             for (i, p) in v.iter().enumerate() {
-                point(
-                    s,
-                    p,
-                    0.,
-                    s.point.sizes.get(i).copied(),
-                    &mut out,
-                    &mut indices,
-                )?;
+                point(s, p, 0., s.point.sizes.get(i).copied(), out, indices)?;
             }
-            return Ok((out, indices));
+            return Ok(());
         }
         1 => {
             for pair in v.chunks_exact(2) {
@@ -420,7 +499,7 @@ pub(crate) fn expand(
         }
         _ => return Err(0x0500),
     }
-    Ok((out, indices))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -430,7 +509,7 @@ mod tests {
     fn vertex(x: f32, y: f32, z: f32, w: f32) -> GpuVertex {
         GpuVertex {
             position: [x, y, z, w],
-            color: [1., 2., 3., 4.],
+            color: [1, 2, 3, 4],
             texcoord: [0., 0., 0., 1.],
             extra_texcoords: [[0., 0., 0., 1.]; 2],
         }
@@ -445,6 +524,7 @@ mod tests {
             clip: Default::default(),
             stipple: None,
             counter: Default::default(),
+            last_clip: no_clip_cache(),
             point: PointStyle::plain(),
         }
     }
@@ -460,7 +540,39 @@ mod tests {
         assert!((out[0].position[1] - (0. - ny)).abs() < 1e-6);
         assert!((out[2].position[0] - (0.5 + ex)).abs() < 1e-6);
         assert!((out[2].position[1] - (0. + ny)).abs() < 1e-6);
-        assert_eq!(out[0].color, [1., 2., 3., 4.]);
+        assert_eq!(out[0].color, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn stipple_runs_match_the_fragment_formula() {
+        for pattern in [0xffffu16, 0x0f0f, 0xaaaa, 0x8001, 0x0000, 0x1234, 0xf00f] {
+            for factor in [1u32, 2, 3, 7, 256] {
+                for at_start in [0u32, 1, 5, 16 * factor - 1, 7 * factor + 2] {
+                    let at_start = at_start % (16 * factor);
+                    for n in [0u32, 1, 2, 17, 100, 333] {
+                        let mut want = alloc::vec::Vec::new();
+                        let on = |k: u32| {
+                            (pattern >> (((at_start + k) % (16 * factor)) / factor)) & 1 != 0
+                        };
+                        let mut k = 0;
+                        while k < n {
+                            let lit = on(k);
+                            let mut run = k + 1;
+                            while run < n && on(run) == lit {
+                                run += 1;
+                            }
+                            if lit {
+                                want.push((k, run));
+                            }
+                            k = run;
+                        }
+                        let mut got = alloc::vec::Vec::new();
+                        stipple_runs(pattern, factor, at_start, n, |a, b| got.push((a, b)));
+                        assert_eq!(got, want, "{pattern:#x} {factor} {at_start} {n}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -46,8 +46,10 @@ impl Settings {
 
 /// One draw: object-space triangles with a depth bias folded into the MVP, or expanded NDC quads.
 pub(crate) enum Item {
+    /// Each polygon's vertices once and its triangles as a fan of indices.
     Fill {
         vertices: Vec<GpuVertex>,
+        indices: Vec<u16>,
         bias: f32,
     },
     Clip {
@@ -61,6 +63,11 @@ const LIMIT: usize = 4000;
 struct Builder<'a> {
     s: &'a Settings,
     items: Vec<Item>,
+    /// The polygon being assembled (reused: no allocation per polygon).
+    vs: Vec<GpuVertex>,
+    bs: Vec<[f32; 4]>,
+    edges: Vec<bool>,
+    scratch: crate::clip::Scratch,
 }
 
 fn transform(m: &[f32; 16], p: [f32; 4]) -> [f32; 4] {
@@ -120,19 +127,23 @@ fn polygon_offset(s: &Settings, vs: &[GpuVertex]) -> f32 {
 }
 
 impl Builder<'_> {
-    fn fill(&mut self, bias: f32) -> &mut Vec<GpuVertex> {
+    /// The fill item for `n` more vertices with `bias`.
+    fn fill(&mut self, bias: f32, n: usize) -> (&mut Vec<GpuVertex>, &mut Vec<u16>) {
         let new = !matches!(
             self.items.last(),
-            Some(Item::Fill { vertices, bias: b }) if *b == bias && vertices.len() + 3 <= LIMIT
+            Some(Item::Fill { vertices, bias: b, .. }) if *b == bias && vertices.len() + n <= LIMIT
         );
         if new {
             self.items.push(Item::Fill {
                 vertices: Vec::new(),
+                indices: Vec::new(),
                 bias,
             });
         }
         match self.items.last_mut() {
-            Some(Item::Fill { vertices, .. }) => vertices,
+            Some(Item::Fill {
+                vertices, indices, ..
+            }) => (vertices, indices),
             _ => unreachable!(),
         }
     }
@@ -164,28 +175,51 @@ impl Builder<'_> {
         edges: &[bool],
         pv: Option<usize>,
     ) -> Result<(), u32> {
+        let two_sided = !src.backs.is_empty();
+        let mut vs = core::mem::take(&mut self.vs);
+        let mut bs = core::mem::take(&mut self.bs);
+        let mut flags = core::mem::take(&mut self.edges);
+        vs.clear();
+        bs.clear();
+        flags.clear();
+        vs.extend(idx.iter().map(|i| src.v[*i]));
+        if two_sided {
+            bs.extend(idx.iter().map(|i| src.backs[*i]));
+        }
+        flags.extend_from_slice(edges);
+        let result = self.polygon_with(src, &mut vs, &mut bs, &mut flags, pv);
+        (self.vs, self.bs, self.edges) = (vs, bs, flags);
+        result
+    }
+
+    fn polygon_with(
+        &mut self,
+        src: &Src,
+        vs: &mut Vec<GpuVertex>,
+        bs: &mut Vec<[f32; 4]>,
+        edges: &mut Vec<bool>,
+        pv: Option<usize>,
+    ) -> Result<(), u32> {
         let s = self.s;
         let two_sided = !src.backs.is_empty();
-        let mut vs: Vec<GpuVertex> = idx.iter().map(|i| src.v[*i]).collect();
-        let mut bs: Vec<[f32; 4]> = if two_sided {
-            idx.iter().map(|i| src.backs[*i]).collect()
-        } else {
-            Vec::new()
-        };
-        let mut edges = edges.to_vec();
         // The flat shading colors, before clipping creates new vertices.
         let flat = pv.map(|i| {
             (
                 src.v[i].color,
-                if two_sided { src.backs[i] } else { [0.; 4] },
+                if two_sided {
+                    src.backs[i].map(|c| c as u8)
+                } else {
+                    [0; 4]
+                },
             )
         });
         if s.style.clip.any() {
-            let (v, b, e) = s.style.clip.polygon(&vs, &bs, &edges);
-            if v.len() < 3 {
+            s.style
+                .clip
+                .polygon_in_place(vs, bs, edges, &mut self.scratch);
+            if vs.len() < 3 {
                 return Ok(());
             }
-            (vs, bs, edges) = (v, b, e);
         }
         let n = vs.len();
         let active = s.modes_active();
@@ -221,18 +255,21 @@ impl Builder<'_> {
                         front_color
                     }
                 }
-                None if back => bs[k],
+                None if back => bs[k].map(|c| c as u8),
                 None => vs[k].color,
             };
             GpuVertex { color, ..vs[k] }
         };
         match mode {
             FILL => {
-                let a = shade(0);
-                let out = self.fill(window);
-                out.try_reserve(3 * (n - 2)).map_err(|_| 0x0505u32)?;
+                // The polygon's vertices share its shading: drawn as a fan of indices.
+                let (out, indices) = self.fill(window, n);
+                out.try_reserve(n).map_err(|_| 0x0505u32)?;
+                indices.try_reserve(3 * (n - 2)).map_err(|_| 0x0505u32)?;
+                let base = out.len() as u16;
+                out.extend((0..n).map(shade));
                 for i in 1..n - 1 {
-                    out.extend([a, shade(i), shade(i + 1)]);
+                    indices.extend([base, base + i as u16, base + i as u16 + 1]);
                 }
             }
             _ => {
@@ -278,12 +315,13 @@ pub(crate) fn visit(
     f: &mut dyn FnMut(&[usize], &[bool], Option<usize>) -> Result<(), u32>,
 ) -> Result<(), u32> {
     let flat = |i: usize| flat.then_some(i);
-    let flags = |idx: &[usize]| idx.iter().map(|i| edges[*i]).collect::<Vec<bool>>();
+    let flags3 = |idx: &[usize; 3]| idx.map(|i| edges[i]);
+    let flags4 = |idx: &[usize; 4]| idx.map(|i| edges[i]);
     match mode {
         4 => {
             for k in (0..n / 3 * 3).step_by(3) {
                 let idx = [k, k + 1, k + 2];
-                f(&idx, &flags(&idx), flat(k + 2))?;
+                f(&idx, &flags3(&idx), flat(k + 2))?;
             }
         }
         5 => {
@@ -305,7 +343,7 @@ pub(crate) fn visit(
         7 => {
             for k in (0..n / 4 * 4).step_by(4) {
                 let idx = [k, k + 1, k + 2, k + 3];
-                f(&idx, &flags(&idx), flat(k + 3))?;
+                f(&idx, &flags4(&idx), flat(k + 3))?;
             }
         }
         8 => {
@@ -345,8 +383,27 @@ pub(crate) fn assemble(
     let mut b = Builder {
         s,
         items: Vec::new(),
+        vs: Vec::new(),
+        bs: Vec::new(),
+        edges: Vec::new(),
+        scratch: Default::default(),
     };
     let src = Src { v, backs, edges };
+    // Filled output: at most three vertices per input vertex (fans, strips, clipped polygons).
+    if !s.modes_active() && !s.offset[0] {
+        let (mut first, mut indices) = (Vec::new(), Vec::new());
+        first
+            .try_reserve((2 * v.len()).min(LIMIT))
+            .map_err(|_| 0x0505u32)?;
+        indices
+            .try_reserve((3 * v.len()).min(3 * LIMIT))
+            .map_err(|_| 0x0505u32)?;
+        b.items.push(Item::Fill {
+            vertices: first,
+            indices,
+            bias: 0.,
+        });
+    }
     // GL_POLYGON is one polygon when its outline is drawn.
     visit(
         mode,
@@ -363,10 +420,10 @@ pub(crate) fn assemble(
 mod tests {
     use super::*;
 
-    fn vertex(x: f32, y: f32, color: f32) -> GpuVertex {
+    fn vertex(x: f32, y: f32, color: u8) -> GpuVertex {
         GpuVertex {
             position: [x, y, 0., 1.],
-            color: [color, 0., 0., 255.],
+            color: [color, 0, 0, 255],
             texcoord: [0., 0., 0., 1.],
             extra_texcoords: [[0., 0., 0., 1.]; 2],
         }
@@ -392,6 +449,7 @@ mod tests {
                 clip: Default::default(),
                 stipple: None,
                 counter: Default::default(),
+                last_clip: lines::no_clip_cache(),
                 point: lines::PointStyle::plain(),
             },
         }
@@ -402,32 +460,40 @@ mod tests {
         let mut s = settings();
         s.flat = true;
         let v = [
-            vertex(0., 0., 10.),
-            vertex(1., 0., 20.),
-            vertex(1., 1., 30.),
-            vertex(0., 1., 40.),
+            vertex(0., 0., 10),
+            vertex(1., 0., 20),
+            vertex(1., 1., 30),
+            vertex(0., 1., 40),
         ];
         // Fan: triangle (0, 1, 2) takes vertex 2, (0, 2, 3) vertex 3.
         let items = assemble(6, &v, &[], &[true; 4], &s).unwrap();
-        let Item::Fill { vertices, bias } = &items[0] else {
+        let Item::Fill {
+            vertices,
+            indices,
+            bias,
+        } = &items[0]
+        else {
             panic!()
         };
         assert_eq!(*bias, 0.);
         assert_eq!(
-            vertices.iter().map(|v| v.color[0]).collect::<Vec<_>>(),
-            [30., 30., 30., 40., 40., 40.]
+            indices
+                .iter()
+                .map(|&i| vertices[i as usize].color[0])
+                .collect::<Vec<_>>(),
+            [30, 30, 30, 40, 40, 40]
         );
         // GL_POLYGON: the first vertex; quads: the last.
         let items = assemble(9, &v, &[], &[true; 4], &s).unwrap();
         let Item::Fill { vertices, .. } = &items[0] else {
             panic!()
         };
-        assert!(vertices.iter().all(|v| v.color[0] == 10.));
+        assert!(vertices.iter().all(|v| v.color[0] == 10));
         let items = assemble(7, &v, &[], &[true; 4], &s).unwrap();
         let Item::Fill { vertices, .. } = &items[0] else {
             panic!()
         };
-        assert!(vertices.iter().all(|v| v.color[0] == 40.));
+        assert!(vertices.iter().all(|v| v.color[0] == 40));
     }
 
     #[test]
@@ -435,9 +501,9 @@ mod tests {
         let mut s = settings();
         s.modes = [LINE, LINE];
         let v = [
-            vertex(-0.5, -0.5, 1.),
-            vertex(0.5, -0.5, 1.),
-            vertex(0.5, 0.5, 1.),
+            vertex(-0.5, -0.5, 1),
+            vertex(0.5, -0.5, 1),
+            vertex(0.5, 0.5, 1),
         ];
         let edges = [true, true, false];
         let items = assemble(4, &v, &[], &edges, &s).unwrap();
@@ -476,7 +542,7 @@ mod tests {
         let mut s = settings();
         s.offset = [true; 3];
         s.units = 1.;
-        let v = [vertex(0., 0., 1.), vertex(1., 0., 1.), vertex(0., 1., 1.)];
+        let v = [vertex(0., 0., 1), vertex(1., 0., 1), vertex(0., 1., 1)];
         assert!(s.needed());
         let items = assemble(4, &v, &[], &[true; 3], &s).unwrap();
         let Item::Fill { bias, .. } = &items[0] else {

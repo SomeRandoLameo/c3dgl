@@ -100,16 +100,42 @@ impl Planes {
         backs: &[[f32; 4]],
         edges: &[bool],
     ) -> (Vec<GpuVertex>, Vec<[f32; 4]>, Vec<bool>) {
-        let two = !backs.is_empty();
         let mut verts = vs.to_vec();
         let mut back = backs.to_vec();
         let mut flags = edges.to_vec();
+        let mut scratch = Scratch::default();
+        self.polygon_in_place(&mut verts, &mut back, &mut flags, &mut scratch);
+        (verts, back, flags)
+    }
+
+    /// Sutherland-Hodgman against every plane in place (`scratch` keeps the buffers of the
+    /// passes); fewer than 3 vertices left clears all three.
+    pub fn polygon_in_place(
+        &self,
+        verts: &mut Vec<GpuVertex>,
+        back: &mut Vec<[f32; 4]>,
+        flags: &mut Vec<bool>,
+        scratch: &mut Scratch,
+    ) {
+        let two = !back.is_empty();
         for plane in &self.p[..self.n] {
             if verts.len() < 3 {
                 break;
             }
             let n = verts.len();
-            let (mut ov, mut ob, mut oe) = (Vec::new(), Vec::new(), Vec::new());
+            // Wholly inside: the pass would reproduce the polygon; wholly outside: nothing is left.
+            let inside = verts.iter().filter(|v| distance(plane, v) >= 0.).count();
+            if inside == n {
+                continue;
+            }
+            if inside == 0 {
+                verts.clear();
+                break;
+            }
+            let (ov, ob, oe) = (&mut scratch.v, &mut scratch.b, &mut scratch.e);
+            ov.clear();
+            ob.clear();
+            oe.clear();
             let mut da = distance(plane, &verts[0]);
             for i in 0..n {
                 let (a, b) = (&verts[i], &verts[(i + 1) % n]);
@@ -135,15 +161,24 @@ impl Planes {
                 }
                 da = db;
             }
-            verts = ov;
-            back = ob;
-            flags = oe;
+            core::mem::swap(verts, &mut scratch.v);
+            core::mem::swap(back, &mut scratch.b);
+            core::mem::swap(flags, &mut scratch.e);
         }
         if verts.len() < 3 {
-            return (Vec::new(), Vec::new(), Vec::new());
+            verts.clear();
+            back.clear();
+            flags.clear();
         }
-        (verts, back, flags)
     }
+}
+
+/// Buffers reused by `ClipState::polygon_in_place`.
+#[derive(Default)]
+pub(crate) struct Scratch {
+    v: Vec<GpuVertex>,
+    b: Vec<[f32; 4]>,
+    e: Vec<bool>,
 }
 
 fn plane_valid(plane: u32) -> Option<usize> {
@@ -237,7 +272,7 @@ mod tests {
     fn v(x: f32, y: f32) -> GpuVertex {
         GpuVertex {
             position: [x, y, 0., 1.],
-            color: [0., 100., 200., 255.],
+            color: [0, 100, 200, 255],
             texcoord: [x, y, 0., 1.],
             extra_texcoords: [[0., 0., 0., 1.]; 2],
         }

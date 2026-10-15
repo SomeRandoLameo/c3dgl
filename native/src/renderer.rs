@@ -19,7 +19,7 @@ pub struct Vertex {
 #[derive(Clone, Copy)]
 pub(crate) struct GpuVertex {
     pub position: [f32; 4],
-    pub color: [f32; 4],
+    pub color: [u8; 4],
     pub texcoord: [f32; 4],
     pub extra_texcoords: [[f32; 4]; 2],
 }
@@ -100,8 +100,17 @@ impl Arena {
 
     /// `size` bytes (16-byte aligned) valid until the frame's GPU work is done: the CPU address and
     /// the physical address.
-    unsafe fn alloc(&mut self, size: usize) -> Result<(*mut u8, u32), u32> {
+    pub(crate) unsafe fn alloc(&mut self, size: usize) -> Result<(*mut u8, u32), u32> {
+        self.alloc_aligned(size, 16)
+    }
+
+    /// Like `alloc` with a power-of-two alignment of at most 128 bytes (the chunk alignment).
+    unsafe fn alloc_aligned(&mut self, size: usize, align: usize) -> Result<(*mut u8, u32), u32> {
         let size = (size + 15) & !15;
+        if let Some(c) = self.chunks.get_mut(self.current) {
+            c.used = (c.used + align - 1) & !(align - 1);
+            c.used = c.used.min(c.size);
+        }
         while self.current < self.chunks.len() {
             let c = &mut self.chunks[self.current];
             if c.size - c.used >= size {
@@ -134,8 +143,10 @@ impl Arena {
     unsafe fn flush(&mut self) -> Result<(), u32> {
         for c in &mut self.chunks {
             if c.used > c.flushed {
-                if p::c3dglPlatformFlush(c.buffer.pointer.add(c.flushed), (c.used - c.flushed) as u32)
-                    < 0
+                if p::c3dglPlatformFlush(
+                    c.buffer.pointer.add(c.flushed),
+                    (c.used - c.flushed) as u32,
+                ) < 0
                 {
                     return Err(0x0502);
                 }
@@ -155,10 +166,104 @@ impl Arena {
     }
 }
 
+/// Lit colors of recent immediate-mode vertices (meshes submit shared vertices repeatedly):
+/// direct mapped, valid for one lighting serial and modelview matrix.
+pub(crate) struct LitCache {
+    serial: u32,
+    modelview: u32,
+    /// Entries of another generation are empty.
+    generation: u32,
+    entries: alloc::vec::Vec<LitEntry>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct LitEntry {
+    generation: u32,
+    /// Position (divided by w), normal and color bytes.
+    key: [u32; 8],
+    front: [u8; 4],
+    back: Option<[u8; 4]>,
+}
+
+const LIT_ENTRIES: usize = 256;
+
+impl LitCache {
+    fn new() -> Self {
+        Self {
+            serial: u32::MAX,
+            modelview: u32::MAX,
+            generation: 1,
+            entries: alloc::vec::Vec::new(),
+        }
+    }
+
+    /// Lit front and back colors of a vertex, from the cache or computed and stored.
+    fn light(
+        &mut self,
+        light: &mut crate::lighting::Lighting,
+        matrices: &Matrices,
+        position: [f32; 4],
+        normal: [f32; 3],
+        color: [u8; 4],
+    ) -> ([u8; 4], Option<[u8; 4]>) {
+        if self.entries.len() != LIT_ENTRIES && self.entries.try_reserve_exact(LIT_ENTRIES).is_ok()
+        {
+            self.entries.resize(LIT_ENTRIES, LitEntry::default());
+        }
+        if self.entries.len() != LIT_ENTRIES {
+            return light.light_vertex(&matrices.modelview(), position, normal, color);
+        }
+        if self.serial != light.serial || self.modelview != matrices.modelview_serial {
+            self.serial = light.serial;
+            self.modelview = matrices.modelview_serial;
+            self.generation = self.generation.wrapping_add(1).max(1);
+        }
+        let key = [
+            position[0].to_bits(),
+            position[1].to_bits(),
+            position[2].to_bits(),
+            position[3].to_bits(),
+            normal[0].to_bits(),
+            normal[1].to_bits(),
+            normal[2].to_bits(),
+            u32::from_le_bytes(color),
+        ];
+        let mut h = 0x811c9dc5u32;
+        for k in key {
+            h = (h ^ k).wrapping_mul(0x01000193);
+        }
+        let entry = &mut self.entries[(h >> 24) as usize];
+        if entry.generation == self.generation && entry.key == key {
+            light.track_color(color);
+            return (entry.front, entry.back);
+        }
+        let (front, back) = light.light_vertex(&matrices.modelview(), position, normal, color);
+        *entry = LitEntry {
+            generation: self.generation,
+            key,
+            front,
+            back,
+        };
+        (front, back)
+    }
+}
+
 pub(crate) struct Renderer {
+    lit: LitCache,
+    /// Buffers of array draws through the CPU.
+    gathered: Gathered,
+    /// The raster state of the last pixel rectangle when the GPU still has it (full viewport, no
+    /// draw since): the next rectangle with the same state sends neither again.
+    pixel_applied: Option<crate::raster::Raster>,
+    /// Linear memory for color buffer reads (see `read_color`).
+    readback: Option<Buffer>,
+    /// First word of the command list being built (see `list_pointer`).
+    base: usize,
     pub(crate) arrays: crate::arrays::Arrays,
     pub(crate) immediate: crate::immediate::Immediate,
     arena: Arena,
+    /// Points and lines expanded to quads (reused between draws).
+    expanded: (alloc::vec::Vec<GpuVertex>, alloc::vec::Vec<u16>),
     pub(crate) frame: FrameState,
     work_wait_ticks: u64,
     work_gpu_ticks: u64,
@@ -183,6 +288,8 @@ pub(crate) struct Renderer {
     pub(crate) stacks: crate::attrib::Stacks,
     /// The fog state the GPU holds (None: no fog).
     fog_key: Option<crate::fog::Key>,
+    /// The fog key whose table the GPU holds (kept while fog is off).
+    fog_table: Option<crate::fog::Key>,
     clip_applied: bool,
     /// The texture units whose coordinates the point sprites of the current draw replace, and the
     /// set the GPU state was built for.
@@ -191,7 +298,10 @@ pub(crate) struct Renderer {
     /// The polygon stipple the GPU holds: pattern rows, texture address, alpha function.
     stipple_applied: Option<([u32; 12], u32, bool)>,
     /// Texture of the pattern the GPU samples, with the pattern it was made from.
-    stipple_texture: Option<(Buffer, [u8; 128])>,
+    /// The polygon stipple texture in frame memory: physical address, pattern and the frame.
+    stipple_texture: Option<(u32, [u8; 128], u32)>,
+    /// Counts begun frames (frame memory of an earlier frame is reused).
+    frame_serial: u32,
     /// Polygon offset folded into the uploaded matrix.
     bias_applied: f32,
 }
@@ -306,15 +416,16 @@ pub unsafe fn clear_gl(mask: u32) {
             return;
         }
         let wait = p::c3dglPlatformTick();
-        if p::c3dglPlatformSubmit(r.commands.pointer, (r.used * 4) as u32, ptr::null_mut()) < 0 {
+        if p::c3dglPlatformSubmit(r.list_pointer(), r.list_bytes(), ptr::null_mut()) < 0 {
             r.matrices.fail(0x0502);
             return;
         }
 
         r.work_gpu_ticks += p::c3dglPlatformWait();
-        r.submitted_bytes += (r.used * 4) as u32;
+        r.submitted_bytes += r.list_bytes();
         r.work_wait_ticks += p::c3dglPlatformTick() - wait;
         r.used = 0;
+        r.base = 0;
         let mut commands = r.commands();
         if gpu::begin(&mut commands).is_err() {
             r.matrices.fail(0x0505);
@@ -378,7 +489,7 @@ unsafe fn clear_quad(r: &mut Renderer, color: bool, depth: bool, stencil: bool) 
 
     let z = 2. * r.frame.clear_depth - 1.;
     let rgba = r.frame.clear_color;
-    let bytes: [f32; 4] = core::array::from_fn(|i| ((rgba >> (24 - 8 * i)) & 255) as f32);
+    let bytes: [u8; 4] = core::array::from_fn(|i| ((rgba >> (24 - 8 * i)) & 255) as u8);
     let corner = |x: f32, y: f32| GpuVertex {
         position: [x, y, z, 1.],
         color: bytes,
@@ -415,13 +526,14 @@ unsafe fn sync_frame(r: &mut Renderer) -> Result<(), u32> {
     r.used = commands.used;
     r.arena.flush()?;
     let wait = p::c3dglPlatformTick();
-    if p::c3dglPlatformSubmit(r.commands.pointer, (r.used * 4) as u32, ptr::null_mut()) < 0 {
+    if p::c3dglPlatformSubmit(r.list_pointer(), r.list_bytes(), ptr::null_mut()) < 0 {
         return Err(0x0502);
     }
     r.work_gpu_ticks += p::c3dglPlatformWait();
-    r.submitted_bytes += (r.used * 4) as u32;
+    r.submitted_bytes += r.list_bytes();
     r.work_wait_ticks += p::c3dglPlatformTick() - wait;
     r.used = 0;
+    r.base = 0;
     let mut commands = r.commands();
     if gpu::begin(&mut commands).is_err() {
         return Err(0x0505);
@@ -447,15 +559,24 @@ pub(crate) unsafe fn read_color(
     r: &mut Renderer,
     line0: usize,
     lines: usize,
-) -> Result<Buffer, u32> {
-    let out = Buffer::new(lines * 960, false).ok_or(0x0505u32)?;
+) -> Result<Readback, u32> {
+    // One buffer for every read (glAccum reads many times a frame), allocated at the first.
+    if r.readback.is_none() {
+        r.readback = Some(Buffer::new(400 * 960, false).ok_or(0x0505u32)?);
+    }
+    let out = r.readback.as_ref().unwrap().pointer;
     if r.active {
         sync_frame(r)?;
     }
-    if p::c3dglPlatformReadColor(r.color.pointer, line0 as u32, lines as u32, out.pointer) < 0 {
+    if p::c3dglPlatformReadColor(r.color.pointer, line0 as u32, lines as u32, out) < 0 {
         return Err(0x0502);
     }
-    Ok(out)
+    Ok(Readback { pointer: out })
+}
+
+/// Columns read by `read_color`: valid until the next read.
+pub(crate) struct Readback {
+    pub pointer: *mut u8,
 }
 
 /// How a pixel rectangle is drawn: the texel (image), or the raster color where a bitmap bit is
@@ -480,6 +601,8 @@ pub(crate) struct PixelQuad<'a> {
     pub format: PixelFormat,
     pub size: (usize, usize),
     pub fill: &'a mut dyn FnMut(*mut u8),
+    /// The physical address of texels already in frame memory (`fill` is not called).
+    pub prefilled: Option<u32>,
     pub wx: [f32; 4],
     pub wy: [f32; 4],
     pub s: [f32; 4],
@@ -526,15 +649,19 @@ pub(crate) unsafe fn write_depth(
 pub(crate) unsafe fn draw_pixel_quad(r: &mut Renderer, q: PixelQuad) -> Result<(), u32> {
     let (tw, th) = q.size;
     let bytes = tw * th * if q.format == PixelFormat::Rgba8 { 4 } else { 1 };
-    let texture = Buffer::new(bytes, false).ok_or(0x0505u32)?;
-    ptr::write_bytes(texture.pointer, 0, bytes);
-    (q.fill)(texture.pointer);
-    if p::c3dglPlatformFlush(texture.pointer, bytes as u32) < 0 {
-        return Err(0x0502);
-    }
     if !r.active && begin_frame(r, true, None) != 0 {
         return Err(0x0502);
     }
+    // Frame memory: the queued draw samples it until the frame is done.
+    let texture_physical = match q.prefilled {
+        Some(address) => address,
+        None => {
+            let (texture, physical) = r.arena.alloc_aligned(bytes, 128)?;
+            ptr::write_bytes(texture, 0, bytes);
+            (q.fill)(texture);
+            physical
+        }
+    };
     let saved = (
         r.frame.raster,
         r.frame.viewport,
@@ -564,11 +691,13 @@ pub(crate) unsafe fn draw_pixel_quad(r: &mut Renderer, q: PixelQuad) -> Result<(
             state.alpha_ref = 0;
         }
     }
-    state.dirty = true;
+    state.dirty = false;
+    let applied = r.pixel_applied == Some(state);
+    state.dirty = !applied;
     r.frame.raster = state;
     r.frame.viewport = [0, 0, 400, 240];
     r.frame.drawable = true;
-    r.frame.viewport_dirty = true;
+    r.frame.viewport_dirty = !applied;
     if !q.user_state {
         r.frame.fog.enabled = false;
     }
@@ -582,7 +711,7 @@ pub(crate) unsafe fn draw_pixel_quad(r: &mut Renderer, q: PixelQuad) -> Result<(
     r.frame.textures.set_image(Some(crate::texture::Packet {
         enabled: true,
         complete: true,
-        address: texture.physical(),
+        address: texture_physical,
         dimensions: (tw as u32) << 16 | th as u32,
         parameters: 0,
         replace: true,
@@ -603,10 +732,10 @@ pub(crate) unsafe fn draw_pixel_quad(r: &mut Renderer, q: PixelQuad) -> Result<(
             } else {
                 0.
             },
-            raster_pos.color.map(|c| c as f32),
+            raster_pos.color,
         )
     } else {
-        (0., [255.; 4])
+        (0., [255; 4])
     };
     let (sw, sh) = (2. / 400., 2. / 240.);
     let vertices: [GpuVertex; 4] = core::array::from_fn(|i| GpuVertex {
@@ -616,6 +745,10 @@ pub(crate) unsafe fn draw_pixel_quad(r: &mut Renderer, q: PixelQuad) -> Result<(
         extra_texcoords: [[0., 0., 0., 1.]; 2],
     });
     let result = draw_transient(r, &vertices, &[0u16, 1, 2, 0, 2, 3], 6, true, 0.);
+    if result.is_ok() {
+        state.dirty = false;
+        r.pixel_applied = Some(state);
+    }
 
     r.frame.raster = saved.0;
     r.frame.raster.dirty = true;
@@ -626,10 +759,88 @@ pub(crate) unsafe fn draw_pixel_quad(r: &mut Renderer, q: PixelQuad) -> Result<(
     r.frame.textures.suspended = false;
     r.frame.textures.set_image(None);
     r.matrices.texture_dirty = true;
-    // The queued draw samples the texture until the frame is collected.
-    let kept = r.frame.textures.retire(texture);
-    result?;
-    kept
+    result
+}
+
+/// glCopyPixels(GL_COLOR) without a color transfer, on the GPU like the C renderer: the framebuffer
+/// lines (window columns) of the rectangle are copied into a texture in frame memory by a GX texture
+/// copy queued between the draws before and after it, and drawn like an image. The color buffer is
+/// tiled like an RGBA8 texture: framebuffer line l (window x) is texture row tex_h - 1 - (l - line0),
+/// pixel y of a line (window y) texture column y; tile rows of 30 tiles go to a 256 texel wide
+/// texture. Pixels outside the window are not drawn.
+pub(crate) unsafe fn copy_color(
+    r: &mut Renderer,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> Result<(), u32> {
+    let (x0, y0) = (x.max(0), y.max(0));
+    let (x1, y1) = ((x + w).min(400), (y + h).min(240));
+    if x0 >= x1 || y0 >= y1 {
+        return Ok(());
+    }
+    if !r.active && begin_frame(r, true, None) != 0 {
+        return Err(0x0502);
+    }
+    let line0 = (x0 & !7) as usize;
+    let lines = (((x1 + 7) & !7) as usize) - line0;
+    let tex_h = lines.max(8).next_power_of_two();
+    const TEX_W: usize = 256;
+    const LINE_BYTES: usize = 240 * 8 * 4;
+    let (texture, physical) = r.arena.alloc_aligned(TEX_W * tex_h * 4, 128)?;
+    // The list so far, then the copy; the frame goes on with a new list after them.
+    let mut c = r.commands();
+    gpu::finish(&mut c).map_err(|_| 0x0505u32)?;
+    r.used = c.used;
+    r.arena.flush()?;
+    let src = r.color.pointer.add(line0 * 240 * 4);
+    if p::c3dglPlatformSplitCopy(
+        r.list_pointer(),
+        r.list_bytes(),
+        src,
+        texture,
+        LINE_BYTES as u32,
+        (TEX_W * 8 * 4 - LINE_BYTES) as u32,
+        (lines / 8 * LINE_BYTES) as u32,
+    ) < 0
+    {
+        return Err(0x0502);
+    }
+    r.submitted_bytes += r.list_bytes();
+    r.base = r.used;
+    let mut c = r.commands();
+    gpu::begin(&mut c).map_err(|_| 0x0505u32)?;
+    r.used = c.used;
+    r.frame.textures.dirty = true;
+
+    let (xr, yr) = (r.frame.pixels.raster.pos[0], r.frame.pixels.raster.pos[1]);
+    let (zx, zy) = (r.frame.pixels.zoom[0], r.frame.pixels.zoom[1]);
+    let corner = [(0, 0), (1, 0), (1, 1), (0, 1)];
+    let mut q = [[0f32; 4]; 4];
+    for (i, &(cx, cy)) in corner.iter().enumerate() {
+        let sx = if cx == 1 { x1 } else { x0 };
+        let sy = if cy == 1 { y1 } else { y0 };
+        q[0][i] = xr + zx * (sx - x) as f32;
+        q[1][i] = yr + zy * (sy - y) as f32;
+        q[2][i] = sy as f32 / TEX_W as f32;
+        q[3][i] = (tex_h as f32 - (sx as usize - line0) as f32) / tex_h as f32;
+    }
+    draw_pixel_quad(
+        r,
+        PixelQuad {
+            mode: PixelMode::Image,
+            format: PixelFormat::Rgba8,
+            size: (TEX_W, tex_h),
+            fill: &mut |_| {},
+            prefilled: Some(physical),
+            wx: q[0],
+            wy: q[1],
+            s: q[2],
+            t: q[3],
+            user_state: true,
+        },
+    )
 }
 
 /// Draw a `w` x `h` RGBA8 image at window position (x, y) over the color buffer through the
@@ -657,6 +868,7 @@ pub(crate) unsafe fn draw_image(
             format: PixelFormat::Rgba8,
             size: (tw, th),
             fill: &mut |p| fill(p, tw, th),
+            prefilled: None,
             wx: [sw, x1, x1, sw],
             wy: [sh, sh, y1, y1],
             s: [0., w as f32 / tw as f32, w as f32 / tw as f32, 0.],
@@ -696,6 +908,13 @@ impl Renderer {
         core::ptr::addr_of_mut!((*slot).arrays).write(crate::arrays::Arrays::new());
         core::ptr::addr_of_mut!((*slot).immediate).write(crate::immediate::Immediate::new());
         core::ptr::addr_of_mut!((*slot).arena).write(Arena::new());
+        core::ptr::addr_of_mut!((*slot).lit).write(LitCache::new());
+        core::ptr::addr_of_mut!((*slot).gathered).write(Gathered::default());
+        core::ptr::addr_of_mut!((*slot).pixel_applied).write(None);
+        core::ptr::addr_of_mut!((*slot).readback).write(None);
+        core::ptr::addr_of_mut!((*slot).base).write(0);
+        core::ptr::addr_of_mut!((*slot).expanded)
+            .write((alloc::vec::Vec::new(), alloc::vec::Vec::new()));
         core::ptr::addr_of_mut!((*slot).frame).write(FrameState::new());
         core::ptr::addr_of_mut!((*slot).work_wait_ticks).write(0);
         core::ptr::addr_of_mut!((*slot).work_gpu_ticks).write(0);
@@ -718,11 +937,13 @@ impl Renderer {
         core::ptr::addr_of_mut!((*slot).error).write(0);
         core::ptr::addr_of_mut!((*slot).stacks).write(crate::attrib::Stacks::default());
         core::ptr::addr_of_mut!((*slot).fog_key).write(None);
+        core::ptr::addr_of_mut!((*slot).fog_table).write(None);
         core::ptr::addr_of_mut!((*slot).clip_applied).write(false);
         core::ptr::addr_of_mut!((*slot).stipple_applied).write(None);
         core::ptr::addr_of_mut!((*slot).sprite_units).write(0);
         core::ptr::addr_of_mut!((*slot).sprite_applied).write(0);
         core::ptr::addr_of_mut!((*slot).stipple_texture).write(None);
+        core::ptr::addr_of_mut!((*slot).frame_serial).write(0);
         core::ptr::addr_of_mut!((*slot).bias_applied).write(0.);
         Some(alloc::boxed::Box::from_raw(slot))
     }
@@ -750,6 +971,7 @@ impl Renderer {
         self.stipple_applied = None;
         self.sprite_applied = 0;
         self.fog_key = None;
+        self.fog_table = None;
         self.bias_applied = 0.;
         self.matrices.dirty = true;
         self.frame.viewport_dirty = true;
@@ -758,6 +980,16 @@ impl Renderer {
         self.matrices.texture_dirty = true;
 
         true
+    }
+
+    /// The command list being built: words [base, used) of the command buffer (the words before
+    /// were submitted by a split earlier in the frame).
+    unsafe fn list_pointer(&self) -> *mut u8 {
+        self.commands.pointer.add(self.base * 4)
+    }
+
+    fn list_bytes(&self) -> u32 {
+        ((self.used - self.base) * 4) as u32
     }
 
     unsafe fn commands(&mut self) -> Commands<'_> {
@@ -836,7 +1068,7 @@ pub unsafe extern "C" fn c3dglNativeUpload(vertices: *const Vertex, count: usize
     for (out, v) in output.iter_mut().zip(input) {
         *out = GpuVertex {
             position: v.position,
-            color: v.color.map(|c| c * 255.),
+            color: v.color.map(crate::immediate::gpu_color_byte),
             texcoord: [0., 0., 0., 1.],
             extra_texcoords: [[0., 0., 0., 1.]; 2],
         };
@@ -873,6 +1105,8 @@ unsafe fn begin_frame(r: &mut Renderer, sync: bool, clear: Option<u32>) -> i32 {
     r.arrays.collected();
     r.frame.textures.collected();
     r.arena.reset();
+    r.pixel_applied = None;
+    r.frame_serial = r.frame_serial.wrapping_add(1);
 
     if sync {
         p::c3dglPlatformVblank();
@@ -885,6 +1119,7 @@ unsafe fn begin_frame(r: &mut Renderer, sync: bool, clear: Option<u32>) -> i32 {
     r.wait_ticks = p::c3dglPlatformTick() - wait;
     r.started = p::c3dglPlatformTick();
     r.used = 0;
+    r.base = 0;
     r.draws = 0;
     r.error = 0;
     r.work_wait_ticks = 0;
@@ -971,25 +1206,17 @@ unsafe fn stipple_state(
         return None;
     }
     let mask = r.frame.stipple.mask;
-    if r.stipple_texture.as_ref().map(|t| t.1) != Some(mask) {
-        let buffer = Buffer::new(1024, false);
-        let Some(buffer) = buffer else {
+    let current = r
+        .stipple_texture
+        .filter(|t| t.1 == mask && t.2 == r.frame_serial);
+    if current.is_none() {
+        // A new texture in frame memory: queued draws keep sampling the previous pattern.
+        let Ok((pointer, physical)) = r.arena.alloc_aligned(1024, 128) else {
             r.matrices.fail(0x0505);
             return None;
         };
-        ptr::copy_nonoverlapping(crate::stipple::texels(&mask).as_ptr(), buffer.pointer, 1024);
-        if p::c3dglPlatformFlush(buffer.pointer, 1024) < 0 {
-            r.matrices.fail(0x0502);
-            return None;
-        }
-        // Queued draws keep sampling the previous pattern.
-        if let Some((old, _)) = r.stipple_texture.take() {
-            if r.frame.textures.retire(old).is_err() {
-                r.matrices.fail(0x0505);
-                return None;
-            }
-        }
-        r.stipple_texture = Some((buffer, mask));
+        ptr::copy_nonoverlapping(crate::stipple::texels(&mask).as_ptr(), pointer, 1024);
+        r.stipple_texture = Some((physical, mask, r.frame_serial));
     }
     let raster = &r.frame.raster;
     let (func, reference, high, exact) =
@@ -998,7 +1225,7 @@ unsafe fn stipple_state(
         r.matrices.fail(0x0502);
     }
     *alpha = Some((func, reference));
-    let address = r.stipple_texture.as_ref()?.0.physical();
+    let address = r.stipple_texture?.0;
     Some((
         crate::stipple::rows(&r.matrices.combined(), r.frame.viewport),
         address,
@@ -1009,6 +1236,10 @@ unsafe fn stipple_state(
 // Keep matrix/viewport packet work out of the unchanged-state draw loop.
 #[inline(never)]
 unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(), ()> {
+    // Any other draw changes the GPU state of the last pixel rectangle.
+    if !r.frame.textures.has_image() {
+        r.pixel_applied = None;
+    }
     let clip_changed = clip != r.clip_applied;
     let bias = if clip { 0. } else { bias };
     let viewport = if r.frame.viewport_dirty {
@@ -1044,17 +1275,19 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
     let stipple_changed = stipple_key != r.stipple_applied;
     r.frame.textures.set_stipple(stipple.is_some());
 
-    let mut raster_state = r.frame.raster;
-    // GL_NONE draws no color (depth and stencil still change).
-    if r.frame.accum.draw_buffer == 0 {
-        raster_state.color_mask = 0;
-    }
-    if let Some((func, reference)) = stipple_alpha {
-        raster_state.alpha = true;
-        raster_state.alpha_func = func;
-        raster_state.alpha_ref = reference;
-    }
-    let raster = (r.frame.raster.dirty || clip_changed || stipple_changed).then_some(raster_state);
+    let raster = (r.frame.raster.dirty || clip_changed || stipple_changed).then(|| {
+        let mut raster_state = r.frame.raster;
+        // GL_NONE draws no color (depth and stencil still change).
+        if r.frame.accum.draw_buffer == 0 {
+            raster_state.color_mask = 0;
+        }
+        if let Some((func, reference)) = stipple_alpha {
+            raster_state.alpha = true;
+            raster_state.alpha_func = func;
+            raster_state.alpha_ref = reference;
+        }
+        raster_state
+    });
     let sprite = r.sprite_units;
     let sprite_changed = r.sprite_units != r.sprite_applied;
     let texgen_units = r.frame.texgen.unit_mask() & !sprite;
@@ -1069,20 +1302,22 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
     };
     // Unit 0 divides by q per pixel after a texcoord with q != 1, a projective texture matrix
     // or generated coordinates.
-    let projective = !image
-        && sprite & 1 == 0
-        && (r.frame.textures.q_used
-            || (texgen_units & 1 != 0 && r.frame.textures.packets()[0].enabled)
-            || {
-                let m = tex_matrix(0);
-                m[3] != 0. || m[7] != 0. || m[15] != 1.
-            });
-
+    // The unit packets are computed at most once per draw.
+    let mut packets_cache: Option<[crate::texture::Packet; 3]> = None;
+    let mut packets = || *packets_cache.get_or_insert_with(|| r.frame.textures.packets());
     let texture =
         (r.frame.textures.dirty || r.matrices.texture_dirty || stipple_changed || sprite_changed)
-            .then(|| r.frame.textures.packets());
+            .then(&mut packets);
+    // Only needed when the texture state is sent.
+    let projective = texture.is_some()
+        && !image
+        && sprite & 1 == 0
+        && (r.frame.textures.q_used || (texgen_units & 1 != 0 && packets()[0].enabled) || {
+            let m = tex_matrix(0);
+            m[3] != 0. || m[7] != 0. || m[15] != 1.
+        });
     let texmatrix = (r.matrices.texture_dirty || texture.is_some()).then(|| {
-        let packets = r.frame.textures.packets();
+        let packets = packets();
         (
             core::array::from_fn(tex_matrix),
             core::array::from_fn(|unit| packets[unit].scale),
@@ -1095,6 +1330,13 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
         .fog
         .key(&r.matrices.projection(), r.frame.raster.range);
     let fog = (fog_key != r.fog_key).then_some(fog_key);
+    // A new table replaces the held one even if this update fails halfway.
+    if let Some(Some(k)) = fog {
+        if r.fog_table != Some(k) {
+            r.fog_table = None;
+        }
+    }
+    let mut fog_table = r.fog_table;
     let needed = fog.map_or(0, |_| gpu::FOG_WORDS)
         + texmatrix.map_or(0, |_| gpu::TEXMATRIX_WORDS)
         + viewport.map_or(0, |_| 8)
@@ -1114,7 +1356,12 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
 
     if let Some(key) = fog {
         match key {
-            Some(k) => gpu::fog(&mut commands, Some((k.color(), &crate::fog::table(&k))))?,
+            // The table the GPU still holds: enabled again without sending it.
+            Some(k) if fog_table == Some(k) => gpu::fog_enable(&mut commands, k.color())?,
+            Some(k) => {
+                gpu::fog(&mut commands, Some((k.color(), &crate::fog::table(&k))))?;
+                fog_table = Some(k);
+            }
             None => gpu::fog(&mut commands, None)?,
         }
     }
@@ -1142,6 +1389,7 @@ unsafe fn update_draw_state(r: &mut Renderer, clip: bool, bias: f32) -> Result<(
 
     r.used = commands.used;
     r.fog_key = fog_key;
+    r.fog_table = fog_table;
     r.clip_applied = clip;
     r.stipple_applied = stipple_key;
     r.sprite_applied = r.sprite_units;
@@ -1180,12 +1428,12 @@ pub unsafe extern "C" fn c3dglNativePresent() -> i32 {
     if r.arena.flush().is_err() {
         return -3;
     }
-    let result = p::c3dglPlatformSubmit(r.commands.pointer, (r.used * 4) as u32, r.color.pointer);
+    let result = p::c3dglPlatformSubmit(r.list_pointer(), r.list_bytes(), r.color.pointer);
 
     r.active = false;
     r.stats.cpu_ticks = p::c3dglPlatformTick() - r.started - r.work_wait_ticks;
     r.stats.wait_ticks = r.wait_ticks + r.work_wait_ticks;
-    r.stats.command_bytes = r.submitted_bytes + (r.used * 4) as u32;
+    r.stats.command_bytes = r.submitted_bytes + r.list_bytes();
     r.stats.draws = r.draws;
 
     if result < 0 {
@@ -1393,6 +1641,19 @@ mod lifecycle_tests {
     ) -> i32 {
         MOCK.lock().unwrap().clear_calls.push((m, v, dv));
         0
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn c3dglPlatformSplitCopy(
+        commands: *mut u8,
+        bytes: u32,
+        _: *mut u8,
+        _: *mut u8,
+        _: u32,
+        _: u32,
+        _: u32,
+    ) -> i32 {
+        c3dglPlatformSubmit(commands, bytes, core::ptr::null_mut())
     }
 
     #[no_mangle]
@@ -1678,11 +1939,11 @@ mod lifecycle_tests {
                             r.arena.chunks[0].buffer.pointer.cast::<GpuVertex>(),
                             3,
                         );
-                        assert_eq!(v[0].color, [255., 0., 0., 255.]);
+                        assert_eq!(v[0].color, [255, 0, 0, 255]);
                         assert_eq!(v[0].texcoord, [0.25, 0.75, 0., 1.]);
                         assert_eq!(v[1].texcoord, [0.5, 1., 0., 1.]);
                         assert_eq!(v[1].position, [1., -1., 0., 1.]);
-                        assert_eq!(v[2].color, [0., 0., 255., 255.]);
+                        assert_eq!(v[2].color, [0, 0, 255, 255]);
                     });
                     assert_eq!(c3dglNativePresent(), 0);
                     with_immediate(|r| assert_ne!(r.arena.chunks[0].used, 0));
@@ -1725,15 +1986,40 @@ pub(crate) unsafe fn with_renderer(f: impl FnOnce(&mut Renderer)) {
 
 /// Submit one immediate-mode vertex: lighting turns the current color into the lit front color
 /// (and the back color with two-sided lighting). `color`/`texcoord` override the current ones.
+#[inline(always)]
 pub(crate) unsafe fn emit_vertex(
     r: &mut Renderer,
     position: [f32; 4],
     color: Option<[f32; 4]>,
     texcoord: Option<[f32; 4]>,
 ) {
-    let mut gpu = color
-        .unwrap_or(r.immediate.color)
-        .map(crate::immediate::gpu_color_component);
+    if !r.frame.light.enabled && !r.frame.texgen.active() {
+        // The common case: the vertex as given with the current attributes.
+        let gpu = match color {
+            Some(c) => c.map(crate::immediate::gpu_color_byte),
+            None => r.immediate.gpu_color(),
+        };
+        if let Err(e) = r.immediate.push(position, gpu, None, texcoord, None) {
+            r.matrices.fail(e);
+        }
+        return;
+    }
+    emit_lit_vertex(r, position, color, texcoord);
+}
+
+/// `emit_vertex` with lighting or texture generation (kept out of the common path: its large
+/// stack frame would cost every vertex).
+#[inline(never)]
+unsafe fn emit_lit_vertex(
+    r: &mut Renderer,
+    position: [f32; 4],
+    color: Option<[f32; 4]>,
+    texcoord: Option<[f32; 4]>,
+) {
+    let mut gpu = match color {
+        Some(c) => c.map(crate::immediate::gpu_color_byte),
+        None => r.immediate.gpu_color(),
+    };
     let mut back = None;
     // Lighting and texture generation work on the homogeneous position divided by w.
     let p = if position[3] != 1. && position[3] != 0. {
@@ -1746,22 +2032,28 @@ pub(crate) unsafe fn emit_vertex(
     } else {
         position
     };
-    let mv = r.matrices.modelview();
-    if r.frame.light.enabled {
-        let bytes = gpu.map(|c| c as u8);
+    let generated = r.frame.texgen.active();
+    // Under flat shading only the provoking vertices' lit colors are ever seen.
+    let seen = !r.frame.poly.flat || r.immediate.next_provokes();
+    if r.frame.light.enabled && seen {
         let (front, b) = r
-            .frame
-            .light
-            .light_vertex(&mv, p, r.immediate.normal, bytes);
-        gpu = front.map(|c| c as f32);
+            .lit
+            .light(&mut r.frame.light, &r.matrices, p, r.immediate.normal, gpu);
+        gpu = front;
         back = b.map(|b| b.map(|c| c as f32));
+    } else if r.frame.light.enabled {
+        // GL_COLOR_MATERIAL still follows every vertex color.
+        r.frame.light.track_color(gpu);
+        if r.frame.light.two_side {
+            back = Some(gpu.map(|c| c as f32));
+        }
     }
     let (mut tex, mut extra) = (
         texcoord.unwrap_or(r.immediate.texcoord),
         r.immediate.extra_texcoords,
     );
-    let generated = r.frame.texgen.active();
     if generated {
+        let mv = r.matrices.modelview();
         texgen_vertex(r, &mv, p, r.immediate.normal, &mut tex, &mut extra);
     }
     let extra = generated.then_some(extra);
@@ -1836,9 +2128,8 @@ unsafe fn light_vertices(
     }
     let mv = r.matrices.modelview();
     for (v, n) in vertices.iter_mut().zip(normals) {
-        let bytes = v.color.map(|c| c as u8);
-        let (front, back) = r.frame.light.light_vertex(&mv, v.position, *n, bytes);
-        v.color = front.map(|c| c as f32);
+        let (front, back) = r.frame.light.light_vertex(&mv, v.position, *n, v.color);
+        v.color = front;
         if let Some(b) = back {
             backs.push(b.map(|c| c as f32));
         }
@@ -1862,14 +2153,111 @@ unsafe fn draw_points_lines(
         }
         style.point.sizes = sizes.unwrap_or_default();
     }
-    let (vertices, indices) = crate::lines::expand(mode, source, &style, r.frame.poly.flat)?;
-    if indices.is_empty() {
+    // Reused expansion buffers: no allocation per draw.
+    let (mut vertices, mut indices) = core::mem::take(&mut r.expanded);
+    let result = crate::lines::expand_into(
+        mode,
+        source,
+        &style,
+        r.frame.poly.flat,
+        &mut vertices,
+        &mut indices,
+    )
+    .and_then(|()| {
+        if indices.is_empty() {
+            return Ok(());
+        }
+        r.sprite_units = style.point.sprite_units;
+        let result = draw_transient(r, &vertices, &indices, indices.len() as u32, true, 0.);
+        r.sprite_units = 0;
+        result
+    });
+    r.expanded = (vertices, indices);
+    result
+}
+
+/// Buffers of `draw_gathered`, kept between draws.
+#[derive(Default)]
+pub(crate) struct Gathered {
+    source: alloc::vec::Vec<GpuVertex>,
+    normals: alloc::vec::Vec<[f32; 3]>,
+    elements: alloc::vec::Vec<u16>,
+    sequence: alloc::vec::Vec<GpuVertex>,
+}
+
+/// An array draw through the CPU (lighting, texture generation, points and lines, polygon
+/// assembly): the vertices gathered, processed and drawn.
+unsafe fn draw_gathered(
+    r: &mut Renderer,
+    g: &mut Gathered,
+    (mode, first, count, kind, indices): (u32, usize, usize, u32, usize),
+    settings: &crate::polygon::Settings,
+    generated: bool,
+) -> Result<(), u32> {
+    // Indexed draws fetch, light and generate each referenced element once.
+    let indexed = kind != 0;
+    r.arrays.gather_into(
+        first,
+        count,
+        kind,
+        indices,
+        r.immediate.color,
+        r.immediate.texcoord,
+        r.immediate.extra_texcoords,
+        r.immediate.normal,
+        &mut g.source,
+        &mut g.normals,
+        indexed.then_some(&mut g.elements),
+    )?;
+    if generated {
+        texgen_vertices(r, &mut g.source, &g.normals);
+    }
+    let mut backs = light_vertices(r, &mut g.source, &g.normals);
+    let direct_triangles = indexed && !(mode < 4 || settings.needed()) && r.frame.raster.drawable();
+    if direct_triangles {
+        let tris =
+            crate::primitive::Plan::new(mode, g.elements.len())?.indices(|i| g.elements[i])?;
+        return draw_transient(r, &g.source, &tris, tris.len() as u32, false, 0.);
+    }
+    let source = if indexed {
+        // Points, lines and polygon modes work on the vertex sequence.
+        g.sequence.clear();
+        g.sequence
+            .try_reserve(g.elements.len())
+            .map_err(|_| 0x0505u32)?;
+        g.sequence
+            .extend(g.elements.iter().map(|&e| g.source[e as usize]));
+        if !backs.is_empty() {
+            backs = g.elements.iter().map(|&e| backs[e as usize]).collect();
+        }
+        &g.sequence
+    } else {
+        &g.source
+    };
+    if mode < 4 {
+        let sizes = if mode == 0 {
+            r.arrays.point_sizes(first, count, kind, indices)?
+        } else {
+            None
+        };
+        return draw_points_lines(r, mode, source, sizes);
+    }
+    if settings.needed() {
+        let edges = r
+            .arrays
+            .edge_flags(first, count, kind, indices)?
+            .unwrap_or_else(|| alloc::vec![true; source.len()]);
+        let items = crate::polygon::assemble(mode, source, &backs, &edges, settings)?;
+        return draw_items(r, items);
+    }
+    if !r.frame.raster.drawable() {
         return Ok(());
     }
-    r.sprite_units = style.point.sprite_units;
-    let result = draw_transient(r, &vertices, &indices, indices.len() as u32, true, 0.);
-    r.sprite_units = 0;
-    result
+    // Lit vertices are drawn as an indexed triangle list.
+    let tris = crate::primitive::Plan::new(mode, source.len())?.indices(|i| i as u16)?;
+    let count = if mode == 4 { source.len() } else { tris.len() };
+    let indices = if mode == 4 { &[][..] } else { &tris[..] };
+    draw_transient(r, source, indices, count as u32, false, 0.)
 }
 
 fn line_style(r: &Renderer) -> crate::lines::Style {
@@ -1881,6 +2269,7 @@ fn line_style(r: &Renderer) -> crate::lines::Style {
         clip: r.frame.clip.object_planes(&r.matrices.modelview()),
         stipple: r.frame.stipple.line_style(),
         counter: Default::default(),
+        last_clip: crate::lines::no_clip_cache(),
         point: crate::lines::PointStyle {
             min: r.frame.points.min,
             max: r.frame.points.max,
@@ -1915,9 +2304,12 @@ unsafe fn draw_items(
 ) -> Result<(), u32> {
     for item in items {
         match item {
-            crate::polygon::Item::Fill { vertices, bias } => {
-                draw_transient(r, &vertices, &[], vertices.len() as u32, false, bias)?
-            }
+            crate::polygon::Item::Fill { indices, .. } if indices.is_empty() => {}
+            crate::polygon::Item::Fill {
+                vertices,
+                indices,
+                bias,
+            } => draw_transient(r, &vertices, &indices, indices.len() as u32, false, bias)?,
             crate::polygon::Item::Clip { vertices, indices } => {
                 draw_transient(r, &vertices, &indices, indices.len() as u32, true, 0.)?
             }
@@ -1998,7 +2390,11 @@ pub(crate) unsafe fn end_immediate() {
                 return draw_points_lines(r, batch.primitive, &batch.vertices, None);
             }
 
-            let settings = poly_settings(r);
+            let mut settings = poly_settings(r);
+            // Flat colors already in the vertices: the GPU draws them like smooth ones.
+            if batch.flat_applied {
+                settings.flat = false;
+            }
             if settings.needed() {
                 let items = crate::polygon::assemble(
                     batch.primitive,
@@ -2152,45 +2548,17 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
             let lit = r.frame.light.enabled;
             let generated = r.frame.texgen.active();
             if mode < 4 || lit || generated || settings.needed() {
-                let (mut source, normals) = r.arrays.gather(
-                    first as usize,
-                    count,
-                    kind,
-                    indices,
-                    r.immediate.color,
-                    r.immediate.texcoord,
-                    r.immediate.extra_texcoords,
-                    r.immediate.normal,
-                )?;
-                if generated {
-                    texgen_vertices(r, &mut source, &normals);
-                }
-                let backs = light_vertices(r, &mut source, &normals);
-                if mode < 4 {
-                    let sizes = if mode == 0 {
-                        r.arrays.point_sizes(first as usize, count, kind, indices)?
-                    } else {
-                        None
-                    };
-                    return draw_points_lines(r, mode, &source, sizes);
-                }
-                if settings.needed() {
-                    let edges = r
-                        .arrays
-                        .edge_flags(first as usize, count, kind, indices)?
-                        .unwrap_or_else(|| alloc::vec![true; source.len()]);
-                    let items = crate::polygon::assemble(mode, &source, &backs, &edges, &settings)?;
-                    return draw_items(r, items);
-                }
-                if !r.frame.raster.drawable() {
-                    return Ok(());
-                }
-                // Lit vertices are drawn as an indexed triangle list.
-                let tris =
-                    crate::primitive::Plan::new(mode, source.len())?.indices(|i| i as u16)?;
-                let count = if mode == 4 { source.len() } else { tris.len() };
-                let indices = if mode == 4 { &[][..] } else { &tris[..] };
-                return draw_transient(r, &source, indices, count as u32, false, 0.);
+                // Reused buffers (no allocation per draw).
+                let mut g = core::mem::take(&mut r.gathered);
+                let result = draw_gathered(
+                    r,
+                    &mut g,
+                    (mode, first as usize, count, kind, indices),
+                    &settings,
+                    generated,
+                );
+                r.gathered = g;
+                return result;
             }
 
             if !r.frame.raster.drawable() {
@@ -2206,6 +2574,7 @@ pub(crate) unsafe fn draw_arrays(mode: u32, first: i32, count: i32, kind: u32, i
                 r.immediate.color,
                 r.immediate.texcoord,
                 r.immediate.extra_texcoords,
+                &mut r.arena,
             )?;
 
             update_draw_state(r, false, 0.).map_err(|_| 0x0505u32)?;

@@ -59,8 +59,10 @@ pub(crate) struct Saved {
     texgen: crate::texgen::TexGen,
     fog: crate::fog::Fog,
     stipple: crate::stipple::Stipple,
-    accum: crate::accum::Accum,
-    pixels: crate::pixels::Pixels,
+    /// The clear value, draw and read buffer (not the accumulation buffer's contents).
+    accum: ([f32; 4], u32, u32),
+    /// The raster position, pixel zoom and transfer (not the maps: they are in no group).
+    pixels: (crate::pixels::RasterPos, [f32; 2], crate::pixels::Transfer),
     points: crate::points::Points,
     caps: crate::caps::Caps,
     sample_coverage: [f32; 2],
@@ -130,8 +132,8 @@ pub unsafe extern "C" fn glPushAttrib(mask: u32) {
             texgen: f.texgen.clone(),
             fog: f.fog,
             stipple: f.stipple,
-            accum: f.accum.clone(),
-            pixels: f.pixels.clone(),
+            accum: (f.accum.clear, f.accum.draw_buffer, f.accum.read_buffer),
+            pixels: (f.pixels.raster, f.pixels.zoom, f.pixels.transfer),
             points: f.points,
             caps: f.caps,
             sample_coverage: f.sample_coverage,
@@ -154,7 +156,7 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         r.immediate.texcoord = a.texcoord;
         r.immediate.extra_texcoords = a.extra_texcoords;
         r.immediate.edge = a.edge;
-        f.pixels.raster = a.pixels.raster;
+        f.pixels.raster = a.pixels.0;
     }
     if mask & POINT != 0 {
         f.point_size = a.point_size;
@@ -242,16 +244,16 @@ unsafe fn restore(r: &mut Renderer, a: &Saved) {
         f.raster.blend = a.raster.blend;
         f.raster.color_mask = a.raster.color_mask;
         f.clear_color = a.clear_color;
-        f.accum.draw_buffer = a.accum.draw_buffer;
+        f.accum.draw_buffer = a.accum.1;
         f.caps.restore(&a.caps, crate::caps::COLOR_BUFFER);
     }
     if mask & PIXEL_MODE != 0 {
-        f.accum.read_buffer = a.accum.read_buffer;
-        f.pixels.zoom = a.pixels.zoom;
-        f.pixels.transfer = a.pixels.transfer;
+        f.accum.read_buffer = a.accum.2;
+        f.pixels.zoom = a.pixels.1;
+        f.pixels.transfer = a.pixels.2;
     }
     if mask & ACCUM_BUFFER != 0 {
-        f.accum.clear = a.accum.clear;
+        f.accum.clear = a.accum.0;
     }
     if mask & TEXTURE != 0 {
         f.textures.restore(&a.textures, true, true);

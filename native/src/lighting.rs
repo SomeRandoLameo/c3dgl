@@ -7,7 +7,6 @@ use core::ptr;
 extern "C" {
     fn powf(x: f32, y: f32) -> f32;
     fn cosf(x: f32) -> f32;
-    fn sqrtf(x: f32) -> f32;
 }
 
 pub(crate) const MAX_LIGHTS: usize = 8;
@@ -62,14 +61,20 @@ pub(crate) struct Lighting {
     normalize: bool,
     rescale_normal: bool,
     normals: Option<NormalMatrix>,
+    /// Identifies this lighting state (unique across all changes, see `changed`): lit vertices
+    /// cached for a serial stay valid for it.
+    pub serial: u32,
 }
+
+/// The source of `Lighting::serial` values.
+static mut NEXT_SERIAL: u32 = 1;
 
 fn dot3(a: &[f32; 3], b: &[f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 fn normalize3(v: &mut [f32; 3]) {
-    let len = unsafe { sqrtf(dot3(v, v)) };
+    let len = crate::dsp::sqrt(dot3(v, v));
     if len > 0. {
         for c in v.iter_mut() {
             *c /= len;
@@ -155,7 +160,7 @@ impl NormalMatrix {
         let inv = if det != 0. { 1. / det } else { 0. };
         let matrix: [f32; 9] = core::array::from_fn(|i| cof[i] * inv);
         let len =
-            unsafe { sqrtf(matrix[2] * matrix[2] + matrix[5] * matrix[5] + matrix[8] * matrix[8]) };
+            crate::dsp::sqrt(matrix[2] * matrix[2] + matrix[5] * matrix[5] + matrix[8] * matrix[8]);
         Self {
             modelview: *m,
             matrix,
@@ -167,6 +172,7 @@ impl NormalMatrix {
 impl Lighting {
     /// The capability flags (GL_ENABLE_BIT): lighting, lights, color material, normalization.
     pub fn restore_enables(&mut self, from: &Lighting) {
+        self.changed();
         self.enabled = from.enabled;
         self.light_enabled = from.light_enabled;
         self.color_material = from.color_material;
@@ -176,6 +182,7 @@ impl Lighting {
 
     /// GL_TRANSFORM_BIT: normalization flags.
     pub fn restore_normalization(&mut self, from: &Lighting) {
+        self.changed();
         self.normalize = from.normalize;
         self.rescale_normal = from.rescale_normal;
     }
@@ -195,11 +202,31 @@ impl Lighting {
             normalize: false,
             rescale_normal: false,
             normals: None,
+            serial: 0,
+        }
+    }
+
+    /// A lighting parameter changed: lit vertices cached so far no longer apply.
+    pub fn changed(&mut self) {
+        // The renderer runs on one thread.
+        unsafe {
+            self.serial = NEXT_SERIAL;
+            NEXT_SERIAL = NEXT_SERIAL.wrapping_add(1).max(1);
+        }
+    }
+
+    /// GL_COLOR_MATERIAL tracking of a vertex color whose lit result came from the cache.
+    pub fn track_color(&mut self, color: [u8; 4]) {
+        if self.color_material {
+            self.apply_color_material(color);
         }
     }
 
     /// Capabilities of this module; false for others.
     pub fn set_enabled(&mut self, cap: u32, on: bool, current_color: [u8; 4]) -> bool {
+        if matches!(cap, 0x0b50 | 0x4000..=0x4007 | 0x0b57 | 0x0ba1 | 0x803a) {
+            self.changed();
+        }
         match cap {
             0x0b50 => self.enabled = on,
             0x4000..=0x4007 => {
@@ -257,24 +284,29 @@ impl Lighting {
         }
     }
 
-    fn normal_matrix(&mut self, modelview: &[f32; 16]) -> NormalMatrix {
-        if !self.normals.is_some_and(|n| n.modelview == *modelview) {
+    fn normal_matrix(&mut self, modelview: &[f32; 16]) -> &NormalMatrix {
+        if !self
+            .normals
+            .as_ref()
+            .is_some_and(|n| n.modelview == *modelview)
+        {
             self.normals = Some(NormalMatrix::new(modelview));
         }
-        self.normals.unwrap()
+        self.normals.as_ref().unwrap()
     }
 
     /// Object-space normal to eye space. Not normalized unless asked for, like GL.
     fn eye_normal(&mut self, modelview: &[f32; 16], normal: [f32; 3]) -> [f32; 3] {
+        let (normalize, rescale_normal) = (self.normalize, self.rescale_normal);
         let nm = self.normal_matrix(modelview);
         let mut n: [f32; 3] = core::array::from_fn(|k| {
             nm.matrix[k * 3] * normal[0]
                 + nm.matrix[k * 3 + 1] * normal[1]
                 + nm.matrix[k * 3 + 2] * normal[2]
         });
-        if self.normalize {
+        if normalize {
             normalize3(&mut n);
-        } else if self.rescale_normal {
+        } else if rescale_normal {
             for c in n.iter_mut() {
                 *c *= nm.rescale;
             }
@@ -286,10 +318,12 @@ impl Lighting {
     fn shade_face(&self, m: &Material, eye: [f32; 3], n: [f32; 3]) -> [u8; 4] {
         let mut c: [f32; 3] =
             core::array::from_fn(|k| m.emission[k] + m.ambient[k] * self.model_ambient[k]);
-        for (i, li) in self.lights.iter().enumerate() {
-            if self.light_enabled & (1 << i) == 0 {
-                continue;
-            }
+        // The enabled lights only, in order.
+        let mut bits = self.light_enabled;
+        while bits != 0 {
+            let i = bits.trailing_zeros() as usize;
+            bits &= bits - 1;
+            let li = &self.lights[i];
             // vp: unit vector from the vertex to the light; attenuation for positional lights only.
             let mut vp = [0.; 3];
             let mut att = 1.;
@@ -298,7 +332,7 @@ impl Lighting {
                     vp[k] = li.position[k] / li.position[3] - eye[k];
                 }
                 let d2 = dot3(&vp, &vp);
-                let d = unsafe { sqrtf(d2) };
+                let d = crate::dsp::sqrt(d2);
                 if d > 0. {
                     for v in vp.iter_mut() {
                         *v /= d;
@@ -378,9 +412,13 @@ impl Lighting {
             self.apply_color_material(color);
         }
         // The eye-space position is only needed for positional lights and the local viewer.
-        let need_eye = self.local_viewer
-            || (0..MAX_LIGHTS)
-                .any(|i| self.light_enabled & (1 << i) != 0 && self.lights[i].position[3] != 0.);
+        let mut need_eye = self.local_viewer;
+        let mut bits = self.light_enabled;
+        while bits != 0 && !need_eye {
+            let i = bits.trailing_zeros() as usize;
+            bits &= bits - 1;
+            need_eye = self.lights[i].position[3] != 0.;
+        }
         let mut eye = [0., 0., 0., 1.];
         if need_eye {
             eye =
@@ -441,6 +479,7 @@ pub(crate) unsafe fn set_light(light: u32, pname: u32, p: &[f32; 4]) {
             return;
         }
         let mv = m.modelview();
+        s.light.changed();
         let li = &mut s.light.lights[(light - 0x4000) as usize];
         match pname {
             0x1200 => li.ambient = *p,
@@ -544,6 +583,11 @@ pub(crate) unsafe fn set_light_model(pname: u32, p: &[f32; 4]) {
         return;
     }
     with_frame(|s, m| match pname {
+        0x0b53 | 0x0b51 | 0x0b52
+            if {
+                s.light.changed();
+                false
+            } => {}
         0x0b53 => s.light.model_ambient = *p,
         0x0b51 => s.light.local_viewer = p[0] != 0.,
         0x0b52 => s.light.two_side = p[0] != 0.,
@@ -622,6 +666,7 @@ pub(crate) unsafe fn set_material(face: u32, pname: u32, p: &[f32; 4]) {
             r.matrices.fail(0x0501);
             return;
         }
+        r.frame.light.changed();
         for (f, mat) in r.frame.light.material.iter_mut().enumerate() {
             if face != 0x0408 && face != if f == 1 { 0x0405 } else { 0x0404 } {
                 continue;
@@ -702,6 +747,7 @@ pub unsafe extern "C" fn glColorMaterial(face: u32, mode: u32) {
             .color
             .map(crate::immediate::gpu_color_component)
             .map(|c| c as u8);
+        r.frame.light.changed();
         r.frame.light.color_material_face = face;
         r.frame.light.color_material_mode = mode;
         if r.frame.light.color_material {

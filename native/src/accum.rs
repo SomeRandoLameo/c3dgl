@@ -78,11 +78,7 @@ fn halves(w: u32) -> (i32, i32) {
 }
 
 fn add_saturated(a: u32, b: u32) -> u32 {
-    let ((al, ah), (bl, bh)) = (halves(a), halves(b));
-    pair(
-        (al + bl).clamp(-32768, 32767),
-        (ah + bh).clamp(-32768, 32767),
-    )
+    crate::dsp::qadd16(a, b)
 }
 
 /// The window rectangle [x0, x1) x [y0, y1) accumulation operations change: the scissor box if
@@ -147,29 +143,33 @@ unsafe fn from_color(
     load: bool,
 ) -> Result<(), u32> {
     let (x0, y0, x1, y1) = rect;
-    let mut table = [0i32; 256];
-    for (c, v) in table.iter_mut().enumerate() {
-        *v = clamp(value * ONE * c as f32 / 255.) as i32;
+    // value * c for every 8-bit component in the low and in the high half of a word.
+    let (mut low, mut high) = ([0u32; 256], [0u32; 256]);
+    for c in 0..256 {
+        let v = clamp(value * ONE * c as f32 / 255.) as u16 as u32;
+        low[c] = v;
+        high[c] = v << 16;
     }
     let line0 = x0 & !7;
     let lines = ((x1 + 7) & !7) - line0;
     let fb = crate::renderer::read_color(r, line0, lines)?;
     let acc = buffer(&mut r.frame.accum)?;
     for x in x0..x1 {
-        let column = fb.pointer.add((x - line0) * HEIGHT * 4);
-        for y in y0..y1 {
-            // Bytes A, B, G, R.
-            let p = column.add(y * 4);
-            let (a, b, g, red) = (p.read(), p.add(1).read(), p.add(2).read(), p.add(3).read());
-            let rg = pair(table[red as usize], table[g as usize]);
-            let ba = pair(table[b as usize], table[a as usize]);
-            let i = pixel(x, y);
+        // A pixel is the word A | B << 8 | G << 16 | R << 24.
+        let column = core::slice::from_raw_parts(
+            fb.pointer.add((x - line0) * HEIGHT * 4).cast::<u32>(),
+            HEIGHT,
+        );
+        let words = &mut acc[pixel(x, y0)..pixel(x, y1)];
+        for (&p, w) in column[y0..y1].iter().zip(words.chunks_exact_mut(2)) {
+            let rg = low[(p >> 24) as usize] | high[(p >> 16 & 255) as usize];
+            let ba = low[(p >> 8 & 255) as usize] | high[(p & 255) as usize];
             if load {
-                acc[i] = rg;
-                acc[i + 1] = ba;
+                w[0] = rg;
+                w[1] = ba;
             } else {
-                acc[i] = add_saturated(acc[i], rg);
-                acc[i + 1] = add_saturated(acc[i + 1], ba);
+                w[0] = add_saturated(w[0], rg);
+                w[1] = add_saturated(w[1], ba);
             }
         }
     }
@@ -177,10 +177,23 @@ unsafe fn from_color(
 }
 
 /// The 8-bit color of a component times m (in 8.24 fixed point): the product in 1/256, rounded
-/// and saturated.
+/// and saturated (the reference for `texel`).
+#[cfg(test)]
 fn component(f: i32, value: i32) -> u32 {
     let v = ((f as i64 * value as i64) >> 16) as i32 + 128;
     (v >> 8).clamp(0, 255) as u32
+}
+
+/// The texel (ABGR bytes in a little-endian word) of the components of an accumulation pair
+/// times m (`component` with the DSP instructions).
+#[inline(always)]
+fn texel(f: i32, rg: u32, ba: u32) -> u32 {
+    use crate::dsp::{smlawb, smlawt, usat8_asr8};
+    let r = usat8_asr8(smlawb(f, rg, 128));
+    let g = usat8_asr8(smlawt(f, rg, 128));
+    let b = usat8_asr8(smlawb(f, ba, 128));
+    let a = usat8_asr8(smlawt(f, ba, 128));
+    a | b << 8 | g << 16 | r << 24
 }
 
 /// GL_RETURN: value * accumulation buffer, clamped to [0, 1], into the color buffer through the
@@ -203,45 +216,36 @@ unsafe fn to_color(
         let mut tx = x0;
         while tx < x1 {
             let tw = (x1 - tx).min(TILE);
-            // Copy the words out: filling the texture needs the renderer.
-            let acc = buffer(&mut r.frame.accum)?;
-            let mut words = Vec::new();
-            words
-                .try_reserve_exact(tw * th * 2)
-                .map_err(|_| 0x0505u32)?;
-            for x in 0..tw {
-                for y in 0..th {
-                    let i = pixel(tx + x, ty + y);
-                    words.push(acc[i]);
-                    words.push(acc[i + 1]);
-                }
-            }
+            // The buffer is taken out while the renderer fills the texture.
+            buffer(&mut r.frame.accum)?;
+            let acc = r.frame.accum.buffer.take().unwrap();
             let mut fill = |texture: *mut u8, texw: usize, texh: usize| {
+                // Tiled offsets: a part per row plus a part per column.
+                let mut rows = [0usize; TILE];
+                for (y, o) in rows.iter_mut().enumerate().take(th) {
+                    *o = crate::texture::tiled_y(texw, texh, y, 4);
+                }
                 for x in 0..tw {
-                    for y in 0..th {
-                        let (a0, a1) = (words[(x * th + y) * 2], words[(x * th + y) * 2 + 1]);
-                        let (c0, c1) = (halves(a0), halves(a1));
-                        let out: [u32; 4] = if fast {
-                            [
-                                component(f, c0.0),
-                                component(f, c0.1),
-                                component(f, c1.0),
-                                component(f, c1.1),
-                            ]
-                        } else {
-                            let c = [c0.0, c0.1, c1.0, c1.1].map(|v| v as f32 * m);
-                            c.map(|v| {
-                                if v <= 0. {
-                                    0
-                                } else if v >= 255. {
-                                    255
-                                } else {
-                                    (v + 0.5) as u32
-                                }
-                            })
-                        };
+                    let column = &acc[pixel(tx + x, ty)..pixel(tx + x, ty + th)];
+                    let col = texture.add(crate::texture::tiled_x(x, 4));
+                    for (w, &row) in column.chunks_exact(2).zip(&rows[..th]) {
+                        let at = col.add(row);
+                        if fast {
+                            at.cast::<u32>().write_unaligned(texel(f, w[0], w[1]));
+                            continue;
+                        }
+                        let (c0, c1) = (halves(w[0]), halves(w[1]));
+                        let c = [c0.0, c0.1, c1.0, c1.1].map(|v| v as f32 * m);
+                        let out = c.map(|v| {
+                            if v <= 0. {
+                                0
+                            } else if v >= 255. {
+                                255
+                            } else {
+                                (v + 0.5) as u32
+                            }
+                        });
                         // PICA RGBA8 is ABGR.
-                        let at = texture.add(crate::texture::offset_bpp(texw, texh, x, y, 4));
                         at.write(out[3] as u8);
                         at.add(1).write(out[2] as u8);
                         at.add(2).write(out[1] as u8);
@@ -249,7 +253,9 @@ unsafe fn to_color(
                     }
                 }
             };
-            crate::renderer::draw_image(r, (tx, ty, tw, th), &mut fill)?;
+            let drawn = crate::renderer::draw_image(r, (tx, ty, tw, th), &mut fill);
+            r.frame.accum.buffer = Some(acc);
+            drawn?;
             tx += TILE;
         }
         ty += TILE;
@@ -285,13 +291,11 @@ pub unsafe extern "C" fn glAccum(op: u32, value: f32) {
             0x0102 => to_color(r, area, value),
             // GL_MULT
             0x0103 => buffer(&mut r.frame.accum).map(|acc| {
+                use crate::dsp::{pack, smulwb, smulwt, ssat16};
                 let f = rintf(value.clamp(-32767., 32767.) * 65536.) as i32;
                 for x in area.0..area.2 {
-                    for i in pixel(x, area.1)..pixel(x, area.3) {
-                        let (l, h) = halves(acc[i]);
-                        let mul =
-                            |v: i32| ((f as i64 * v as i64) >> 16).clamp(-32768, 32767) as i32;
-                        acc[i] = pair(mul(l), mul(h));
+                    for w in &mut acc[pixel(x, area.1)..pixel(x, area.3)] {
+                        *w = pack(ssat16(smulwb(f, *w)), ssat16(smulwt(f, *w)));
                     }
                 }
             }),
@@ -300,8 +304,8 @@ pub unsafe extern "C" fn glAccum(op: u32, value: f32) {
                 let k = clamp(value * ONE / 2.) as i32;
                 let kk = pair(k, k);
                 for x in area.0..area.2 {
-                    for i in pixel(x, area.1)..pixel(x, area.3) {
-                        acc[i] = add_saturated(add_saturated(acc[i], kk), kk);
+                    for w in &mut acc[pixel(x, area.1)..pixel(x, area.3)] {
+                        *w = add_saturated(add_saturated(*w, kk), kk);
                     }
                 }
             }),
@@ -357,4 +361,32 @@ pub unsafe extern "C" fn glReadBuffer(mode: u32) {
         Some(e) => m.fail(e),
         None => s.accum.read_buffer = mode,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dsp_texel_matches_the_component_formula() {
+        for value in [0.25f32, 1., 0.2, 3.7, -1., 15.9] {
+            let f = unsafe { rintf(value * 255. / ONE * 16777216.) } as i32;
+            for (a, b) in [
+                (0, 0),
+                (32767, -32768),
+                (12345, -77),
+                (-1, 1),
+                (20000, 32767),
+            ] {
+                for (c, d) in [(0, 255), (-32768, 32767), (500, 9000)] {
+                    let (rg, ba) = (pair(a, b), pair(c, d));
+                    let want = component(f, a) << 24
+                        | component(f, b) << 16
+                        | component(f, c) << 8
+                        | component(f, d);
+                    assert_eq!(texel(f, rg, ba), want);
+                }
+            }
+        }
+    }
 }

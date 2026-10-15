@@ -5,9 +5,7 @@
 use crate::renderer::with_immediate;
 use core::ptr;
 
-extern "C" {
-    fn sqrtf(x: f32) -> f32;
-}
+extern "C" {}
 
 pub(crate) const OBJECT_LINEAR: u32 = 0x2401;
 pub(crate) const EYE_LINEAR: u32 = 0x2400;
@@ -168,7 +166,7 @@ fn dot3(a: &[f32; 3], b: &[f32; 3]) -> f32 {
 }
 
 fn normalize3(v: &mut [f32; 3]) {
-    let len = unsafe { sqrtf(dot3(v, v)) };
+    let len = crate::dsp::sqrt(dot3(v, v));
     if len > 0. {
         for c in v.iter_mut() {
             *c /= len;
@@ -192,7 +190,7 @@ fn sphere_map(mv: &[f32; 16], position: [f32; 4], n: [f32; 3]) -> [f32; 2] {
     normalize3(&mut u3);
     let nu = 2. * dot3(&n, &u3);
     let r: [f32; 3] = core::array::from_fn(|k| u3[k] - nu * n[k]);
-    let m = 2. * unsafe { sqrtf(r[0] * r[0] + r[1] * r[1] + (r[2] + 1.) * (r[2] + 1.)) };
+    let m = 2. * crate::dsp::sqrt(r[0] * r[0] + r[1] * r[1] + (r[2] + 1.) * (r[2] + 1.));
     let inv = if m > 0. { 1. / m } else { 0. };
     [r[0] * inv + 0.5, r[1] * inv + 0.5]
 }

@@ -6,7 +6,8 @@
 #include <stdatomic.h>
 #include <string.h>
 
-static gxCmdEntry_s entries[4];
+/* Command lists split around queued copies (glCopyPixels) need room beyond clear, list and transfer. */
+static gxCmdEntry_s entries[32];
 static gxCmdQueue_s queue;
 static aptHookCookie hook;
 static LightEvent completed;
@@ -60,7 +61,7 @@ int c3dglPlatformAcquire(void) {
     u16 width, height;
     if (!gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height) || width != 240 || height != 400)
         return -1;
-    queue = (gxCmdQueue_s){ .entries = entries, .maxEntries = 4, .callback = finish };
+    queue = (gxCmdQueue_s){ .entries = entries, .maxEntries = 32, .callback = finish };
     LightEvent_Init(&completed, RESET_STICKY);
     GX_BindQueue(&queue);
     atomic_store(&generation, 1);
@@ -98,8 +99,8 @@ int c3dglPlatformClearMasked(void *color, void *depth, u32 value, u32 depth_valu
 }
 
 int c3dglPlatformSubmit(void *commands, u32 bytes, void *color) {
-    /* Clear (optional), command list, transfer: at most three queue entries. */
-    if (queue.numEntries > 1) return -1;
+    /* Command list and transfer after what is queued (a clear, split lists and copies). */
+    if (queue.numEntries + 2 > queue.maxEntries) return -1;
     Result result = GX_ProcessCommandList(commands, bytes, GX_CMDLIST_FLUSH);
     if (R_FAILED(result)) return result;
     swap_on_finish = color != NULL;
@@ -114,6 +115,28 @@ int c3dglPlatformSubmit(void *commands, u32 bytes, void *color) {
     started = svcGetSystemTick();
     pending = true;
     gxCmdQueueRun(&queue);
+    return 0;
+}
+
+/* Queue the command list so far and a raw copy (GX texture copy) of `size` bytes in rows of `row_bytes`
+ * from `src` to `dst`, leaving `gap` bytes after each output row. Both run after the work queued before;
+ * nothing waits. The frame continues with a new command list. */
+int c3dglPlatformSplitCopy(void *commands, u32 bytes, void *src, void *dst, u32 row_bytes, u32 gap, u32 size) {
+    if (!acquired) return -2;
+    if (queue.numEntries + 4 > queue.maxEntries) return -1;
+    Result result = 0;
+    if (bytes) result = GX_ProcessCommandList(commands, bytes, GX_CMDLIST_FLUSH);
+    if (R_SUCCEEDED(result))
+        result = GX_TextureCopy((u32 *)src, GX_BUFFER_DIM(row_bytes >> 4, 0), (u32 *)dst,
+            GX_BUFFER_DIM(row_bytes >> 4, gap >> 4), size, GX_TRANSFER_RAW_COPY(1));
+    if (R_FAILED(result)) return result;
+    if (!pending) {
+        LightEvent_Clear(&completed);
+        swap_on_finish = false;
+        started = svcGetSystemTick();
+        pending = true;
+        gxCmdQueueRun(&queue);
+    }
     return 0;
 }
 

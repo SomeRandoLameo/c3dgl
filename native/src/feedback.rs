@@ -170,7 +170,7 @@ fn fvertex(c: &Ctx, v: &GpuVertex) -> FVertex {
     };
     FVertex {
         clip: transform(&c.pmv, v.position),
-        color: v.color.map(|b| b * (1. / 255.)),
+        color: v.color.map(|b| b as f32 * (1. / 255.)),
         tex,
     }
 }
@@ -309,12 +309,24 @@ unsafe fn line(s: &mut Select, c: &Ctx, a: &GpuVertex, b: &GpuVertex) {
 
 /// Filled polygon: Sutherland-Hodgman against the view volume.
 unsafe fn filled(s: &mut Select, c: &Ctx, vs: &[FVertex]) {
-    let mut poly = vs.to_vec();
+    // Copied only once a plane cuts the polygon.
+    let mut owned: Option<alloc::vec::Vec<FVertex>> = None;
     for p in 0..6 {
+        let poly = owned.as_deref().unwrap_or(vs);
         if poly.len() < 3 {
             break;
         }
         let n = poly.len();
+        let inside = poly
+            .iter()
+            .filter(|v| plane_distance(&v.clip, p) >= 0.)
+            .count();
+        if inside == n {
+            continue;
+        }
+        if inside == 0 {
+            return;
+        }
         let mut out = alloc::vec::Vec::new();
         let mut da = plane_distance(&poly[0].clip, p);
         for i in 0..n {
@@ -328,14 +340,12 @@ unsafe fn filled(s: &mut Select, c: &Ctx, vs: &[FVertex]) {
             }
             da = db;
         }
-        poly = out;
+        owned = Some(out);
     }
+    let poly = owned.as_deref().unwrap_or(vs);
     // Degenerate: collapsed onto the eye.
-    if poly.iter().any(|v| v.clip[3] <= 0.) {
-        poly.clear();
-    }
-    if poly.len() >= 3 {
-        primitive(s, c, 0x0703, &poly);
+    if poly.len() >= 3 && !poly.iter().any(|v| v.clip[3] <= 0.) {
+        primitive(s, c, 0x0703, poly);
     }
 }
 
@@ -421,65 +431,89 @@ pub(crate) unsafe fn draw(
             }
         }
         _ => {
-            let _ = polygon::visit(mode, v.len(), edges, c.flat, true, &mut |idx, flags, pv| {
-                let mut vs: alloc::vec::Vec<GpuVertex> = idx.iter().map(|i| v[*i]).collect();
-                let mut bs: alloc::vec::Vec<[f32; 4]> = if two_sided {
-                    idx.iter().map(|i| backs[*i]).collect()
-                } else {
-                    alloc::vec::Vec::new()
-                };
-                let mut flags = flags.to_vec();
-                let flat = pv.map(|i| (v[i].color, if two_sided { backs[i] } else { [0.; 4] }));
-                if c.clip.any() {
-                    let (a, b, e) = c.clip.polygon(&vs, &bs, &flags);
-                    if a.len() < 3 {
+            // Buffers reused by every polygon of the draw.
+            let (mut vs, mut bs, mut flags) = (
+                alloc::vec::Vec::<GpuVertex>::new(),
+                alloc::vec::Vec::<[f32; 4]>::new(),
+                alloc::vec::Vec::<bool>::new(),
+            );
+            let mut f = alloc::vec::Vec::<FVertex>::new();
+            let mut scratch = crate::clip::Scratch::default();
+            let _ = polygon::visit(
+                mode,
+                v.len(),
+                edges,
+                c.flat,
+                true,
+                &mut |idx, edge_flags, pv| {
+                    vs.clear();
+                    bs.clear();
+                    flags.clear();
+                    vs.extend(idx.iter().map(|i| v[*i]));
+                    if two_sided {
+                        bs.extend(idx.iter().map(|i| backs[*i]));
+                    }
+                    flags.extend_from_slice(edge_flags);
+                    let flat = pv.map(|i| {
+                        (
+                            v[i].color,
+                            if two_sided {
+                                backs[i].map(|c| c as u8)
+                            } else {
+                                [0; 4]
+                            },
+                        )
+                    });
+                    if c.clip.any() {
+                        c.clip
+                            .polygon_in_place(&mut vs, &mut bs, &mut flags, &mut scratch);
+                        if vs.len() < 3 {
+                            return Ok(());
+                        }
+                    }
+                    let front = (area(&c, &vs) > 0.) == c.front_ccw;
+                    if c.cull && (c.cull_face == 0x0408 || (c.cull_face == 0x0404) == front) {
                         return Ok(());
                     }
-                    (vs, bs, flags) = (a, b, e);
-                }
-                let front = (area(&c, &vs) > 0.) == c.front_ccw;
-                if c.cull && (c.cull_face == 0x0408 || (c.cull_face == 0x0404) == front) {
-                    return Ok(());
-                }
-                let back = two_sided && !front;
-                let shade = |k: usize| {
-                    let color = match flat {
-                        Some((f, b)) => {
-                            if back {
-                                b
-                            } else {
-                                f
+                    let back = two_sided && !front;
+                    let shade = |k: usize| {
+                        let color = match flat {
+                            Some((f, b)) => {
+                                if back {
+                                    b
+                                } else {
+                                    f
+                                }
                             }
-                        }
-                        None if back => bs[k],
-                        None => vs[k].color,
+                            None if back => bs[k].map(|c| c as u8),
+                            None => vs[k].color,
+                        };
+                        GpuVertex { color, ..vs[k] }
                     };
-                    GpuVertex { color, ..vs[k] }
-                };
-                let n = vs.len();
-                let shaded_vs: alloc::vec::Vec<GpuVertex> = (0..n).map(shade).collect();
-                match c.modes[if front { 0 } else { 1 }] {
-                    polygon::FILL => {
-                        let f: alloc::vec::Vec<FVertex> =
-                            shaded_vs.iter().map(|x| fvertex(&c, x)).collect();
-                        filled(s, &c, &f);
-                    }
-                    mode => {
-                        s.line_reset = true;
-                        for i in 0..n {
-                            if !flags[i] {
-                                continue;
-                            }
-                            if mode == polygon::LINE {
-                                line(s, &c, &shaded_vs[i], &shaded_vs[(i + 1) % n]);
-                            } else {
-                                point(s, &c, &shaded_vs[i]);
+                    let n = vs.len();
+                    match c.modes[if front { 0 } else { 1 }] {
+                        polygon::FILL => {
+                            f.clear();
+                            f.extend((0..n).map(|k| fvertex(&c, &shade(k))));
+                            filled(s, &c, &f);
+                        }
+                        mode => {
+                            s.line_reset = true;
+                            for i in 0..n {
+                                if !flags[i] {
+                                    continue;
+                                }
+                                if mode == polygon::LINE {
+                                    line(s, &c, &shade(i), &shade((i + 1) % n));
+                                } else {
+                                    point(s, &c, &shade(i));
+                                }
                             }
                         }
                     }
-                }
-                Ok(())
-            });
+                    Ok(())
+                },
+            );
         }
     }
 }

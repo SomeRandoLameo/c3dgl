@@ -1,7 +1,7 @@
 //! Depth/cull state in GL coordinates. PICA stores reversed window depth.
 use crate::renderer::with_frame;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Raster {
     pub dirty: bool,
     pub depth: bool,
