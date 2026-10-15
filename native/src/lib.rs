@@ -1,64 +1,64 @@
-#![cfg_attr(not(any(test, feature = "host-tests", feature = "rust3ds")), no_std)]
+#![cfg_attr(not(any(test, feature = "host-tests", feature = "rust3ds", feature = "host-bench")), no_std)]
 
 extern crate alloc;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod accum;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod arrays;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod attrib;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod blend;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod caps;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod clip;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod compat;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod evaluator;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod feedback;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod fog;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod frame;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod gpu;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod immediate;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod lighting;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod lines;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod lists;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod matrix;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod pixels;
 mod platform;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod points;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod polygon;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod primitive;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod raster;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod registers;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod renderer;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod shader;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod stipple;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod texgen;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod texture;
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 mod variants;
 
 /// PICA command encoding is independent of GPU services and memory allocation.
@@ -135,7 +135,7 @@ pub unsafe extern "C" fn c3dglNativeEncodeCommand(
     }
 }
 
-#[cfg(not(any(test, feature = "host-tests", feature = "rust3ds")))]
+#[cfg(not(any(test, feature = "host-tests", feature = "rust3ds", feature = "host-bench")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {

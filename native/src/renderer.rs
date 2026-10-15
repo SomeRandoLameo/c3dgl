@@ -73,10 +73,92 @@ impl Drop for Buffer {
     }
 }
 
+/// Linear memory for the geometry of one frame: bump allocated, flushed once before each command
+/// submission and reused once the GPU has finished the frame (no allocation in steady frames).
+pub(crate) struct Arena {
+    chunks: alloc::vec::Vec<Chunk>,
+    current: usize,
+}
+
+struct Chunk {
+    buffer: Buffer,
+    physical: u32,
+    size: usize,
+    used: usize,
+    flushed: usize,
+}
+
+const ARENA_CHUNK: usize = 128 * 1024;
+
+impl Arena {
+    fn new() -> Self {
+        Self {
+            chunks: alloc::vec::Vec::new(),
+            current: 0,
+        }
+    }
+
+    /// `size` bytes (16-byte aligned) valid until the frame's GPU work is done: the CPU address and
+    /// the physical address.
+    unsafe fn alloc(&mut self, size: usize) -> Result<(*mut u8, u32), u32> {
+        let size = (size + 15) & !15;
+        while self.current < self.chunks.len() {
+            let c = &mut self.chunks[self.current];
+            if c.size - c.used >= size {
+                let offset = c.used;
+                c.used += size;
+                return Ok((c.buffer.pointer.add(offset), c.physical + offset as u32));
+            }
+            if self.current + 1 == self.chunks.len() {
+                break;
+            }
+            self.current += 1;
+        }
+        let chunk_size = size.max(ARENA_CHUNK);
+        self.chunks.try_reserve(1).map_err(|_| 0x0505u32)?;
+        let buffer = Buffer::new(chunk_size, false).ok_or(0x0505u32)?;
+        let physical = buffer.physical();
+        self.chunks.push(Chunk {
+            buffer,
+            physical,
+            size: chunk_size,
+            used: size,
+            flushed: 0,
+        });
+        self.current = self.chunks.len() - 1;
+        let c = &self.chunks[self.current];
+        Ok((c.buffer.pointer, c.physical))
+    }
+
+    /// Write the bytes allocated since the last flush back from the CPU cache.
+    unsafe fn flush(&mut self) -> Result<(), u32> {
+        for c in &mut self.chunks {
+            if c.used > c.flushed {
+                if p::c3dglPlatformFlush(c.buffer.pointer.add(c.flushed), (c.used - c.flushed) as u32)
+                    < 0
+                {
+                    return Err(0x0502);
+                }
+                c.flushed = c.used;
+            }
+        }
+        Ok(())
+    }
+
+    /// The GPU no longer reads any of it.
+    fn reset(&mut self) {
+        for c in &mut self.chunks {
+            c.used = 0;
+            c.flushed = 0;
+        }
+        self.current = 0;
+    }
+}
+
 pub(crate) struct Renderer {
     pub(crate) arrays: crate::arrays::Arrays,
     pub(crate) immediate: crate::immediate::Immediate,
-    transient: alloc::vec::Vec<Buffer>,
+    arena: Arena,
     pub(crate) frame: FrameState,
     work_wait_ticks: u64,
     work_gpu_ticks: u64,
@@ -219,6 +301,10 @@ pub unsafe fn clear_gl(mask: u32) {
         }
 
         r.used = commands.used;
+        if let Err(e) = r.arena.flush() {
+            r.matrices.fail(e);
+            return;
+        }
         let wait = p::c3dglPlatformTick();
         if p::c3dglPlatformSubmit(r.commands.pointer, (r.used * 4) as u32, ptr::null_mut()) < 0 {
             r.matrices.fail(0x0502);
@@ -327,6 +413,7 @@ unsafe fn sync_frame(r: &mut Renderer) -> Result<(), u32> {
         return Err(0x0505);
     }
     r.used = commands.used;
+    r.arena.flush()?;
     let wait = p::c3dglPlatformTick();
     if p::c3dglPlatformSubmit(r.commands.pointer, (r.used * 4) as u32, ptr::null_mut()) < 0 {
         return Err(0x0502);
@@ -608,7 +695,7 @@ impl Renderer {
         }
         core::ptr::addr_of_mut!((*slot).arrays).write(crate::arrays::Arrays::new());
         core::ptr::addr_of_mut!((*slot).immediate).write(crate::immediate::Immediate::new());
-        core::ptr::addr_of_mut!((*slot).transient).write(alloc::vec::Vec::new());
+        core::ptr::addr_of_mut!((*slot).arena).write(Arena::new());
         core::ptr::addr_of_mut!((*slot).frame).write(FrameState::new());
         core::ptr::addr_of_mut!((*slot).work_wait_ticks).write(0);
         core::ptr::addr_of_mut!((*slot).work_gpu_ticks).write(0);
@@ -785,7 +872,7 @@ unsafe fn begin_frame(r: &mut Renderer, sync: bool, clear: Option<u32>) -> i32 {
     r.stats.gpu_ticks = p::c3dglPlatformWait();
     r.arrays.collected();
     r.frame.textures.collected();
-    r.transient.clear();
+    r.arena.reset();
 
     if sync {
         p::c3dglPlatformVblank();
@@ -1090,6 +1177,9 @@ pub unsafe extern "C" fn c3dglNativePresent() -> i32 {
 
     r.used = commands.used;
 
+    if r.arena.flush().is_err() {
+        return -3;
+    }
     let result = p::c3dglPlatformSubmit(r.commands.pointer, (r.used * 4) as u32, r.color.pointer);
 
     r.active = false;
@@ -1583,9 +1673,11 @@ mod lifecycle_tests {
                     glEnd();
                     assert_eq!(glGetError(), 0);
                     with_immediate(|r| {
-                        assert_eq!(r.transient.len(), 1);
-                        let v =
-                            slice::from_raw_parts(r.transient[0].pointer.cast::<GpuVertex>(), 3);
+                        assert_eq!(r.arena.chunks.len(), 1);
+                        let v = slice::from_raw_parts(
+                            r.arena.chunks[0].buffer.pointer.cast::<GpuVertex>(),
+                            3,
+                        );
                         assert_eq!(v[0].color, [255., 0., 0., 255.]);
                         assert_eq!(v[0].texcoord, [0.25, 0.75, 0., 1.]);
                         assert_eq!(v[1].texcoord, [0.5, 1., 0., 1.]);
@@ -1593,9 +1685,9 @@ mod lifecycle_tests {
                         assert_eq!(v[2].color, [0., 0., 255., 255.]);
                     });
                     assert_eq!(c3dglNativePresent(), 0);
-                    with_immediate(|r| assert_eq!(r.transient.len(), 1));
+                    with_immediate(|r| assert_ne!(r.arena.chunks[0].used, 0));
                     assert_eq!(c3dglNativeBegin(0xff, false), 0);
-                    with_immediate(|r| assert!(r.transient.is_empty()));
+                    with_immediate(|r| assert_eq!(r.arena.chunks[0].used, 0));
                     assert_eq!(c3dglNativePresent(), 0);
                     glEnd();
                     assert_eq!(glGetError(), 0x0502);
@@ -1706,6 +1798,10 @@ unsafe fn texgen_vertices(r: &mut Renderer, vertices: &mut [GpuVertex], normals:
         return;
     }
     let mv = r.matrices.modelview();
+    let textures: [[f32; 16]; 3] = core::array::from_fn(|u| r.matrices.texture_for(u));
+    let transforms = r.frame.texgen.prepare(&mv, &textures);
+    let enabled = r.frame.texgen.enabled_units();
+    let light = &mut r.frame.light;
     for (v, n) in vertices.iter_mut().zip(normals) {
         let p = if v.position[3] != 1. && v.position[3] != 0. {
             let w = v.position[3];
@@ -1714,7 +1810,15 @@ unsafe fn texgen_vertices(r: &mut Renderer, vertices: &mut [GpuVertex], normals:
             v.position
         };
         let (mut tex, mut extra) = (v.texcoord, v.extra_texcoords);
-        texgen_vertex(r, &mv, p, *n, &mut tex, &mut extra);
+        crate::texgen::apply(
+            &transforms,
+            enabled,
+            &mv,
+            p,
+            || light.eye_normal_of(&mv, *n),
+            &mut tex,
+            &mut extra,
+        );
         v.texcoord = tex;
         v.extra_texcoords = extra;
     }
@@ -1832,26 +1936,21 @@ unsafe fn draw_transient(
     clip: bool,
     bias: f32,
 ) -> Result<(), u32> {
-    r.transient.try_reserve(1).map_err(|_| 0x0505u32)?;
     let bytes = vertices.len() * core::mem::size_of::<GpuVertex>();
     let total = bytes + indices.len() * 2;
-    let storage = Buffer::new(total, false).ok_or(0x0505u32)?;
-    ptr::copy_nonoverlapping(vertices.as_ptr().cast::<u8>(), storage.pointer, bytes);
+    let (pointer, physical) = r.arena.alloc(total)?;
+    ptr::copy_nonoverlapping(vertices.as_ptr().cast::<u8>(), pointer, bytes);
     ptr::copy_nonoverlapping(
         indices.as_ptr().cast::<u8>(),
-        storage.pointer.add(bytes),
+        pointer.add(bytes),
         indices.len() * 2,
     );
-
-    if p::c3dglPlatformFlush(storage.pointer, total as u32) < 0 {
-        return Err(0x0502);
-    }
 
     update_draw_state(r, clip, bias).map_err(|_| 0x0505u32)?;
     let mut c = r.commands();
     gpu::geometry(
         &mut c,
-        storage.physical(),
+        physical,
         0,
         count,
         (!indices.is_empty()).then_some(bytes as u32 | 0x80000000),
@@ -1859,7 +1958,6 @@ unsafe fn draw_transient(
     .map_err(|_| 0x0505u32)?;
 
     r.used = c.used;
-    r.transient.push(storage);
     r.frame.textures.sampled();
     r.draws += 1;
 
@@ -1868,8 +1966,11 @@ unsafe fn draw_transient(
 
 pub(crate) unsafe fn end_immediate() {
     with_immediate(|r| {
+        let batch = match r.immediate.end() {
+            Ok(b) => b,
+            Err(e) => return r.matrices.fail(e),
+        };
         let result = (|| -> Result<(), u32> {
-            let batch = r.immediate.end()?;
             if batch.count == 0 {
                 return Ok(());
             }
@@ -1915,6 +2016,8 @@ pub(crate) unsafe fn end_immediate() {
 
             draw_transient(r, &batch.vertices, &batch.indices, batch.count, false, 0.)
         })();
+        // The vertex storage is reused by the next glBegin.
+        r.immediate.recycle(batch);
 
         if let Err(e) = result {
             r.matrices.fail(e);

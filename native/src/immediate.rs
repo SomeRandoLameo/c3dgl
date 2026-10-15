@@ -108,6 +108,22 @@ impl Immediate {
         Ok(())
     }
 
+    /// Take back the storage of a drawn batch (no allocation for the next glBegin).
+    pub fn recycle(&mut self, batch: Batch) {
+        if self.vertices.capacity() < batch.vertices.capacity() {
+            self.vertices = batch.vertices;
+            self.vertices.clear();
+        }
+        if self.edges.capacity() < batch.edges.capacity() {
+            self.edges = batch.edges;
+            self.edges.clear();
+        }
+        if self.backs.capacity() < batch.backs.capacity() {
+            self.backs = batch.backs;
+            self.backs.clear();
+        }
+    }
+
     pub fn end(&mut self) -> Result<Batch, u32> {
         if !self.active {
             return Err(0x0502);

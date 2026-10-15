@@ -173,6 +173,8 @@ pub(crate) struct Lists {
 
 impl Lists {
     pub fn new() -> Self {
+        // A new context compiles nothing.
+        unsafe { COMPILING = false };
         Self {
             lists: Vec::new(),
             compiling: None,
@@ -201,9 +203,47 @@ impl Lists {
     }
 }
 
+/// Whether a list is being compiled (mirrors `Lists::compiling`): every GL call asks, so the
+/// common case must not build its command or look up the context.
+static mut COMPILING: bool = false;
+
 /// Record `cmd` if a list is being compiled. True: the call is done (GL_COMPILE); false: the
 /// caller executes it (not compiling, or GL_COMPILE_AND_EXECUTE).
+#[inline(always)]
 pub(crate) unsafe fn record(cmd: Cmd) -> bool {
+    if !COMPILING {
+        // Commands without heap data need no drop: at an inlined call site with a known variant
+        // this folds away the drop glue of the whole enum.
+        if cmd.owns_heap() {
+            drop(cmd);
+        } else {
+            core::mem::forget(cmd);
+        }
+        return false;
+    }
+    record_slow(cmd)
+}
+
+impl Cmd {
+    #[inline(always)]
+    fn owns_heap(&self) -> bool {
+        matches!(
+            self,
+            Cmd::PixelMap(..)
+                | Cmd::Bitmap { .. }
+                | Cmd::DrawPixels { .. }
+                | Cmd::PolygonStipple(..)
+                | Cmd::PrioritizeTextures(..)
+                | Cmd::TexImage { .. }
+                | Cmd::CompressedTexImage { .. }
+                | Cmd::Map { .. }
+                | Cmd::CallLists(..)
+        )
+    }
+}
+
+#[inline(never)]
+unsafe fn record_slow(cmd: Cmd) -> bool {
     let mut done = false;
     with_immediate(|r| {
         if let Some(c) = &mut r.frame.lists.compiling {
@@ -225,9 +265,7 @@ pub(crate) unsafe fn record_error(code: u32) -> bool {
 }
 
 pub(crate) unsafe fn compiling() -> bool {
-    let mut c = false;
-    with_immediate(|r| c = r.frame.lists.is_compiling());
-    c
+    COMPILING
 }
 
 unsafe fn execute(cmd: &Cmd) {
@@ -552,6 +590,7 @@ pub unsafe extern "C" fn glNewList(list: u32, mode: u32) {
             mode,
             cmds: Vec::new(),
         });
+        COMPILING = true;
     });
 }
 
@@ -563,6 +602,7 @@ pub unsafe extern "C" fn glEndList() {
             r.matrices.fail(0x0502);
             return;
         };
+        COMPILING = false;
         let cmds = Rc::new(c.cmds);
         match l.find(c.name) {
             Ok(i) => l.lists[i].1 = cmds,

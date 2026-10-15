@@ -1,6 +1,6 @@
 //! Retained libctru services and GPU-visible linear/VRAM storage.
 //! C/C++ uses the platform allocator; rust3ds uses its application std allocator.
-#[cfg(not(any(test, feature = "host-tests", feature = "rust3ds")))]
+#[cfg(not(any(test, feature = "host-tests", feature = "rust3ds", feature = "host-bench")))]
 mod runtime {
     use core::alloc::{GlobalAlloc, Layout};
 
@@ -23,7 +23,7 @@ mod runtime {
     static ALLOCATOR: PlatformAllocator = PlatformAllocator;
 }
 
-#[cfg(any(target_os = "horizon", test))]
+#[cfg(any(target_os = "horizon", test, feature = "host-bench"))]
 pub mod gpu {
     extern "C" {
         pub fn c3dglPlatformLinearAllocate(size: usize) -> *mut u8;

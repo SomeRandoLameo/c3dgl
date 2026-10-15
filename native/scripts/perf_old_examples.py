@@ -23,15 +23,20 @@ parser.add_argument('--output', type=Path, default=Path('docs/native-results/per
 parser.add_argument('--case', action='append', choices=ALL)
 parser.add_argument('--runs', type=int, default=1)
 parser.add_argument('--timeout', type=float, default=300)
+parser.add_argument('--backend', action='append', choices=['reference', 'native'])
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[2]
 args.output.mkdir(parents=True, exist_ok=True)
 pattern = re.compile(r'perf case=(\S+) backend=(\S+) frames=(\d+) CPU ([\d.]+) GPU ([\d.]+) total ([\d.]+) cmd ([\d.]+)')
+previous = json.loads((args.output / 'summary.json').read_text()) if (args.output / 'summary.json').exists() else {}
 results = {}
 for case in args.case or ALL:
     entry = results.setdefault(case, {'reference': [], 'native': []})
+    for backend in ['reference', 'native']:
+        if args.backend and backend not in args.backend:
+            entry[backend] = previous.get(case, {}).get(backend, [])
     for run in range(args.runs):
-        for backend in ['reference', 'native']:
+        for backend in args.backend or ['reference', 'native']:
             rom = args.build / f'perf_{case}_{backend}.3dsx'
             destination = args.output / case / f'{backend}-{run}'
             subprocess.run([sys.executable, str(root / 'native/scripts/smoke_check.py'), '--emulator', args.emulator,

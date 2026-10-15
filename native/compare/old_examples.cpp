@@ -93,7 +93,9 @@
 // explicit GPU/VBlank waiting, GPU time the renderer's own figure (not modelled by Azahar).
 #include <3ds.h>
 #define PERF_WARMUP 30
+#ifndef PERF_SAMPLES
 #define PERF_SAMPLES 120
+#endif
 static double perfCpu,perfGpu,perfTotal,perfCmd;
 static unsigned perfCount;
 static bool perfFailed;

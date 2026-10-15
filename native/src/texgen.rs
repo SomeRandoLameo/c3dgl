@@ -206,43 +206,68 @@ impl TexGen {
         mv: &[f32; 16],
         textures: &[[f32; 16]; 3],
         position: [f32; 4],
-        mut eye_normal: impl FnMut() -> [f32; 3],
+        eye_normal: impl FnMut() -> [f32; 3],
         tex: &mut [f32; 4],
         extra: &mut [[f32; 4]; 2],
     ) {
         let transforms = self.transforms(mv, textures);
-        let mut sphere = None;
-        let p = position;
-        for unit in 0..3 {
-            if self.units[unit].enabled == 0 {
-                continue;
-            }
-            let x = &transforms[unit];
-            let tc: &mut [f32; 4] = if unit == 0 { tex } else { &mut extra[unit - 1] };
-            let mut out = [0f32; 3];
+        let enabled = self.enabled_units();
+        apply(&transforms, enabled, mv, position, eye_normal, tex, extra);
+    }
+
+    /// The units with generation, bit per unit.
+    pub fn enabled_units(&self) -> u8 {
+        (0..3).fold(0, |m, u| m | ((self.units[u].enabled != 0) as u8) << u)
+    }
+
+    /// The per-unit transforms of the current state, once per draw (see `apply`).
+    pub fn prepare(&mut self, mv: &[f32; 16], textures: &[[f32; 16]; 3]) -> [Transform; 3] {
+        self.transforms(mv, textures)
+    }
+}
+
+/// Generate the coordinates of the `enabled` units with transforms from `TexGen::prepare`.
+#[inline]
+pub(crate) fn apply(
+    transforms: &[Transform; 3],
+    enabled: u8,
+    mv: &[f32; 16],
+    position: [f32; 4],
+    mut eye_normal: impl FnMut() -> [f32; 3],
+    tex: &mut [f32; 4],
+    extra: &mut [[f32; 4]; 2],
+) {
+    let mut sphere = None;
+    let p = position;
+    for unit in 0..3 {
+        if enabled >> unit & 1 == 0 {
+            continue;
+        }
+        let x = &transforms[unit];
+        let tc: &mut [f32; 4] = if unit == 0 { tex } else { &mut extra[unit - 1] };
+        let mut out = [0f32; 3];
+        for i in 0..3 {
+            out[i] = x.gen[i][0] * p[0] + x.gen[i][1] * p[1] + x.gen[i][2] * p[2] + x.gen[i][3];
+        }
+        if x.uses_pass {
+            let input = [tc[0], tc[1], tc[3]];
             for i in 0..3 {
-                out[i] = x.gen[i][0] * p[0] + x.gen[i][1] * p[1] + x.gen[i][2] * p[2] + x.gen[i][3];
+                out[i] +=
+                    x.pass[i][0] * input[0] + x.pass[i][1] * input[1] + x.pass[i][2] * input[2];
             }
-            if x.uses_pass {
-                let input = [tc[0], tc[1], tc[3]];
-                for i in 0..3 {
-                    out[i] +=
-                        x.pass[i][0] * input[0] + x.pass[i][1] * input[1] + x.pass[i][2] * input[2];
-                }
+        }
+        if x.uses_sphere {
+            let s = *sphere.get_or_insert_with(|| sphere_map(mv, position, eye_normal()));
+            for i in 0..3 {
+                out[i] += x.sphere[i][0] * s[0] + x.sphere[i][1] * s[1];
             }
-            if x.uses_sphere {
-                let s = *sphere.get_or_insert_with(|| sphere_map(mv, position, eye_normal()));
-                for i in 0..3 {
-                    out[i] += x.sphere[i][0] * s[0] + x.sphere[i][1] * s[1];
-                }
-            }
-            tc[0] = out[0];
-            tc[1] = out[1];
-            tc[3] = out[2];
-            if unit == 0 {
-                // Not generated.
-                tc[2] = 0.;
-            }
+        }
+        tc[0] = out[0];
+        tc[1] = out[1];
+        tc[3] = out[2];
+        if unit == 0 {
+            // Not generated.
+            tc[2] = 0.;
         }
     }
 }
