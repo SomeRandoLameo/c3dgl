@@ -10,7 +10,11 @@ mod attrib;
 #[cfg(any(target_os = "horizon", test))]
 mod blend;
 #[cfg(any(target_os = "horizon", test))]
+mod caps;
+#[cfg(any(target_os = "horizon", test))]
 mod clip;
+#[cfg(any(target_os = "horizon", test))]
+mod compat;
 #[cfg(any(target_os = "horizon", test))]
 mod evaluator;
 #[cfg(any(target_os = "horizon", test))]
@@ -34,6 +38,8 @@ mod matrix;
 #[cfg(any(target_os = "horizon", test))]
 mod pixels;
 mod platform;
+#[cfg(any(target_os = "horizon", test))]
+mod points;
 #[cfg(any(target_os = "horizon", test))]
 mod polygon;
 #[cfg(any(target_os = "horizon", test))]

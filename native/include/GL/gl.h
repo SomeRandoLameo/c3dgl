@@ -138,6 +138,33 @@ void glRasterPos2f(GLfloat x, GLfloat y);
 void glRasterPos2i(GLint x, GLint y);
 void glRasterPos3f(GLfloat x, GLfloat y, GLfloat z);
 void glRasterPos4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+#define GL_POINT_SPRITE_OES 0x8861
+#define GL_COORD_REPLACE_OES 0x8862
+#define GL_POINT_SIZE_MIN 0x8126
+#define GL_POINT_SIZE_MAX 0x8127
+#define GL_POINT_FADE_THRESHOLD_SIZE 0x8128
+#define GL_POINT_DISTANCE_ATTENUATION 0x8129
+#define GL_ALIASED_POINT_SIZE_RANGE 0x846d
+#define GL_POINT_SIZE_ARRAY_OES 0x8b9c
+#define GL_POINT_SIZE_ARRAY_TYPE_OES 0x898a
+#define GL_POINT_SIZE_ARRAY_STRIDE_OES 0x898b
+#define GL_POINT_SIZE_ARRAY_POINTER_OES 0x898c
+#define GL_POINT_SIZE_ARRAY_BUFFER_BINDING_OES 0x8b9f
+typedef int GLfixed;
+void glPointParameterf(GLenum pname, GLfloat param);
+void glPointParameterfv(GLenum pname, const GLfloat *params);
+void glPointParameteri(GLenum pname, GLint param);
+void glPointParameteriv(GLenum pname, const GLint *params);
+void glPointParameterx(GLenum pname, GLfixed param);
+void glPointParameterxv(GLenum pname, const GLfixed *params);
+void glPointSizePointerOES(GLenum type, GLsizei stride, const GLvoid *pointer);
+void glGetPointerv(GLenum pname, GLvoid **params);
+void glGetFixedv(GLenum pname, GLfixed *params);
+void glGetTexEnviv(GLenum target, GLenum pname, GLint *params);
+void glGetTexEnvxv(GLenum target, GLenum pname, GLfixed *params);
+void glTexEnvx(GLenum target, GLenum pname, GLfixed param);
+void glOrthof(GLfloat l, GLfloat r, GLfloat b, GLfloat t, GLfloat n, GLfloat f);
+void glFrustumf(GLfloat l, GLfloat r, GLfloat b, GLfloat t, GLfloat n, GLfloat f);
 void glAccum(GLenum op, GLfloat value);
 void glClearAccum(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
 void glDrawBuffer(GLenum mode);

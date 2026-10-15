@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "ae6c3d1dc2ccc00331f5d314892a3116b9a5b9f83c981be16defde786060e836",
+  "images": {
+    "c3dgl-old-points-reference.ppm": "d1ed802a415f533878ac9d4bf8ea37f6f06bec46b3afa12fdb47cf998dade878"
+  },
+  "process_exit": -9
+}

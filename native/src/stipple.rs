@@ -86,7 +86,12 @@ unsafe fn unpack(mask: *const u8) -> [u8; 128] {
         for x in 0..32 {
             let col = store.skip_pixels + x;
             let byte = mask.add((store.skip_rows + y) * row_bytes + col / 8).read();
-            if (byte << (col & 7)) & 0x80 != 0 {
+            let bit = if store.lsb_first {
+                byte >> (col & 7) & 1 != 0
+            } else {
+                (byte << (col & 7)) & 0x80 != 0
+            };
+            if bit {
                 out[4 * y + x / 8] |= 0x80 >> (x & 7);
             }
         }
@@ -123,7 +128,11 @@ pub unsafe extern "C" fn glGetPolygonStipple(mask: *mut u8) {
         let row = mask.add((store.skip_rows + y) * row_bytes);
         for x in 0..32 {
             let col = store.skip_pixels + x;
-            let bit = 0x80u8 >> (col & 7);
+            let bit = if store.lsb_first {
+                1u8 << (col & 7)
+            } else {
+                0x80u8 >> (col & 7)
+            };
             let p = row.add(col / 8);
             if (pattern[4 * y + x / 8] << (x & 7)) & 0x80 != 0 {
                 p.write(p.read() | bit);

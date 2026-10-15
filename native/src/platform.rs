@@ -38,6 +38,12 @@ pub mod gpu {
         pub fn c3dglPlatformWait() -> u64;
         pub fn c3dglPlatformReadback(pixels: *mut u8, capacity: u32) -> i32;
         pub fn c3dglPlatformReadColor(color: *mut u8, line0: u32, lines: u32, out: *mut u8) -> i32;
+        pub fn c3dglPlatformWriteLines(
+            target: *mut u8,
+            line0: u32,
+            lines: u32,
+            input: *mut u8,
+        ) -> i32;
         pub fn c3dglPlatformGeneration() -> u32;
         pub fn c3dglPlatformVblank();
         pub fn c3dglPlatformClear(color: *mut u8, depth: *mut u8, value: u32, bytes: u32) -> i32;

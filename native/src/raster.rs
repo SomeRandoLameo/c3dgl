@@ -237,6 +237,16 @@ unsafe fn enable(cap: u32, on: bool) {
         });
         return;
     }
+    if cap == 0x8861 {
+        with_frame(|s, _| s.points.sprite = on);
+        return;
+    }
+    if crate::caps::Caps::new().is_enabled(cap).is_some() {
+        with_frame(|s, _| {
+            s.caps.set(cap, on);
+        });
+        return;
+    }
     if cap == 0x0de1 || cap == 0x0de0 {
         with_frame(|s, _| {
             if cap == 0x0de1 {
@@ -322,6 +332,7 @@ unsafe fn enable(cap: u32, on: bool) {
                 &mut r.stencil
             }
             0x0be2 => &mut r.blend.enabled,
+            0x0bf2 => &mut r.blend.logic,
             _ => {
                 m.fail(0x0500);
                 return;
@@ -345,31 +356,46 @@ pub unsafe extern "C" fn glDisable(cap: u32) {
     enable(cap, false);
 }
 
+/// The enable state of a capability (glIsEnabled, glGet of a capability); None for an unknown one.
+pub(crate) fn enabled(
+    s: &crate::frame::FrameState,
+    arrays: &crate::arrays::Arrays,
+    cap: u32,
+) -> Option<bool> {
+    if let Some(on) = arrays.is_enabled(cap).or(s.caps.is_enabled(cap)) {
+        return Some(on);
+    }
+    if let Some(on) = s.light.is_enabled(cap) {
+        return Some(on);
+    }
+    Some(match cap {
+        0x8861 => s.points.sprite,
+        0x0b71 => s.raster.depth,
+        0x0b44 => s.raster.cull,
+        0x0bc0 => s.raster.alpha,
+        0x0c11 => s.raster.scissor,
+        0x0b90 => s.raster.stencil,
+        0x8037 | 0x2a02 | 0x2a01 => s.poly.offset[crate::frame::offset_index(cap)],
+        0x0d80 | 0x0d90..=0x0d98 | 0x0db0..=0x0db8 => s.eval.is_enabled(cap).unwrap_or(false),
+        0x0be2 => s.raster.blend.enabled,
+        0x0bf2 => s.raster.blend.logic,
+        0x0de1 => s.textures.enabled(),
+        0x0de0 => s.textures.enabled_1d(),
+        0x0b24 | 0x0b42 => s.stipple.is_enabled(cap).unwrap_or(false),
+        0x0b60 => s.fog.enabled,
+        0x3000..=0x3005 => s.clip.enabled >> (cap - 0x3000) & 1 != 0,
+        0x0c60..=0x0c63 => s.texgen.units[s.textures.active].enabled >> (cap - 0x0c60) & 1 != 0,
+        _ => return None,
+    })
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn glIsEnabled(cap: u32) -> u8 {
     let mut result = 0;
-    with_frame(|s, m| {
-        result = match cap {
-            0x0b71 => s.raster.depth as u8,
-            0x0b44 => s.raster.cull as u8,
-            0x0bc0 => s.raster.alpha as u8,
-            0x0c11 => s.raster.scissor as u8,
-            0x0b90 => s.raster.stencil as u8,
-            0x8037 | 0x2a02 | 0x2a01 => s.poly.offset[crate::frame::offset_index(cap)] as u8,
-            0x0d80 | 0x0d90..=0x0d98 | 0x0db0..=0x0db8 => {
-                s.eval.is_enabled(cap).unwrap_or(false) as u8
-            }
-            0x0be2 => s.raster.blend.enabled as u8,
-            0x0de1 => s.textures.enabled() as u8,
-            0x0de0 => s.textures.enabled_1d() as u8,
-            0x0b24 | 0x0b42 => s.stipple.is_enabled(cap).unwrap_or(false) as u8,
-            _ => {
-                m.fail(0x0500);
-                0
-            }
-        };
+    crate::renderer::with_renderer(|r| match enabled(&r.frame, &r.arrays, cap) {
+        Some(on) => result = on as u8,
+        None => r.matrices.fail(0x0500),
     });
-
     result
 }
 

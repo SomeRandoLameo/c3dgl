@@ -462,3 +462,22 @@ GL_INVALID_OPERATION: depth and stencil images (`GL_DEPTH_COMPONENT`, `GL_STENCI
 LSB-first order. The original pixels example keeps `setupScene()` and `drawFrame()` (extracted
 unchanged): its frame and all 24 other scenes match the C framebuffer exactly
 (`native-results/pixels-step/`). Host tests: 54 pass.
+
+
+## Points and OpenGL ES compatibility checkpoint
+
+Point parameters (`glPointParameter{f,fv,i,iv,x,xv}`: size limits, fade threshold, distance
+attenuation), point sprites (`GL_POINT_SPRITE_OES`, per-unit `GL_COORD_REPLACE_OES` through
+`glTexEnv*`, the sprite coordinates run from (0, 0) at the top left to (1, 1) at the bottom right
+and bypass the texture matrix and texture generation, unit 0 is not projective) and the point size
+array (`glPointSizePointerOES`, `GL_FLOAT` and `GL_FIXED`, buffer objects, client attribute stack)
+are implemented. Points are still expanded on the CPU (`lines::point`: size from the array or
+glPointSize, attenuation by the eye distance, clamped to the parameters and to 1..256). The array
+state (size, type, stride, buffer binding, enable flags, `glGetPointerv`) is queryable.
+`compat.rs` adds the rest of the OpenGL ES 1.1 float and fixed-point API as thin wrappers
+(`glOrthof`, `glFrustumf`, every `...x`/`...xv` function, `glGetFixedv`, `glGetTexEnv{fv,xv}`,
+`glTexParameter{f,fv,iv,x,xv}`, `glTexEnviv`, the `glMultiTexCoord*` family) plus `glSampleCoverage`
+(stored, no effect without multisampling). The original points example keeps `setupScene()` and
+`drawFrame()` (extracted unchanged): all of its own checks pass on the native renderer and its
+frame matches the C framebuffer exactly, as do all earlier scenes (`native-results/points-step/`).
+Host tests: 54 pass.

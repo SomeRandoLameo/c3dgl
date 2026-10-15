@@ -25,6 +25,10 @@ pub struct FrameState {
     pub stipple: crate::stipple::Stipple,
     pub accum: crate::accum::Accum,
     pub pixels: crate::pixels::Pixels,
+    pub points: crate::points::Points,
+    pub caps: crate::caps::Caps,
+    /// glSampleCoverage value and invert flag.
+    pub sample_coverage: [f32; 2],
     pub texgen: crate::texgen::TexGen,
     pub light: crate::lighting::Lighting,
     pub eval: crate::evaluator::Evaluators,
@@ -53,6 +57,9 @@ impl FrameState {
             stipple: crate::stipple::Stipple::new(),
             accum: crate::accum::Accum::new(),
             pixels: crate::pixels::Pixels::new(),
+            points: crate::points::Points::new(),
+            caps: crate::caps::Caps::new(),
+            sample_coverage: [1., 0.],
             texgen: crate::texgen::TexGen::new(),
             light: crate::lighting::Lighting::new(),
             eval: crate::evaluator::Evaluators::new(),
@@ -258,14 +265,39 @@ pub unsafe extern "C" fn glClear(mask: u32) {
     clear_gl(mask);
 }
 
+/// GL_COMPRESSED_TEXTURE_FORMATS: the paletted formats of GL_OES_compressed_paletted_texture and ETC1.
+const COMPRESSED_FORMATS: [u32; 11] = [
+    0x8b90, 0x8b91, 0x8b92, 0x8b93, 0x8b94, 0x8b95, 0x8b96, 0x8b97, 0x8b98, 0x8b99, 0x8d64,
+];
+
+/// Queries whose integer form maps [0, 1] to [0, INT_MAX]: colors and depths.
+fn normalized(pname: u32) -> bool {
+    matches!(
+        pname,
+        0x0b00 | 0x0b04 | 0x0b70 | 0x0b73 | 0x0b80 | 0x0bc2 | 0x0c22 | 0x0b66 | 0x0b53 | 0x8005
+    )
+}
+
 fn query(
     s: &FrameState,
     m: &Matrices,
     imm: &crate::immediate::Immediate,
+    arrays: &crate::arrays::Arrays,
+    stacks: &crate::attrib::Stacks,
     pname: u32,
 ) -> Option<([f64; 16], usize)> {
     if let Some(v) = current_query(imm, pname) {
         return Some(v);
+    }
+    if let Some(x) = arrays.query(pname) {
+        let mut v = [0.; 16];
+        v[0] = x;
+        return Some((v, 1));
+    }
+    if let Some(on) = crate::raster::enabled(s, arrays, pname) {
+        let mut v = [0.; 16];
+        v[0] = on as u8 as f64;
+        return Some((v, 1));
     }
     if let Some(v) = s.light.query(pname) {
         return Some(v);
@@ -283,6 +315,14 @@ fn query(
     }
     if let Some(v) = s.pixels.query(pname) {
         return Some(v);
+    }
+    if let Some(v) = s.points.query(pname) {
+        return Some(v);
+    }
+    if matches!(pname, 0x80aa | 0x80ab) {
+        let mut v = [0.; 16];
+        v[0] = s.sample_coverage[(pname - 0x80aa) as usize] as f64;
+        return Some((v, 1));
     }
     if let Some(x) = s.stipple.query(pname) {
         let mut v = [0.; 16];
@@ -378,6 +418,54 @@ fn query(
             2
         }
 
+        0x0bb0 | 0x0bb1 => {
+            let (a, c) = stacks.depths();
+            v[0] = if pname == 0x0bb0 { a } else { c } as f64;
+            1
+        }
+        // Attribute stack depth.
+        0x0d35 | 0x0d3b => {
+            v[0] = crate::attrib::DEPTH as f64;
+            1
+        }
+        // The render target: RGBA8 color, D24S8 depth and stencil, double buffered, no stereo or
+        // auxiliary buffers, no sample buffers.
+        0x0d52..=0x0d55 => {
+            v[0] = 8.;
+            1
+        }
+        0x0d56 => {
+            v[0] = 24.;
+            1
+        }
+        0x0d57 => {
+            v[0] = 8.;
+            1
+        }
+        0x0c00 | 0x0c33 | 0x80a8 | 0x80a9 => 1,
+        0x0c32 => {
+            v[0] = 1.;
+            1
+        }
+        0x8b9a => {
+            v[0] = 0x1401 as f64;
+            1
+        }
+        0x8b9b => {
+            v[0] = 0x1908 as f64;
+            1
+        }
+        0x86a2 => {
+            v[0] = COMPRESSED_FORMATS.len() as f64;
+            1
+        }
+        0x86a3 => {
+            for (o, f) in v.iter_mut().zip(COMPRESSED_FORMATS) {
+                *o = f as f64;
+            }
+            COMPRESSED_FORMATS.len()
+        }
+
         _ => return m.query(pname).map(|(v, n)| (v.map(|x| x as f64), n)),
     };
 
@@ -392,10 +480,26 @@ pub unsafe extern "C" fn glGetString(name: u32) -> *const u8 {
         0x1f01 => b"PICA200 (native)\0".as_ptr(),
         0x1f02 => b"1.1 c3dgl\0".as_ptr(),
         0x1f03 => {
-            b"GL_OES_compressed_paletted_texture GL_OES_compressed_ETC1_RGB8_texture\0".as_ptr()
+            b"GL_OES_point_sprite GL_OES_point_size_array GL_OES_compressed_paletted_texture GL_OES_compressed_ETC1_RGB8_texture\0".as_ptr()
         }
         _ => b"\0".as_ptr(),
     }
+}
+
+/// The values of a state query and their number (glGetFixedv).
+pub(crate) unsafe fn state_values(pname: u32) -> Option<([f64; 16], usize)> {
+    let mut result = None;
+    with_renderer(|r| {
+        result = query(
+            &r.frame,
+            &r.matrices,
+            &r.immediate,
+            &r.arrays,
+            &r.stacks,
+            pname,
+        );
+    });
+    result
 }
 
 #[no_mangle]
@@ -407,7 +511,7 @@ pub unsafe extern "C" fn glGetFloatv(pname: u32, out: *mut f32) {
             return;
         }
 
-        match query(s, m, imm, pname) {
+        match query(s, m, imm, &r.arrays, &r.stacks, pname) {
             Some((v, n)) => {
                 for (i, value) in v[..n].iter().enumerate() {
                     out.add(i).write(*value as f32);
@@ -428,7 +532,7 @@ pub unsafe extern "C" fn glGetDoublev(pname: u32, out: *mut f64) {
             return;
         }
 
-        match query(s, m, imm, pname) {
+        match query(s, m, imm, &r.arrays, &r.stacks, pname) {
             Some((v, n)) => {
                 for (i, value) in v[..n].iter().enumerate() {
                     out.add(i).write(*value);
@@ -449,16 +553,18 @@ pub unsafe extern "C" fn glGetIntegerv(pname: u32, out: *mut i32) {
             return;
         }
 
-        match query(s, m, imm, pname) {
+        match query(s, m, imm, &r.arrays, &r.stacks, pname) {
             Some((v, n)) => {
                 for (i, value) in v[..n].iter().enumerate() {
-                    let integer = if pname == 0x0c22
-                        || pname == 0x0b73
-                        || pname == 0x0b70
-                        || pname == 0x0bc2
-                        || pname == 0x8005
-                    {
-                        (*value * 2147483647.) as i32
+                    let integer = if normalized(pname) {
+                        // [-1, 1] -> [-INT_MAX, INT_MAX], clamped (light colors may exceed 1).
+                        if *value >= 1. {
+                            i32::MAX
+                        } else if *value <= -1. {
+                            -i32::MAX
+                        } else {
+                            (*value * 2147483647.) as i32
+                        }
                     } else {
                         (*value + if *value >= 0. { 0.5 } else { -0.5 }) as i32
                     };
@@ -507,7 +613,7 @@ pub unsafe extern "C" fn glGetBooleanv(pname: u32, out: *mut u8) {
             return;
         }
 
-        match query(s, m, imm, pname) {
+        match query(s, m, imm, &r.arrays, &r.stacks, pname) {
             Some((v, n)) => {
                 for (i, value) in v[..n].iter().enumerate() {
                     out.add(i).write((*value != 0.) as u8);

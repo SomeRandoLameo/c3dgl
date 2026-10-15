@@ -249,7 +249,7 @@ impl Builder<'_> {
                         let b = shade((i + 1) % n);
                         lines::segment(&s.style, &a, &b, 2. * window, out, indices)?;
                     } else {
-                        lines::point(&s.style, &a, 2. * window, out, indices)?;
+                        lines::point(&s.style, &a, 2. * window, None, out, indices)?;
                     }
                 }
             }
@@ -392,6 +392,7 @@ mod tests {
                 clip: Default::default(),
                 stipple: None,
                 counter: Default::default(),
+                point: lines::PointStyle::plain(),
             },
         }
     }

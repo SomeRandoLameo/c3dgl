@@ -149,6 +149,10 @@ impl Pixels {
                 } as f64;
                 1
             }
+            0x0d34 => {
+                v[0] = 256.;
+                1
+            }
             0x0cb0..=0x0cb9 => {
                 v[0] = self.maps[(pname - 0x0cb0) as usize].len() as f64;
                 1
@@ -263,7 +267,7 @@ fn pack16(ty: u32, c: [i32; 4]) -> u16 {
 
 /// (components, element bytes, group bytes) of a color image, 0 element/group bytes for bitmaps;
 /// the error of an invalid pair otherwise.
-fn color_layout(format: u32, ty: u32) -> Result<(usize, usize, usize), u32> {
+pub(crate) fn color_layout(format: u32, ty: u32) -> Result<(usize, usize, usize), u32> {
     let n = if format == COLOR_INDEX {
         1
     } else {
@@ -300,46 +304,25 @@ fn row_bytes(store: &PixelStore, width: usize, elem: usize, group: usize) -> usi
     }
 }
 
-fn load_raw(src: *const u8, ty: u32) -> f32 {
-    unsafe {
-        match ty {
-            0x1401 => src.read() as f32 / 255.,
-            0x1400 => (2. * (src.read() as i8) as f32 + 1.) / 255.,
-            0x1403 => u16::from_le_bytes([src.read(), src.add(1).read()]) as f32 / 65535.,
-            0x1402 => {
-                (2. * i16::from_le_bytes([src.read(), src.add(1).read()]) as f32 + 1.) / 65535.
-            }
-            0x1405 => {
-                (u32::from_le_bytes([
-                    src.read(),
-                    src.add(1).read(),
-                    src.add(2).read(),
-                    src.add(3).read(),
-                ]) as f64
-                    / 4294967295.) as f32
-            }
-            0x1404 => {
-                ((2. * i32::from_le_bytes([
-                    src.read(),
-                    src.add(1).read(),
-                    src.add(2).read(),
-                    src.add(3).read(),
-                ]) as f64
-                    + 1.)
-                    / 4294967295.) as f32
-            }
-            _ => f32::from_le_bytes([
-                src.read(),
-                src.add(1).read(),
-                src.add(2).read(),
-                src.add(3).read(),
-            ]),
-        }
+/// The bytes of one element, reversed with GL_*_SWAP_BYTES.
+unsafe fn element<const N: usize>(src: *const u8, swap: bool) -> [u8; N] {
+    core::array::from_fn(|i| src.add(if swap { N - 1 - i } else { i }).read())
+}
+
+unsafe fn load_raw(src: *const u8, ty: u32, swap: bool) -> f32 {
+    match ty {
+        0x1401 => src.read() as f32 / 255.,
+        0x1400 => (2. * (src.read() as i8) as f32 + 1.) / 255.,
+        0x1403 => u16::from_le_bytes(element(src, swap)) as f32 / 65535.,
+        0x1402 => (2. * i16::from_le_bytes(element(src, swap)) as f32 + 1.) / 65535.,
+        0x1405 => (u32::from_le_bytes(element(src, swap)) as f64 / 4294967295.) as f32,
+        0x1404 => ((2. * i32::from_le_bytes(element(src, swap)) as f64 + 1.) / 4294967295.) as f32,
+        _ => f32::from_le_bytes(element(src, swap)),
     }
 }
 
-fn load_clamped(src: *const u8, ty: u32) -> f32 {
-    let v = load_raw(src, ty);
+unsafe fn load_clamped(src: *const u8, ty: u32, swap: bool) -> f32 {
+    let v = load_raw(src, ty, swap);
     if !(v > 0.) {
         0.
     } else if v > 1. {
@@ -349,23 +332,20 @@ fn load_clamped(src: *const u8, ty: u32) -> f32 {
     }
 }
 
-fn load_index(src: *const u8, ty: u32) -> i64 {
-    unsafe {
-        let b = |i: usize| src.add(i).read();
-        match ty {
-            0x1401 => b(0) as i64,
-            0x1400 => b(0) as i8 as i64,
-            0x1403 => u16::from_le_bytes([b(0), b(1)]) as i64,
-            0x1402 => i16::from_le_bytes([b(0), b(1)]) as i64,
-            0x1405 => u32::from_le_bytes([b(0), b(1), b(2), b(3)]) as i64,
-            0x1404 => i32::from_le_bytes([b(0), b(1), b(2), b(3)]) as i64,
-            _ => {
-                let f = f32::from_le_bytes([b(0), b(1), b(2), b(3)]);
-                if f > -2147483648. && f < 2147483648. {
-                    f as i64
-                } else {
-                    0
-                }
+unsafe fn load_index(src: *const u8, ty: u32, swap: bool) -> i64 {
+    match ty {
+        0x1401 => src.read() as i64,
+        0x1400 => src.read() as i8 as i64,
+        0x1403 => u16::from_le_bytes(element(src, swap)) as i64,
+        0x1402 => i16::from_le_bytes(element(src, swap)) as i64,
+        0x1405 => u32::from_le_bytes(element(src, swap)) as i64,
+        0x1404 => i32::from_le_bytes(element(src, swap)) as i64,
+        _ => {
+            let f = f32::from_le_bytes(element(src, swap));
+            if f > -2147483648. && f < 2147483648. {
+                f as i64
+            } else {
+                0
             }
         }
     }
@@ -376,7 +356,12 @@ fn bitmap_bit(data: *const u8, store: &PixelStore, width: usize, x: usize, y: us
     let bytes = (bytes + store.alignment - 1) / store.alignment * store.alignment;
     let bit = store.skip_pixels + x;
     let b = unsafe { data.add((store.skip_rows + y) * bytes + bit / 8).read() };
-    (b >> (7 - (bit & 7))) & 1 != 0
+    (if store.lsb_first {
+        b >> (bit & 7)
+    } else {
+        b >> (7 - (bit & 7))
+    }) & 1
+        != 0
 }
 
 impl Pixels {
@@ -435,7 +420,7 @@ impl Pixels {
 
     /// A color image as w x h RGBA8 texels, rows from the bottom (GL 1.1 section 3.6.3: missing
     /// color components are 0, a missing alpha 1, luminance goes to R, G and B).
-    unsafe fn unpack_color(
+    pub(crate) unsafe fn unpack_color(
         &self,
         store: &PixelStore,
         pixels: *const u8,
@@ -449,6 +434,7 @@ impl Pixels {
         let row = row_bytes(store, w, elem, group);
         let base = pixels.add(store.skip_rows * row + store.skip_pixels * group);
         let packed = packed_format(ty) != 0;
+        let swap = store.swap_bytes && elem > 1;
         let index = format == COLOR_INDEX;
         let transfer = self.transfer.color_active();
         let mut out = Vec::new();
@@ -464,17 +450,16 @@ impl Pixels {
                         let i = if ty == BITMAP {
                             bitmap_bit(pixels, store, w, x, y) as i64
                         } else {
-                            load_index(src, ty)
+                            load_index(src, ty, swap)
                         };
                         c = self.index_color(i);
                     } else {
                         if packed {
-                            let v =
-                                unpack16(ty, u16::from_le_bytes([src.read(), src.add(1).read()]));
+                            let v = unpack16(ty, u16::from_le_bytes(element(src, swap)));
                             c = v.map(|v| v as f32 / 255.);
                         } else {
                             for (i, k) in comp.iter().enumerate() {
-                                let v = load_raw(src.add(i * elem), ty);
+                                let v = load_raw(src.add(i * elem), ty, swap);
                                 if *k == 4 {
                                     c[0] = v;
                                     c[1] = v;
@@ -492,7 +477,7 @@ impl Pixels {
                     continue;
                 }
                 if packed {
-                    let v = unpack16(ty, u16::from_le_bytes([src.read(), src.add(1).read()]));
+                    let v = unpack16(ty, u16::from_le_bytes(element(src, swap)));
                     for k in 0..4 {
                         dst[k] = v[k] as u8;
                     }
@@ -503,7 +488,7 @@ impl Pixels {
                     let c = if ty == 0x1401 {
                         src.add(i).read()
                     } else {
-                        (load_clamped(src.add(i * elem), ty) * 255. + 0.5) as u8
+                        (load_clamped(src.add(i * elem), ty, swap) * 255. + 0.5) as u8
                     };
                     if *k == 4 {
                         dst[0] = c;
@@ -1041,6 +1026,7 @@ pub unsafe extern "C" fn glDrawPixels(
             format,
             ty,
             data,
+            swap: store.swap_bytes,
         };
         if crate::lists::record(cmd) {
             return;
@@ -1057,7 +1043,13 @@ pub unsafe extern "C" fn glDrawPixels(
                 r.matrices.fail(e);
                 return;
             }
-        } else if ty != BITMAP && (type_size(ty) == 0 || packed_format(ty) != 0) {
+        } else if ty == BITMAP {
+            // Only a stencil image can be a bitmap.
+            if format != 0x1901 {
+                r.matrices.fail(0x0500);
+                return;
+            }
+        } else if type_size(ty) == 0 || packed_format(ty) != 0 {
             r.matrices.fail(if packed_format(ty) != 0 {
                 0x0502
             } else {
@@ -1074,9 +1066,17 @@ pub unsafe extern "C" fn glDrawPixels(
             return;
         }
         if depth_stencil {
-            // Depth and stencil images need the CPU path of the C renderer (PICA cannot output a
-            // per-pixel depth) and are not implemented.
-            r.matrices.fail(0x0502);
+            // PICA cannot output a per-pixel depth: the image is written on the CPU.
+            let stencil = format == 0x1901;
+            if !depth_stencil_writes(r, stencil) {
+                return;
+            }
+            let store = r.frame.textures.unpack();
+            let result = depth_stencil_image(r, &store, pixels, w, h, stencil, ty)
+                .and_then(|values| draw_depth_stencil(r, &values, w, h, stencil));
+            if let Err(e) = result {
+                r.matrices.fail(e);
+            }
             return;
         }
         let store = r.frame.textures.unpack();
@@ -1098,7 +1098,7 @@ pub unsafe extern "C" fn glDrawPixels(
 }
 
 /// A color image copied tightly packed (rows without padding), for display lists.
-unsafe fn capture_image(
+pub(crate) unsafe fn capture_image(
     store: &PixelStore,
     width: i32,
     height: i32,
@@ -1162,6 +1162,46 @@ unsafe fn read_rgba(r: &mut Renderer, x: i32, y: i32, w: usize, h: usize) -> Res
     Ok(out)
 }
 
+/// A window rectangle as RGBA8 texels read like glReadPixels (glCopyTexImage); None with a GL
+/// error when it cannot be read.
+pub(crate) unsafe fn copy_pixels(x: i32, y: i32, w: usize, h: usize) -> Option<Vec<u8>> {
+    let mut out = None;
+    with_renderer(|r| match read_rgba(r, x, y, w, h) {
+        Ok(v) => out = Some(v),
+        Err(e) => r.matrices.fail(e),
+    });
+    out
+}
+
+/// Store RGBA8 texels (rows from the bottom) as a color image laid out like the pack state
+/// describes (glGetTexImage).
+pub(crate) unsafe fn pack_image(
+    store: &PixelStore,
+    rgba: &[u8],
+    w: usize,
+    h: usize,
+    format: u32,
+    ty: u32,
+    pixels: *mut u8,
+) -> Result<(), u32> {
+    let (_, elem, group) = color_layout(format, ty)?;
+    let row = row_bytes(store, w, elem, group);
+    let base = pixels.add(store.skip_rows * row + store.skip_pixels * group);
+    for y in 0..h {
+        for x in 0..w {
+            let c: [f32; 4] = core::array::from_fn(|k| rgba[(y * w + x) * 4 + k] as f32 / 255.);
+            store_color(
+                base.add(y * row + x * group),
+                c,
+                format,
+                ty,
+                store.swap_bytes && elem > 1,
+            );
+        }
+    }
+    Ok(())
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn glCopyPixels(x: i32, y: i32, width: i32, height: i32, ty: u32) {
     if crate::lists::record(crate::lists::Cmd::CopyPixels([x, y, width, height], ty)) {
@@ -1183,11 +1223,19 @@ pub unsafe extern "C" fn glCopyPixels(x: i32, y: i32, width: i32, height: i32, t
         if !r.frame.pixels.raster.valid || width == 0 || height == 0 {
             return;
         }
+        let (w, h) = (width as usize, height as usize);
         if ty != 0x1800 {
-            r.matrices.fail(0x0502);
+            let stencil = ty == 0x1802;
+            if !depth_stencil_writes(r, stencil) {
+                return;
+            }
+            let result = copy_depth_stencil(r, x, y, w, h, stencil)
+                .and_then(|values| draw_depth_stencil(r, &values, w, h, stencil));
+            if let Err(e) = result {
+                r.matrices.fail(e);
+            }
             return;
         }
-        let (w, h) = (width as usize, height as usize);
         let result = read_rgba(r, x, y, w, h).and_then(|rgba| draw_rgba(r, &rgba, w, h));
         if let Err(e) = result {
             r.matrices.fail(e);
@@ -1195,8 +1243,230 @@ pub unsafe extern "C" fn glCopyPixels(x: i32, y: i32, width: i32, height: i32, t
     });
 }
 
+/// Whether a depth (stencil) image changes the depth/stencil buffer at all. The fragments of a
+/// depth image have the raster color, which goes through the alpha test; depth is only written
+/// with the depth test on. Stencil images are written directly (scissor and write mask).
+fn depth_stencil_writes(r: &Renderer, stencil: bool) -> bool {
+    let st = &r.frame.raster;
+    if stencil {
+        return st.stencil_write_mask != 0;
+    }
+    if !st.depth && !st.stencil {
+        return false;
+    }
+    if st.alpha
+        && !compare(
+            st.alpha_func,
+            r.frame.pixels.raster.color[3] as u32,
+            st.alpha_ref as u32,
+        )
+    {
+        return false;
+    }
+    st.depth_mask || (st.stencil && st.stencil_write_mask != 0)
+}
+
+fn apply_stencil_op(op: u32, s: u8, reference: u8) -> u8 {
+    match op {
+        0 => 0,
+        0x1e01 => reference,
+        0x1e02 => s.saturating_add(1),
+        0x1e03 => s.saturating_sub(1),
+        0x150a => !s,
+        0x8507 => s.wrapping_add(1),
+        0x8508 => s.wrapping_sub(1),
+        _ => s,
+    }
+}
+
+/// The values of a depth (stored form (1 - window depth) * 0xFFFFFF) or stencil image of the client.
+unsafe fn depth_stencil_image(
+    r: &mut Renderer,
+    store: &PixelStore,
+    pixels: *const u8,
+    w: usize,
+    h: usize,
+    stencil: bool,
+    ty: u32,
+) -> Result<Vec<u32>, u32> {
+    let bitmap = ty == BITMAP;
+    let (elem, group) = if bitmap {
+        (0, 0)
+    } else {
+        (type_size(ty), type_size(ty))
+    };
+    let row = row_bytes(store, w, elem, group);
+    let base = pixels.add(store.skip_rows * row + store.skip_pixels * group);
+    let swap = store.swap_bytes && elem > 1;
+    let mut values = Vec::new();
+    values.try_reserve_exact(w * h).map_err(|_| 0x0505u32)?;
+    for y in 0..h {
+        for x in 0..w {
+            let src = if bitmap {
+                pixels
+            } else {
+                base.add(y * row + x * group)
+            };
+            values.push(if stencil {
+                let i = if bitmap {
+                    bitmap_bit(pixels, store, w, x, y) as i64
+                } else {
+                    load_index(src, ty, swap)
+                };
+                r.frame.pixels.transfer_stencil(i) as u32
+            } else {
+                ((1. - r.frame.pixels.transfer_depth(load_raw(src, ty, swap))) * 16777215.) as u32
+            });
+        }
+    }
+    Ok(values)
+}
+
+/// The depth/stencil rectangle (glCopyPixels) as the values of a depth or stencil image; pixels
+/// outside the window are 0.
+unsafe fn copy_depth_stencil(
+    r: &mut Renderer,
+    x: i32,
+    y: i32,
+    w: usize,
+    h: usize,
+    stencil: bool,
+) -> Result<Vec<u32>, u32> {
+    let mut values = Vec::new();
+    values.try_reserve_exact(w * h).map_err(|_| 0x0505u32)?;
+    values.resize(w * h, 0);
+    let (x0, y0) = (x.max(0), y.max(0));
+    let x1 = (x + w as i32).min(WIDTH as i32);
+    let y1 = (y + h as i32).min(HEIGHT as i32);
+    if x0 >= x1 || y0 >= y1 {
+        return Ok(values);
+    }
+    let (x0, y0, x1, y1) = (x0 as usize, y0 as usize, x1 as usize, y1 as usize);
+    let line0 = x0 & !7;
+    let fb = crate::renderer::read_depth(r, line0, ((x1 + 7) & !7) - line0)?;
+    for wx in x0..x1 {
+        for wy in y0..y1 {
+            let p = fb.pointer.add((wx - line0) * HEIGHT * 4 + wy * 4);
+            let v = &mut values[(wy as i32 - y) as usize * w + (wx as i32 - x) as usize];
+            if stencil {
+                *v = r.frame.pixels.transfer_stencil(p.add(3).read() as i64) as u32;
+            } else {
+                *v = p.read() as u32
+                    | (p.add(1).read() as u32) << 8
+                    | (p.add(2).read() as u32) << 16;
+                if r.frame.pixels.depth_transfer_active() {
+                    let z = r.frame.pixels.transfer_depth(1. - *v as f32 / 16777215.);
+                    *v = ((1. - z) * 16777215.) as u32;
+                }
+            }
+        }
+    }
+    Ok(values)
+}
+
+/// A w x h depth or stencil image at the raster position with the pixel zoom, written on the CPU:
+/// the buffer is read, changed by the scissor, stencil and depth test (fragment depth = the
+/// image's) and the masks, and written back.
+unsafe fn draw_depth_stencil(
+    r: &mut Renderer,
+    values: &[u32],
+    w: usize,
+    h: usize,
+    stencil: bool,
+) -> Result<(), u32> {
+    let st = r.frame.raster;
+    let pos = r.frame.pixels.raster.pos;
+    let (zx, zy) = (r.frame.pixels.zoom[0], r.frame.pixels.zoom[1]);
+    let (xr, yr) = (pos[0], pos[1]);
+    let (Some((i0, i1)), Some((j0, j1))) = (
+        visible_range(xr, zx, w, WIDTH),
+        visible_range(yr, zy, h, HEIGHT),
+    ) else {
+        return Ok(());
+    };
+    // The window rectangle of the visible pixels, clipped to the screen and the scissor box.
+    let (ax, bx) = (xr + zx * i0 as f32, xr + zx * i1 as f32);
+    let (ay, by) = (yr + zy * j0 as f32, yr + zy * j1 as f32);
+    let mut x0 = floorf(ax.min(bx)) as i32;
+    let mut x1 = ceilf(ax.max(bx)) as i32;
+    let mut y0 = floorf(ay.min(by)) as i32;
+    let mut y1 = ceilf(ay.max(by)) as i32;
+    x0 = x0.max(0);
+    y0 = y0.max(0);
+    x1 = x1.min(WIDTH as i32);
+    y1 = y1.min(HEIGHT as i32);
+    if st.scissor {
+        let b = st.scissor_box;
+        x0 = x0.max(b[0]);
+        y0 = y0.max(b[1]);
+        x1 = x1.min(b[0] + b[2]);
+        y1 = y1.min(b[1] + b[3]);
+    }
+    if x0 >= x1 || y0 >= y1 {
+        return Ok(());
+    }
+    let (x0, y0, x1, y1) = (x0 as usize, y0 as usize, x1 as usize, y1 as usize);
+    let line0 = x0 & !7;
+    let lines = ((x1 + 7) & !7) - line0;
+    let fb = crate::renderer::read_depth(r, line0, lines)?;
+    let (reference, func_mask, write_mask) =
+        (st.stencil_ref, st.stencil_func_mask, st.stencil_write_mask);
+    for wx in x0..x1 {
+        // Pixel (i, j) covers the zoomed rectangle from (xr + zx*i, yr + zy*j): fragments at the
+        // centers inside it.
+        let fi = (wx as f32 + 0.5 - xr) / zx;
+        if !(fi >= 0.) || !(fi < w as f32) {
+            continue;
+        }
+        let i = fi as usize;
+        for wy in y0..y1 {
+            let fj = (wy as f32 + 0.5 - yr) / zy;
+            if !(fj >= 0.) || !(fj < h as f32) {
+                continue;
+            }
+            let v = values[fj as usize * w + i];
+            let p = fb.pointer.add((wx - line0) * HEIGHT * 4 + wy * 4);
+            let mut s = p.add(3).read();
+            if stencil {
+                p.add(3).write((s & !write_mask) | (v as u8 & write_mask));
+                continue;
+            }
+            let mut d =
+                p.read() as u32 | (p.add(1).read() as u32) << 8 | (p.add(2).read() as u32) << 16;
+            let ns;
+            if st.stencil
+                && !compare(
+                    st.stencil_func,
+                    (reference & func_mask) as u32,
+                    (s & func_mask) as u32,
+                )
+            {
+                ns = apply_stencil_op(st.stencil_ops[0], s, reference);
+            } else if !st.depth {
+                ns = apply_stencil_op(st.stencil_ops[2], s, reference);
+            } else if compare(st.function, d, v) {
+                // The stored depth is reversed: z_frag < z_buffer <=> v > d.
+                if st.depth_mask {
+                    d = v;
+                }
+                ns = apply_stencil_op(st.stencil_ops[2], s, reference);
+            } else {
+                ns = apply_stencil_op(st.stencil_ops[1], s, reference);
+            }
+            if st.stencil {
+                s = (s & !write_mask) | (ns & write_mask);
+            }
+            p.write(d as u8);
+            p.add(1).write((d >> 8) as u8);
+            p.add(2).write((d >> 16) as u8);
+            p.add(3).write(s);
+        }
+    }
+    crate::renderer::write_depth(r, line0, lines, &fb)
+}
+
 /// Store one color as a group of a color image: luminance is R + G + B, clamped.
-unsafe fn store_color(dst: *mut u8, c: [f32; 4], format: u32, ty: u32, transfer: bool) {
+unsafe fn store_color(dst: *mut u8, c: [f32; 4], format: u32, ty: u32, swap: bool) {
     let comp = components(format).unwrap_or(&[0]);
     let byte = |v: f32| gpu_color_component(v) as i32;
     if ty == 0x1401 || packed_format(ty) != 0 {
@@ -1205,8 +1475,8 @@ unsafe fn store_color(dst: *mut u8, c: [f32; 4], format: u32, ty: u32, transfer:
         let v = |k: usize| if k == 4 { l } else { b[k] };
         if packed_format(ty) != 0 {
             let bytes = pack16(ty, b).to_le_bytes();
-            dst.write(bytes[0]);
-            dst.add(1).write(bytes[1]);
+            dst.write(bytes[swap as usize]);
+            dst.add(1).write(bytes[!swap as usize]);
         } else {
             for (i, k) in comp.iter().enumerate() {
                 dst.add(i).write(v(*k) as u8);
@@ -1214,16 +1484,15 @@ unsafe fn store_color(dst: *mut u8, c: [f32; 4], format: u32, ty: u32, transfer:
         }
         return;
     }
-    let _ = transfer;
     let l = (c[0] + c[1] + c[2]).min(1.);
     for (i, k) in comp.iter().enumerate() {
         let v = if *k == 4 { l } else { c[*k] } as f64;
-        store_element(dst.add(i * type_size(ty)), ty, v);
+        store_element(dst.add(i * type_size(ty)), ty, v, swap);
     }
 }
 
 /// Store a normalized value in [0, 1] as an element of the type (GL 1.1 table 2.9 inverted).
-unsafe fn store_element(dst: *mut u8, ty: u32, v: f64) {
+unsafe fn store_element(dst: *mut u8, ty: u32, v: f64, swap: bool) {
     let round = |x: f64| {
         if x >= 0. {
             (x + 0.5) as i64
@@ -1245,9 +1514,136 @@ unsafe fn store_element(dst: *mut u8, ty: u32, v: f64) {
         0x1405 => (round(v * 4294967295.) as u32).to_le_bytes(),
         _ => (v as f32).to_le_bytes(),
     };
-    for i in 0..type_size(ty) {
-        dst.add(i).write(bytes[i]);
+    let n = type_size(ty);
+    for i in 0..n {
+        dst.add(i).write(bytes[if swap { n - 1 - i } else { i }]);
     }
+}
+
+impl Pixels {
+    /// A stencil index: shifted and offset, then looked up in S_TO_S with GL_MAP_STENCIL.
+    fn transfer_stencil(&self, s: i64) -> i64 {
+        let mut s = self.shift_index(s);
+        if self.transfer.map_stencil {
+            let v = self.map_entry(S_TO_S, s);
+            s = unsafe { lroundf(v) } as i64;
+        }
+        s
+    }
+
+    fn depth_transfer_active(&self) -> bool {
+        self.transfer.scale[4] != 1. || self.transfer.bias[4] != 0.
+    }
+
+    /// A window depth scaled and biased, clamped to [0, 1].
+    fn transfer_depth(&self, d: f32) -> f32 {
+        let d = d * self.transfer.scale[4] + self.transfer.bias[4];
+        if !(d > 0.) {
+            0.
+        } else if d > 1. {
+            1.
+        } else {
+            d
+        }
+    }
+}
+
+/// Store an index as one element of the type, masked to the bits of table 4.6; GL_FLOAT takes it
+/// as it is.
+unsafe fn store_index(dst: *mut u8, ty: u32, index: i64, swap: bool) {
+    let masked = match ty {
+        0x1401 => index & 0xff,
+        0x1400 => index & 0x7f,
+        0x1403 => index & 0xffff,
+        0x1402 => index & 0x7fff,
+        0x1405 => index & 0xffff_ffff,
+        0x1404 => index & 0x7fff_ffff,
+        _ => index,
+    };
+    let bytes: [u8; 4] = match ty {
+        0x1401 | 0x1400 => [masked as u8, 0, 0, 0],
+        0x1403 | 0x1402 => {
+            let b = (masked as u16).to_le_bytes();
+            [b[0], b[1], 0, 0]
+        }
+        0x1405 | 0x1404 => (masked as u32).to_le_bytes(),
+        _ => (masked as f32).to_le_bytes(),
+    };
+    let n = type_size(ty);
+    for i in 0..n {
+        dst.add(i).write(bytes[if swap { n - 1 - i } else { i }]);
+    }
+}
+
+/// glReadPixels of depth and stencil: the depth/stencil buffer read through a display transfer.
+unsafe fn read_depth_stencil(
+    r: &mut Renderer,
+    (x, y, w, h): (i32, i32, usize, usize),
+    stencil: bool,
+    ty: u32,
+    pixels: *mut u8,
+) -> Result<(), u32> {
+    let (x0, y0) = (x.max(0), y.max(0));
+    let x1 = (x + w as i32).min(WIDTH as i32);
+    let y1 = (y + h as i32).min(HEIGHT as i32);
+    if x0 >= x1 || y0 >= y1 {
+        return Ok(());
+    }
+    let (x0, y0, x1, y1) = (x0 as usize, y0 as usize, x1 as usize, y1 as usize);
+    let line0 = x0 & !7;
+    let fb = crate::renderer::read_depth(r, line0, ((x1 + 7) & !7) - line0)?;
+    let store = r.frame.textures.pack();
+    let bitmap = ty == BITMAP;
+    let (elem, group) = if bitmap {
+        (1, 1)
+    } else {
+        (type_size(ty), type_size(ty))
+    };
+    let row = if bitmap {
+        let b = (store.row_length_or(w) + 7) / 8;
+        (b + store.alignment - 1) / store.alignment * store.alignment
+    } else {
+        row_bytes(&store, w, elem, group)
+    };
+    let base = pixels.add(store.skip_rows * row);
+    let swap = store.swap_bytes && elem > 1;
+    for wy in y0..y1 {
+        let line = base.add((wy as i32 - y) as usize * row);
+        for wx in x0..x1 {
+            let p = fb.pointer.add((wx - line0) * HEIGHT * 4 + wy * 4);
+            let col = store.skip_pixels + (wx as i32 - x) as usize;
+            let s = p.add(3).read();
+            if bitmap {
+                // Stencil bit 0, most significant bit first unless GL_PACK_LSB_FIRST.
+                let bit = if store.lsb_first {
+                    1u8 << (col & 7)
+                } else {
+                    0x80u8 >> (col & 7)
+                };
+                let at = line.add(col / 8);
+                if r.frame.pixels.transfer_stencil(s as i64) & 1 != 0 {
+                    at.write(at.read() | bit);
+                } else {
+                    at.write(at.read() & !bit);
+                }
+                continue;
+            }
+            let dst = line.add(col * group);
+            if stencil {
+                store_index(dst, ty, r.frame.pixels.transfer_stencil(s as i64), swap);
+            } else {
+                let d = p.read() as u32
+                    | (p.add(1).read() as u32) << 8
+                    | (p.add(2).read() as u32) << 16;
+                let mut z = 1. - d as f64 / 16777215.;
+                if r.frame.pixels.depth_transfer_active() {
+                    z = r.frame.pixels.transfer_depth(z as f32) as f64;
+                }
+                store_element(dst, ty, z, swap);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[no_mangle]
@@ -1265,21 +1661,27 @@ pub unsafe extern "C" fn glReadPixels(
             r.matrices.fail(0x0501);
             return;
         }
-        if format == 0x1902 || format == 0x1901 {
-            // Depth and stencil reads need the depth buffer and are not implemented.
+        let depth = format == 0x1902;
+        let stencil = format == 0x1901;
+        let comp: &[usize] = if depth || stencil {
+            &[0]
+        } else if format == COLOR_INDEX {
+            // The framebuffer is RGBA only.
             r.matrices.fail(0x0502);
             return;
-        }
-        let Some(comp) = components(format) else {
-            r.matrices.fail(if format == COLOR_INDEX {
-                0x0502
-            } else {
-                0x0500
-            });
+        } else if let Some(c) = components(format) {
+            c
+        } else {
+            r.matrices.fail(0x0500);
             return;
         };
         let packed = packed_format(ty);
-        if packed == 0 && (type_size(ty) == 0 || ty == BITMAP) {
+        let bitmap = ty == BITMAP;
+        if packed == 0 && !bitmap && type_size(ty) == 0 {
+            r.matrices.fail(0x0500);
+            return;
+        }
+        if bitmap && !stencil {
             r.matrices.fail(0x0500);
             return;
         }
@@ -1289,6 +1691,12 @@ pub unsafe extern "C" fn glReadPixels(
         }
         let (w, h) = (width as usize, height as usize);
         if pixels.is_null() || w == 0 || h == 0 {
+            return;
+        }
+        if depth || stencil {
+            if let Err(e) = read_depth_stencil(r, (x, y, w, h), stencil, ty, pixels) {
+                r.matrices.fail(e);
+            }
             return;
         }
         let rgba = match read_rgba(r, x, y, w, h) {
@@ -1315,8 +1723,59 @@ pub unsafe extern "C" fn glReadPixels(
                 let src = &rgba[(((wy - y) as usize) * w + (wx - x) as usize) * 4..][..4];
                 let c: [f32; 4] = core::array::from_fn(|k| src[k] as f32 / 255.);
                 let dst = base.add((wy - y) as usize * row + (wx - x) as usize * group);
-                store_color(dst, c, format, ty, false);
+                store_color(dst, c, format, ty, store.swap_bytes && elem > 1);
             }
         }
     });
+}
+
+/// glGetPixelMap{fv,uiv,usv}: color components scaled to the integer range, indices rounded.
+unsafe fn get_pixel_map(map: u32, out: *mut u8, ty: u32) {
+    if out.is_null() {
+        return with_renderer(|r| r.matrices.fail(0x0501));
+    }
+    with_renderer(|r| {
+        if !(0x0c70..=0x0c79).contains(&map) {
+            r.matrices.fail(0x0500);
+            return;
+        }
+        let m = (map - 0x0c70) as usize;
+        let color = m >= I_TO_R;
+        for (i, v) in r.frame.pixels.maps[m].iter().enumerate() {
+            let v = *v as f64;
+            let round = |x: f64| {
+                if x >= 0. {
+                    (x + 0.5) as i64
+                } else {
+                    -((-x + 0.5) as i64)
+                }
+            };
+            match ty {
+                0x1406 => (out as *mut f32).add(i).write_unaligned(v as f32),
+                0x1405 => (out as *mut u32).add(i).write_unaligned(round(if color {
+                    v * 4294967295.
+                } else {
+                    v
+                }) as u32),
+                _ => (out as *mut u16).add(i).write_unaligned(round(if color {
+                    v * 65535.
+                } else {
+                    v
+                }) as u16),
+            }
+        }
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glGetPixelMapfv(map: u32, values: *mut f32) {
+    get_pixel_map(map, values.cast(), 0x1406);
+}
+#[no_mangle]
+pub unsafe extern "C" fn glGetPixelMapuiv(map: u32, values: *mut u32) {
+    get_pixel_map(map, values.cast(), 0x1405);
+}
+#[no_mangle]
+pub unsafe extern "C" fn glGetPixelMapusv(map: u32, values: *mut u16) {
+    get_pixel_map(map, values.cast(), 0x1403);
 }

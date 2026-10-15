@@ -44,6 +44,10 @@
 #else
 #define CASE "glu0"
 #endif
+#elif defined(C3DGL_OLD_POINTS)
+#include "../../examples/points/main.cpp"
+#define CASE "points"
+#define ADAPTER_FAILURES failures
 #elif defined(C3DGL_OLD_PIXELS)
 #include "../../examples/pixels/main.cpp"
 #define CASE "pixels"
@@ -156,6 +160,11 @@ int main() {
     initBumpPatch();
     const Renderers renderers={newRenderer(GLU_FILL),newRenderer(GLU_OUTLINE_POLYGON),newRenderer(GLU_OUTLINE_PATCH)};
     drawNurbsRendererPage(renderers,0.0f,tex);
+#elif defined(C3DGL_OLD_POINTS)
+    // The checks of the original main and its first frame (angle 0)
+    setupScene();
+    const GLuint tex=0;
+    drawFrame(0.0f);
 #elif defined(C3DGL_OLD_PIXELS)
     // A frame of the original main loop (t = 1.5)
     const GLuint font=setupScene();
@@ -288,7 +297,11 @@ int main() {
     glDeleteTextures(1,&tex);
 #endif
     c3dglClose();
-    const bool passed=error==GL_NO_ERROR&&readback==0&&image!=nullptr;
+#ifndef ADAPTER_FAILURES
+#define ADAPTER_FAILURES 0
+#endif
+    if(ADAPTER_FAILURES) fprintf(report,"original checks failed: %d\n",(int)(ADAPTER_FAILURES));
+    const bool passed=error==GL_NO_ERROR&&readback==0&&image!=nullptr&&(ADAPTER_FAILURES)==0;
     fprintf(report,"%s: old example=%s backend=%s GL=%u readback=%d image=%d\n",passed?"ALL CHECKS PASSED":"FAILED",CASE,BACKEND,error,readback,image!=nullptr);
     fclose(report);gfxExit();return passed?0:1;
 }

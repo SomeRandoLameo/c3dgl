@@ -7,6 +7,10 @@ pub(crate) struct Blend {
     pub factors: [u32; 4], // src RGB, dst RGB, src alpha, dst alpha
     pub equations: [u32; 2],
     pub color: [f32; 4],
+    /// GL_COLOR_LOGIC_OP: a logic operation replaces blending.
+    pub logic: bool,
+    /// glLogicOp (GL_CLEAR .. GL_SET).
+    pub logic_op: u32,
 }
 
 fn factor(f: u32) -> Option<u32> {
@@ -48,6 +52,23 @@ impl Blend {
             factors: [1, 0, 1, 0],
             equations: [0x8006; 2],
             color: [0.; 4],
+            logic: false,
+            logic_op: 0x1503,
+        }
+    }
+
+    /// The PICA logic operation of the GL one: GL_CLEAR + n.
+    pub fn logic_word(self) -> u32 {
+        const OPS: [u32; 16] = [0, 1, 2, 3, 13, 6, 11, 9, 10, 12, 7, 14, 5, 15, 8, 4];
+        OPS[(self.logic_op.wrapping_sub(0x1500) & 15) as usize]
+    }
+
+    /// COLOR_OPERATION: the blend unit is off while a logic operation is enabled.
+    pub fn operation_word(self) -> u32 {
+        if self.logic {
+            0x00e40000
+        } else {
+            0x00e40100
         }
     }
 
@@ -74,6 +95,8 @@ impl Blend {
         let mut v = [0.; 16];
         v[0] = match pname {
             0x0be2 => self.enabled as u8 as f64,
+            0x0bf2 => self.logic as u8 as f64,
+            0x0bf0 => self.logic_op as f64,
             0x0be1 | 0x80c9 => self.factors[0] as f64,
             0x0be0 | 0x80c8 => self.factors[1] as f64,
             0x80cb => self.factors[2] as f64,
@@ -107,6 +130,23 @@ pub unsafe extern "C" fn glBlendFuncSeparate(sr: u32, dr: u32, sa: u32, da: u32)
 
         if s.raster.blend.factors != factors {
             s.raster.blend.factors = factors;
+            s.raster.dirty = true;
+        }
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glLogicOp(op: u32) {
+    if crate::lists::record(crate::lists::Cmd::LogicOp(op)) {
+        return;
+    }
+    with_frame(|s, m| {
+        if !(0x1500..=0x150f).contains(&op) {
+            m.fail(0x0500);
+            return;
+        }
+        if s.raster.blend.logic_op != op {
+            s.raster.blend.logic_op = op;
             s.raster.dirty = true;
         }
     });

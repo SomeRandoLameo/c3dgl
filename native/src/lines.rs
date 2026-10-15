@@ -19,6 +19,33 @@ pub(crate) struct Style {
     pub stipple: Option<(u32, u16)>,
     /// Fragments of the current strip so far (the stipple position carried between segments).
     pub counter: core::cell::Cell<u32>,
+    /// Point parameters: size limits, distance attenuation (with the modelview matrix for the eye
+    /// distance), the texture units whose coordinates a point sprite replaces, and the per-vertex
+    /// sizes of a point size array (empty without one).
+    pub point: PointStyle,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct PointStyle {
+    pub min: f32,
+    pub max: f32,
+    pub attenuation: [f32; 3],
+    pub modelview: [f32; 16],
+    pub sprite_units: u8,
+    pub sizes: Vec<f32>,
+}
+
+impl PointStyle {
+    pub fn plain() -> Self {
+        Self {
+            min: 0.,
+            max: MAX_POINT_SIZE,
+            attenuation: [1., 0., 0.],
+            modelview: crate::matrix::IDENTITY,
+            sprite_units: 0,
+            sizes: Vec::new(),
+        }
+    }
 }
 
 extern "C" {
@@ -95,10 +122,34 @@ fn quad(out: &mut Vec<GpuVertex>, indices: &mut Vec<u16>, q: [GpuVertex; 4]) -> 
     Ok(())
 }
 
+/// The size of a point: the vertex's (point size array) or glPointSize, scaled by the distance
+/// attenuation 1 / sqrt(a + b d + c d^2) of the eye distance d, clamped to GL_POINT_SIZE_MIN/MAX.
+/// The fade threshold only applies with multisampling, which PICA does not have.
+fn point_size(s: &Style, v: &GpuVertex, own: Option<f32>) -> f32 {
+    let mut size = own.unwrap_or(s.point_size);
+    let att = s.point.attenuation;
+    if att[0] != 1. || att[1] != 0. || att[2] != 0. {
+        let m = &s.point.modelview;
+        let p = v.position;
+        let e: [f32; 3] =
+            core::array::from_fn(|i| m[i] * p[0] + m[4 + i] * p[1] + m[8 + i] * p[2] + m[12 + i]);
+        let d = sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
+        let k = att[0] + att[1] * d + att[2] * d * d;
+        size = if k > 0. {
+            size / sqrt(k)
+        } else {
+            MAX_POINT_SIZE
+        };
+    }
+    size = size.max(s.point.min).min(s.point.max);
+    size.max(1.).min(MAX_POINT_SIZE)
+}
+
 pub(crate) fn point(
     s: &Style,
     v: &GpuVertex,
     z_bias: f32,
+    own_size: Option<f32>,
     out: &mut Vec<GpuVertex>,
     indices: &mut Vec<u16>,
 ) -> Result<(), u32> {
@@ -110,14 +161,28 @@ pub(crate) fn point(
         return Ok(());
     }
     let p = [c[0] / c[3], c[1] / c[3], c[2] / c[3] + z_bias];
-    let r = 0.5 * s.point_size.clamp(1., MAX_POINT_SIZE);
+    let r = 0.5 * point_size(s, v, own_size);
     let (rx, ry) = (2. * r / s.viewport[2] as f32, 2. * r / s.viewport[3] as f32);
     // Bottom left, top left, top right, bottom right (NDC y points up).
     let corner = [(-1., -1.), (-1., 1.), (1., 1.), (1., -1.)];
     quad(
         out,
         indices,
-        core::array::from_fn(|i| at(v, p[0] + corner[i].0 * rx, p[1] + corner[i].1 * ry, p[2])),
+        core::array::from_fn(|i| {
+            let mut q = at(v, p[0] + corner[i].0 * rx, p[1] + corner[i].1 * ry, p[2]);
+            // Point sprites: the coordinates of the sprite units run from (0, 0) at the top left
+            // to (1, 1) at the bottom right.
+            let tc = [0.5 + 0.5 * corner[i].0, 0.5 - 0.5 * corner[i].1, 0., 1.];
+            if s.point.sprite_units & 1 != 0 {
+                q.texcoord = tc;
+            }
+            for unit in 1..3 {
+                if s.point.sprite_units >> unit & 1 != 0 {
+                    q.extra_texcoords[unit - 1] = tc;
+                }
+            }
+            q
+        }),
     )
 }
 
@@ -325,8 +390,15 @@ pub(crate) fn expand(
     };
     match mode {
         0 => {
-            for p in v {
-                point(s, p, 0., &mut out, &mut indices)?;
+            for (i, p) in v.iter().enumerate() {
+                point(
+                    s,
+                    p,
+                    0.,
+                    s.point.sizes.get(i).copied(),
+                    &mut out,
+                    &mut indices,
+                )?;
             }
             return Ok((out, indices));
         }
@@ -373,6 +445,7 @@ mod tests {
             clip: Default::default(),
             stipple: None,
             counter: Default::default(),
+            point: PointStyle::plain(),
         }
     }
 

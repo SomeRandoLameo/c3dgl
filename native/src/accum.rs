@@ -341,7 +341,10 @@ pub unsafe extern "C" fn glDrawBuffer(mode: u32) {
     }
     crate::renderer::with_frame(|s, m| match buffer_error(mode, true) {
         Some(e) => m.fail(e),
-        None => s.accum.draw_buffer = mode,
+        None => {
+            s.accum.draw_buffer = mode;
+            s.raster.dirty = true;
+        }
     });
 }
 

@@ -398,11 +398,14 @@ mod tests {
         let mut c = Commands::new(&mut words);
         raster(&mut c, state, false).unwrap();
         assert_eq!(c.used, RASTER_WORDS);
-        assert_eq!(c.as_slice()[4], 2);
-        assert_eq!(c.as_slice()[6], 0x1f61);
-        assert_eq!(c.as_slice()[8], 0x02000000);
-        assert_eq!(c.as_slice()[10], pica_float(-(0.8f32 - 0.2), 16));
-        assert_eq!(c.as_slice()[12], pica_float(1. - 0.8, 16));
+        // BLEND_FUNC, BLEND_COLOR, LOGIC_OP and COLOR_OPERATION come first.
+        assert_eq!(c.as_slice()[4], 3);
+        assert_eq!(c.as_slice()[6], 0x00e40100);
+        assert_eq!(c.as_slice()[8], 2);
+        assert_eq!(c.as_slice()[10], 0x1f61);
+        assert_eq!(c.as_slice()[12], 0x02000000);
+        assert_eq!(c.as_slice()[14], pica_float(-(0.8f32 - 0.2), 16));
+        assert_eq!(c.as_slice()[16], pica_float(1. - 0.8, 16));
         let mut too_small = [7; 61];
         let mut c = Commands::new(&mut too_small);
         assert!(raster(&mut c, state, false).is_err());
@@ -523,13 +526,15 @@ pub(crate) fn fog(c: &mut Commands<'_>, state: Option<(u32, &[u32; 128])>) -> Re
     }
 }
 
-pub const RASTER_WORDS: usize = 24;
+pub const RASTER_WORDS: usize = 28;
 pub(crate) fn raster(c: &mut Commands<'_>, s: crate::raster::Raster, clip: bool) -> Result<(), ()> {
     if c.words.len() - c.used < RASTER_WORDS + DRAW_WORDS + 8 + FINISH_WORDS {
         return Err(());
     }
     one(c, r::BLEND_FUNC, s.blend.word())?;
     one(c, r::BLEND_COLOR, s.blend.color_word())?;
+    one(c, r::LOGIC_OP, s.blend.logic_word())?;
+    masked(c, r::COLOR_OPERATION, 7, s.blend.operation_word())?;
     // Expanded lines and points have arbitrary winding: never culled.
     one(
         c,

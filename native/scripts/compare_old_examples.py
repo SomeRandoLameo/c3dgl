@@ -13,18 +13,18 @@ parser.add_argument('--emulator', required=True)
 parser.add_argument('--sdmc', required=True, type=Path)
 parser.add_argument('--build', type=Path, default=Path('build-native-old-examples'))
 parser.add_argument('--output', type=Path, default=Path('docs/native-results/old-examples'))
-parser.add_argument('--case', action='append', choices=['primitives','texture','cube','texcoords','texmatrix','multitexture','mipmap','compressed','overlay','primitives2','primitives3','lighting','texgen','fog','fragment','fragment2','clipplane','lists','select','stipple','accum','pixels','glu0','glu1','glu2'])
+parser.add_argument('--case', action='append', choices=['primitives','texture','cube','texcoords','texmatrix','multitexture','mipmap','compressed','overlay','primitives2','primitives3','lighting','texgen','fog','fragment','fragment2','clipplane','lists','select','stipple','accum','pixels','points','api','glu0','glu1','glu2'])
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[2]
 args.output.mkdir(parents=True, exist_ok=True)
-cases = args.case or ['primitives','texture','cube','texcoords','texmatrix','multitexture','mipmap','compressed','overlay','primitives2','primitives3','lighting','texgen','fog','fragment','fragment2','clipplane','lists','select','stipple','accum','pixels','glu0','glu1','glu2']
+cases = args.case or ['primitives','texture','cube','texcoords','texmatrix','multitexture','mipmap','compressed','overlay','primitives2','primitives3','lighting','texgen','fog','fragment','fragment2','clipplane','lists','select','stipple','accum','pixels','points','glu0','glu1','glu2']
 if len(cases) != len(set(cases)):
     parser.error('--case must not repeat')
 summary = dict(repetitions=1, cases={}, whole_original_programs=False)
 for case in cases:
-    source = root/'examples'/('texture' if case in ('texcoords', 'texmatrix', 'multitexture', 'mipmap', 'compressed') else 'cube' if case == 'overlay' else 'primitives' if case in ('primitives2', 'primitives3') else 'fragment' if case == 'fragment2' else 'glu' if case.startswith('glu') else case)/'main.cpp'
+    source = root/'examples'/('texture' if case in ('texcoords', 'texmatrix', 'multitexture', 'mipmap', 'compressed') else 'cube' if case == 'overlay' else 'primitives' if case in ('primitives2', 'primitives3') else 'fragment' if case == 'fragment2' else 'glu' if case.startswith('glu') else case)/('main.c' if case == 'api' else 'main.cpp')
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
-    adapter_hash = hashlib.sha256((root/'native/compare/old_examples.cpp').read_bytes()).hexdigest()
+    adapter_hash = hashlib.sha256((root/'native/compare'/('old_api.c' if case == 'api' else 'old_examples.cpp')).read_bytes()).hexdigest()
     for backend in ['reference','native']:
         manifest = json.loads((args.build/f'old_{case}_{backend}_source.json').read_text())
         if manifest != dict(source_sha256=source_hash,adapter_sha256=adapter_hash):

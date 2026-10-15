@@ -36,6 +36,11 @@ pub(crate) enum Cmd {
     LineWidth(f32),
     LineStipple(i32, u16),
     Accum(u32, f32),
+    CopyTexImage([u32; 9]),
+    CopyTexSubImage([u32; 9]),
+    LogicOp(u32),
+    SampleCoverage(f32, bool),
+    PointParameter(u32, [f32; 3]),
     RasterPos([f32; 4]),
     PixelZoom(f32, f32),
     PixelTransfer(u32, f32),
@@ -53,6 +58,7 @@ pub(crate) enum Cmd {
         ty: u32,
         /// Tightly packed rows.
         data: Option<Vec<u8>>,
+        swap: bool,
     },
     CopyPixels([i32; 4], u32),
     ClearAccum([f32; 4]),
@@ -92,6 +98,8 @@ pub(crate) enum Cmd {
     TexEnvColor([f32; 4]),
     ActiveTexture(u32),
     TexParameter(u32, u32, i32),
+    TexParameterFloat(u32, u32, [f32; 4]),
+    PrioritizeTextures(i32, Vec<u32>, Vec<f32>),
     TexImage {
         sub: bool,
         target: u32,
@@ -106,6 +114,8 @@ pub(crate) enum Cmd {
         ty: u32,
         /// Tightly packed.
         pixels: Option<Vec<u8>>,
+        /// GL_UNPACK_SWAP_BYTES when the image was captured.
+        swap: bool,
     },
     CompressedTexImage {
         target: u32,
@@ -183,6 +193,7 @@ impl Lists {
     pub fn query(&self, pname: u32) -> Option<f64> {
         match pname {
             0x0b32 => Some(self.base as f64),
+            0x0b31 => Some(MAX_NESTING as f64),
             0x0b33 => Some(self.compiling.as_ref().map_or(0, |c| c.name) as f64),
             0x0b30 => Some(self.compiling.as_ref().map_or(0, |c| c.mode) as f64),
             _ => None,
@@ -257,6 +268,56 @@ unsafe fn execute(cmd: &Cmd) {
         Cmd::LineWidth(w) => glLineWidth(*w),
         Cmd::LineStipple(f, p) => glLineStipple(*f, *p),
         Cmd::Accum(op, v) => glAccum(*op, *v),
+        Cmd::CopyTexImage(a) => {
+            if a[8] == 1 {
+                glCopyTexImage1D(
+                    a[0],
+                    a[1] as i32,
+                    a[2],
+                    a[3] as i32,
+                    a[4] as i32,
+                    a[5] as i32,
+                    a[7] as i32,
+                )
+            } else {
+                glCopyTexImage2D(
+                    a[0],
+                    a[1] as i32,
+                    a[2],
+                    a[3] as i32,
+                    a[4] as i32,
+                    a[5] as i32,
+                    a[6] as i32,
+                    a[7] as i32,
+                )
+            }
+        }
+        Cmd::CopyTexSubImage(a) => {
+            if a[8] == 1 {
+                glCopyTexSubImage1D(
+                    a[0],
+                    a[1] as i32,
+                    a[2] as i32,
+                    a[4] as i32,
+                    a[5] as i32,
+                    a[6] as i32,
+                )
+            } else {
+                glCopyTexSubImage2D(
+                    a[0],
+                    a[1] as i32,
+                    a[2] as i32,
+                    a[3] as i32,
+                    a[4] as i32,
+                    a[5] as i32,
+                    a[6] as i32,
+                    a[7] as i32,
+                )
+            }
+        }
+        Cmd::LogicOp(op) => glLogicOp(*op),
+        Cmd::SampleCoverage(v, i) => crate::compat::glSampleCoverage(*v, *i as u8),
+        Cmd::PointParameter(p, v) => crate::points::set_point_parameter(*p, *v),
         Cmd::RasterPos(v) => glRasterPos4f(v[0], v[1], v[2], v[3]),
         Cmd::PixelZoom(x, y) => glPixelZoom(*x, *y),
         Cmd::PixelTransfer(p, v) => glPixelTransferf(*p, *v),
@@ -269,6 +330,8 @@ unsafe fn execute(cmd: &Cmd) {
                 row_length: 0,
                 skip_rows: 0,
                 skip_pixels: 0,
+                swap_bytes: false,
+                lsb_first: false,
             });
             glBitmap(
                 size[0], size[1], motion[0], motion[1], motion[2], motion[3], pointer,
@@ -280,6 +343,7 @@ unsafe fn execute(cmd: &Cmd) {
             format,
             ty,
             data,
+            swap,
         } => {
             let pointer = data.as_ref().map_or(core::ptr::null(), |b| b.as_ptr());
             let store = set_unpack(crate::texture::PixelStore {
@@ -287,6 +351,8 @@ unsafe fn execute(cmd: &Cmd) {
                 row_length: 0,
                 skip_rows: 0,
                 skip_pixels: 0,
+                swap_bytes: *swap,
+                lsb_first: false,
             });
             glDrawPixels(size[0], size[1], *format, *ty, pointer);
             set_unpack(store);
@@ -332,6 +398,8 @@ unsafe fn execute(cmd: &Cmd) {
         Cmd::TexEnvColor(c) => glTexEnvfv(0x2300, 0x2201, c.as_ptr()),
         Cmd::ActiveTexture(u) => glActiveTexture(*u),
         Cmd::TexParameter(k, p, v) => glTexParameteri(*k, *p, *v),
+        Cmd::PrioritizeTextures(n, names, prios) => crate::texture::prioritize(*n, names, prios),
+        Cmd::TexParameterFloat(k, p, v) => crate::texture::tex_parameter_float(*k, *p, *v),
         Cmd::TexImage {
             sub,
             target,
@@ -345,6 +413,7 @@ unsafe fn execute(cmd: &Cmd) {
             f,
             ty,
             pixels,
+            swap,
         } => {
             let pointer = pixels
                 .as_ref()
@@ -355,6 +424,8 @@ unsafe fn execute(cmd: &Cmd) {
                 row_length: 0,
                 skip_rows: 0,
                 skip_pixels: 0,
+                swap_bytes: *swap,
+                lsb_first: false,
             });
             if *sub && *target == 0x0de0 {
                 glTexSubImage1D(*target, *level, *x, *w, *f, *ty, pointer);

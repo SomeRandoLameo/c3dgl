@@ -61,6 +61,15 @@ impl Select {
         self.mode != RENDER
     }
 
+    /// glGetPointerv: the feedback and selection buffers.
+    pub fn pointer(&self, pname: u32) -> Option<usize> {
+        match pname {
+            0x0df0 => Some(self.feedback_buffer as usize),
+            0x0df3 => Some(self.select_buffer as usize),
+            _ => None,
+        }
+    }
+
     pub fn begin_primitive(&mut self) {
         self.line_reset = true;
     }
@@ -70,6 +79,9 @@ impl Select {
             0x0c40 => Some(self.mode as f64),
             0x0d70 => Some(self.depth as f64),
             0x0d37 => Some(MAX_NAMES as f64),
+            0x0df1 => Some(self.feedback_size as f64),
+            0x0df2 => Some(self.feedback_type as f64),
+            0x0df4 => Some(self.select_size as f64),
             _ => None,
         }
     }

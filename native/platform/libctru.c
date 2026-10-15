@@ -140,6 +140,26 @@ int c3dglPlatformReadColor(void *color, u32 line0, u32 lines, void *out) {
     return 0;
 }
 
+/* The reverse for the depth/stencil buffer: linear RGBA8 words to the tiled buffer. The GPU must be idle. */
+int c3dglPlatformWriteLines(void *target, u32 line0, u32 lines, void *in) {
+    if (!acquired || !target || !in || !lines) return -2;
+    c3dglPlatformWait();
+    GSPGPU_FlushDataCache(in, (size_t)lines * 240 * 4);
+    swap_on_finish = false;
+    Result result = GX_DisplayTransfer((u32 *)in, GX_BUFFER_DIM(240, lines),
+        (u32 *)((u8 *)target + (size_t)line0 * 240 * 4), GX_BUFFER_DIM(240, lines),
+        GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(1) | GX_TRANSFER_RAW_COPY(0) |
+        GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8) |
+        GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+    if (R_FAILED(result)) { gxCmdQueueClear(&queue); return result; }
+    LightEvent_Clear(&completed);
+    started = svcGetSystemTick();
+    pending = true;
+    gxCmdQueueRun(&queue);
+    c3dglPlatformWait();
+    return 0;
+}
+
 int c3dglPlatformReadback(u8 *pixels, u32 capacity) {
     if (!acquired || !pixels || capacity < 400*240*3 || !last_output) return -2;
     c3dglPlatformWait();
