@@ -77,6 +77,21 @@ static void setupF(int used, bool flat, bool vbo, int omit)
     gl.arrays[ARRAY_COLOR] = (ClientArray){true, vbo ? (void*)20 : inputF[0].color, vbo ? 1 : 0, 4, GL_UNSIGNED_BYTE, sizeof(PackedF)};
     if (omit & 1) gl.arrays[ARRAY_TEXCOORD0].enabled = false;
     if (omit & 2) gl.arrays[ARRAY_COLOR].enabled = false;
+    if (omit & 4)
+    {
+        // Lit: light 0, a normal, an identity modelview; bit 8 lets the material follow the color
+        static u32 generation = 100;
+        initLighting();
+        gl.lightingEnabled = true;
+        gl.lightEnabled = 1;
+        gl.normalize = true;
+        gl.colorMaterial = (omit & 8) != 0;
+        mat4Identity(&gl.stack[0][0]);
+        gl.matrixSerial = 1;
+        gl.litCacheGen = ++generation;
+        gl.litCacheSerial = gl.matrixSerial;
+        gl.currentNormal[0] = 0.3f; gl.currentNormal[1] = 0.8f; gl.currentNormal[2] = -0.5f;
+    }
 }
 
 static void compareArrayPaths(int used, int first, int count, bool flat, bool vbo, int omit)
@@ -90,6 +105,11 @@ static void compareArrayPaths(int used, int first, int count, bool flat, bool vb
     GLenum referenceError = gl.error;
 
     setupF(used, flat, vbo, omit);
+    if ((omit & 4) && flat)
+    {
+        check(!arrayTriangleFastPath(GL_TRIANGLES, first, count), "array path: lit flat shading left to the generic loop");
+        return;
+    }
     check(arrayTriangleFastPath(GL_TRIANGLES, first, count), "array path handled");
     endPrimitive();
     check(gl.vertexCount == referenceCount, "array path: same complete triangle count");
@@ -147,6 +167,18 @@ int main(void)
                             compareArrayPaths(used, firsts[f], count, flat, vbo, omit);
         printf("Array paths: %d / %d, %d failures\n", used + 1, C3DGL_MAX_VERTICES + 1, failures);
     }
+    // Lit draws (bit 4; bit 8: color material) on a few fill levels of the vertex buffer
+    {
+        static const int fills[] = { 0, 5, 24, 48 };
+        for (int u = 0; u < 4; u++)
+            for (int f = 0; f < 3; f++)
+                for (int count = 0; count <= 57; count++)
+                    for (int flat = 0; flat < 2; flat++)
+                        for (int vbo = 0; vbo < 2; vbo++)
+                            for (int omit = 4; omit < 16; omit++)
+                                compareArrayPaths(fills[u], firsts[f], count, flat, vbo, omit);
+        printf("Lit array paths, %d failures\n", failures);
+    }
     // Reading past the end of a buffer object, a negative start and other modes are left to the generic path
     setupF(0, false, true, 0);
     check(!arrayTriangleFastPath(GL_TRIANGLES, 60, 9), "array path: buffer overrun rejected");
@@ -163,9 +195,9 @@ int main(void)
     setupF(0, false, false, 0);
     gl.arrays[ARRAY_COLOR].type = GL_FLOAT;
     check(!arrayTriangleFastPath(GL_TRIANGLES, 0, 9), "array path: float colors rejected");
-    setupF(0, false, false, 0);
-    gl.lightingEnabled = true;
-    check(!arrayTriangleFastPath(GL_TRIANGLES, 0, 9), "array path: lighting rejected");
+    setupF(0, false, false, 4);
+    gl.lighting.twoSide = true;
+    check(!arrayTriangleFastPath(GL_TRIANGLES, 0, 9), "array path: two-sided lighting rejected");
 
     // All special features must still reject the fast path and retain their
     // original generic implementation, even when the frame buffer is full.

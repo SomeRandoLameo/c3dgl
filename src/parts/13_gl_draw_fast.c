@@ -127,10 +127,10 @@ static void drawGpuCache(GpuBufferCache *cache)
 // What both direct-decode paths (indexed and array triangles) need from the current state: no lighting,
 // texgen, clip planes, polygon modes, second/third texture unit or per-vertex normal/edge/point size. Which of
 // vertex, texcoord 0 and color arrays are needed is up to each path.
-static bool fastPathStateOk(void)
+static bool fastPathStateOkEx(bool allowLighting)
 {
     if (gl.renderMode != GL_RENDER) { fastPathReject("render mode"); return false; }
-    if (gl.lightingEnabled) { fastPathReject("lighting"); return false; }
+    if (gl.lightingEnabled && !allowLighting) { fastPathReject("lighting"); return false; }
     if (gl.texGen[0].enabled || gl.texGen[1].enabled || gl.texGen[2].enabled) { fastPathReject("texgen"); return false; }
     if (gl.clipEnabled) { fastPathReject("clip"); return false; }
     if ((gl.polygonMode[0] != GL_FILL) || (gl.polygonMode[1] != GL_FILL) || gl.offsetFill) { fastPathReject("polygon mode"); return false; }
@@ -140,6 +140,8 @@ static bool fastPathStateOk(void)
     if (sizeof(GpuVertex) != GPU_VERTEX_SIZE) { fastPathReject("vertex layout"); return false; }
     return true;
 }
+
+static bool fastPathStateOk(void) { return fastPathStateOkEx(false); }
 
 // The compact cache (drawCompactCache()) for n indices of `index` into `source`, NULL if the arrays are not one
 // 16-byte vertex (short x, y, z, pad, short s, t, ubyte RGBA) or memory is short; the caller then expands as before.
@@ -365,7 +367,12 @@ static bool arrayTriangleFastPath(GLenum mode, GLint first, GLsizei count)
 {
     if (mode != GL_TRIANGLES) { fastPathReject("mode"); return false; }
     if (first < 0) return false;
-    if (!fastPathStateOk()) return false;
+    // Lit draws (the models of mobs, with the normal of the draw and no normal array) take the fast path as well: each
+    // vertex is lit with lightVertexCached(), the call the generic loop makes. Two-sided lighting (back colors) and flat
+    // shading (the color of the provoking vertex) stay with the generic loop
+    const bool lit = gl.lightingEnabled;
+    if (lit && (gl.lighting.twoSide || (gl.shadeModel == GL_FLAT))) { fastPathReject("lighting"); return false; }
+    if (!fastPathStateOkEx(true)) return false;
     if (!arrayActive(ARRAY_VERTEX)) { fastPathReject("missing vertex array"); return false; }
 
     const bool hasTex = arrayActive(ARRAY_TEXCOORD0);
@@ -405,6 +412,8 @@ static bool arrayTriangleFastPath(GLenum mode, GLint first, GLsizei count)
     if (flat) base.depthBias = 0.0f;    // Flat shading goes through shadeVertex, which sets the (disabled) polygon offset
 
     initByteColor();
+    Vertex litVertex;
+    if (lit) litVertex = gl.current;
     u8 *out = gl.vbo + (size_t)gl.vertexCount*GPU_VERTEX_SIZE;
     for (int i = 0; i < n; i += 3, out += 3*GPU_VERTEX_SIZE)
     {
@@ -428,6 +437,13 @@ static bool arrayTriangleFastPath(GLenum mode, GLint first, GLsizei count)
                 g->color[1] = byteColor[pc[1]];
                 g->color[2] = byteColor[pc[2]];
                 g->color[3] = byteColor[pc[3]];
+            }
+            if (lit)
+            {
+                memcpy(litVertex.pos, g->pos, sizeof(litVertex.pos));
+                memcpy(litVertex.color, g->color, 4);
+                lightVertexCached(&litVertex, gl.currentNormal);
+                memcpy(g->color, litVertex.color, 4);
             }
         }
     }
