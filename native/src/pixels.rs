@@ -719,6 +719,7 @@ unsafe fn draw_rect(
                     size: (texw, texh),
                     fill: &mut |p| fill(p, (texw, texh), (tx, ty), (tw, th)),
                     prefilled: None,
+                    more: &[],
                     wx: [x0, x1, x1, x0],
                     wy: [y0, y0, y1, y1],
                     s: [0., s1, s1, 0.],
@@ -1110,6 +1111,22 @@ pub unsafe extern "C" fn glBitmap(
             } else {
                 PixelMode::BitmapZero
             };
+            match collect_glyph(r, bitmap, &store, (w, h), (x, y), alpha == 0) {
+                Ok(true) => {
+                    r.frame.pixels.raster.pos[0] += xmove;
+                    r.frame.pixels.raster.pos[1] += ymove;
+                    return;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    r.matrices.fail(e);
+                    return;
+                }
+            }
+            // Drawn alone: what was collected goes first.
+            if let Err(e) = flush_glyphs(r) {
+                r.matrices.fail(e);
+            }
             let result = draw_rect(
                 r,
                 mode,
@@ -1137,6 +1154,134 @@ pub unsafe extern "C" fn glBitmap(
         r.frame.pixels.raster.pos[0] += xmove;
         r.frame.pixels.raster.pos[1] += ymove;
     });
+}
+
+/// Bitmaps of a glCallLists (text: a list per glyph) collected in one atlas and drawn together:
+/// between them only glBitmap commands run, so nothing else can change the state.
+#[derive(Default)]
+pub(crate) struct GlyphBatch {
+    /// glCallLists nesting while collecting (0: bitmaps are drawn one by one).
+    pub depth: u32,
+    bitmap_zero: bool,
+    /// The atlas (CPU and physical address) in frame memory.
+    pub atlas: Option<(*mut u8, u32)>,
+    /// Next free place: x, y and the height of the current row.
+    cursor: (usize, usize, usize),
+    /// Window x, window y, s and t of each glyph's corners.
+    pub quads: Vec<[[f32; 4]; 4]>,
+}
+
+const ATLAS: usize = 128;
+
+/// Draw the collected glyphs.
+pub(crate) unsafe fn flush_glyphs(r: &mut Renderer) -> Result<(), u32> {
+    let b = &mut r.glyphs;
+    let Some((_, physical)) = b.atlas else {
+        return Ok(());
+    };
+    if b.quads.is_empty() {
+        return Ok(());
+    }
+    let quads = core::mem::take(&mut b.quads);
+    let mode = if b.bitmap_zero {
+        PixelMode::BitmapZero
+    } else {
+        PixelMode::Bitmap
+    };
+    let q0 = quads[0];
+    let result = draw_pixel_quad(
+        r,
+        PixelQuad {
+            mode,
+            format: PixelFormat::A8,
+            size: (ATLAS, ATLAS),
+            fill: &mut |_| {},
+            prefilled: Some(physical),
+            more: &quads[1..],
+            wx: q0[0],
+            wy: q0[1],
+            s: q0[2],
+            t: q0[3],
+            user_state: true,
+        },
+    );
+    let mut quads = quads;
+    quads.clear();
+    r.glyphs.quads = quads;
+    result
+}
+
+/// Collect a fully visible bitmap of at most 32 x 32 pixels at window (x, y) into the glyph
+/// batch; false when it must be drawn on its own.
+unsafe fn collect_glyph(
+    r: &mut Renderer,
+    bitmap: *const u8,
+    store: &PixelStore,
+    (w, h): (usize, usize),
+    (x, y): (f32, f32),
+    zero: bool,
+) -> Result<bool, u32> {
+    if r.glyphs.depth == 0
+        || w > 32
+        || h > 32
+        || x < 0.
+        || y < 0.
+        || x + w as f32 > WIDTH as f32
+        || y + h as f32 > HEIGHT as f32
+    {
+        return Ok(false);
+    }
+    if r.glyphs.bitmap_zero != zero && !r.glyphs.quads.is_empty() {
+        flush_glyphs(r)?;
+    }
+    if !crate::renderer::frame_begun(r) {
+        return Err(0x0502);
+    }
+    let b = &mut r.glyphs;
+    b.bitmap_zero = zero;
+    let (mut cx, mut cy, mut row) = b.cursor;
+    if cx + w > ATLAS {
+        cx = 0;
+        cy += row;
+        row = 0;
+    }
+    if b.atlas.is_none() || cy + h > ATLAS {
+        // A new atlas (the full one is drawn first).
+        flush_glyphs(r)?;
+        let (pointer, physical) = r.arena_alloc(ATLAS * ATLAS, 128)?;
+        core::ptr::write_bytes(pointer, 0, ATLAS * ATLAS);
+        r.glyphs.atlas = Some((pointer, physical));
+        (cx, cy, row) = (0, 0, 0);
+    }
+    let b = &mut r.glyphs;
+    let (atlas, _) = b.atlas.unwrap();
+    let bytes = bitmap_row_bytes(store, w);
+    for yy in 0..h {
+        let line = atlas.add(crate::texture::tiled_y(ATLAS, ATLAS, cy + yy, 1));
+        let src = bitmap.add((store.skip_rows + yy) * bytes);
+        for xx in 0..w {
+            if bitmap_row_bit(src, store, xx) {
+                line.add(crate::texture::tiled_x(cx + xx, 1)).write(255);
+            }
+        }
+    }
+    let k = 1. / ATLAS as f32;
+    let (s0, s1, t0, t1) = (
+        cx as f32 * k,
+        (cx + w) as f32 * k,
+        cy as f32 * k,
+        (cy + h) as f32 * k,
+    );
+    let (x1, y1) = (x + w as f32, y + h as f32);
+    b.quads.try_reserve(1).map_err(|_| 0x0505u32)?;
+    b.quads.push([
+        [x, x1, x1, x],
+        [y, y, y1, y1],
+        [s0, s1, s1, s0],
+        [t0, t0, t1, t1],
+    ]);
+    b.cursor = (cx + w, cy, row.max(h));
+    Ok(true)
 }
 
 /// A feedback token with the raster position (glBitmap, glDrawPixels, glCopyPixels).

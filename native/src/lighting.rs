@@ -61,6 +61,10 @@ pub(crate) struct Lighting {
     normalize: bool,
     rescale_normal: bool,
     normals: Option<NormalMatrix>,
+    /// The modelview serial `normals` was made for, and the serial of the modelview the current
+    /// call passes (`with_modelview_serial`): equal serials skip comparing the matrices.
+    normals_serial: Option<u32>,
+    call_serial: Option<u32>,
     /// Identifies this lighting state (unique across all changes, see `changed`): lit vertices
     /// cached for a serial stay valid for it.
     pub serial: u32,
@@ -202,6 +206,8 @@ impl Lighting {
             normalize: false,
             rescale_normal: false,
             normals: None,
+            normals_serial: None,
+            call_serial: None,
             serial: 0,
         }
     }
@@ -213,6 +219,14 @@ impl Lighting {
             self.serial = NEXT_SERIAL;
             NEXT_SERIAL = NEXT_SERIAL.wrapping_add(1).max(1);
         }
+    }
+
+    /// Run `f` with the serial of the modelview matrix it passes (`Matrices::modelview_serial`).
+    pub fn with_modelview_serial<T>(&mut self, serial: u32, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.call_serial = Some(serial);
+        let result = f(self);
+        self.call_serial = None;
+        result
     }
 
     /// GL_COLOR_MATERIAL tracking of a vertex color whose lit result came from the cache.
@@ -285,13 +299,16 @@ impl Lighting {
     }
 
     fn normal_matrix(&mut self, modelview: &[f32; 16]) -> &NormalMatrix {
-        if !self
-            .normals
-            .as_ref()
-            .is_some_and(|n| n.modelview == *modelview)
+        let same_serial = self.call_serial.is_some() && self.call_serial == self.normals_serial;
+        if !(self.normals.is_some() && same_serial)
+            && !self
+                .normals
+                .as_ref()
+                .is_some_and(|n| n.modelview == *modelview)
         {
             self.normals = Some(NormalMatrix::new(modelview));
         }
+        self.normals_serial = self.call_serial;
         self.normals.as_ref().unwrap()
     }
 

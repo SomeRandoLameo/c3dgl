@@ -237,7 +237,9 @@ impl LitCache {
             light.track_color(color);
             return (entry.front, entry.back);
         }
-        let (front, back) = light.light_vertex(&matrices.modelview(), position, normal, color);
+        let (front, back) = light.with_modelview_serial(matrices.modelview_serial, |l| {
+            l.light_vertex(&matrices.modelview(), position, normal, color)
+        });
         *entry = LitEntry {
             generation: self.generation,
             key,
@@ -250,6 +252,10 @@ impl LitCache {
 
 pub(crate) struct Renderer {
     lit: LitCache,
+    /// Buffers of CPU polygon assembly.
+    poly_scratch: crate::polygon::Scratch,
+    /// Bitmaps of a glCallLists drawn together (see `pixels::GlyphBatch`).
+    pub(crate) glyphs: crate::pixels::GlyphBatch,
     /// Buffers of array draws through the CPU.
     gathered: Gathered,
     /// The raster state of the last pixel rectangle when the GPU still has it (full viewport, no
@@ -603,6 +609,8 @@ pub(crate) struct PixelQuad<'a> {
     pub fill: &'a mut dyn FnMut(*mut u8),
     /// The physical address of texels already in frame memory (`fill` is not called).
     pub prefilled: Option<u32>,
+    /// More quads with the same texture and state: window x, window y, s and t of each corner.
+    pub more: &'a [[[f32; 4]; 4]],
     pub wx: [f32; 4],
     pub wy: [f32; 4],
     pub s: [f32; 4],
@@ -657,7 +665,10 @@ pub(crate) unsafe fn draw_pixel_quad(r: &mut Renderer, q: PixelQuad) -> Result<(
         Some(address) => address,
         None => {
             let (texture, physical) = r.arena.alloc_aligned(bytes, 128)?;
-            ptr::write_bytes(texture, 0, bytes);
+            // Images fill every texel the quad samples; bitmap masks write set bits only.
+            if q.mode != PixelMode::Image {
+                ptr::write_bytes(texture, 0, bytes);
+            }
             (q.fill)(texture);
             physical
         }
@@ -738,13 +749,35 @@ pub(crate) unsafe fn draw_pixel_quad(r: &mut Renderer, q: PixelQuad) -> Result<(
         (0., [255; 4])
     };
     let (sw, sh) = (2. / 400., 2. / 240.);
-    let vertices: [GpuVertex; 4] = core::array::from_fn(|i| GpuVertex {
-        position: [q.wx[i] * sw - 1., q.wy[i] * sh - 1., z, 1.],
+    let corner = |wx: f32, wy: f32, s: f32, t: f32| GpuVertex {
+        position: [wx * sw - 1., wy * sh - 1., z, 1.],
         color,
-        texcoord: [q.s[i], q.t[i], 0., 1.],
+        texcoord: [s, t, 0., 1.],
         extra_texcoords: [[0., 0., 0., 1.]; 2],
-    });
-    let result = draw_transient(r, &vertices, &[0u16, 1, 2, 0, 2, 3], 6, true, 0.);
+    };
+    let result = if q.more.is_empty() {
+        let vertices: [GpuVertex; 4] =
+            core::array::from_fn(|i| corner(q.wx[i], q.wy[i], q.s[i], q.t[i]));
+        draw_transient(r, &vertices, &[0u16, 1, 2, 0, 2, 3], 6, true, 0.)
+    } else {
+        // A batch of quads (glyphs of a glCallLists).
+        let n = 1 + q.more.len();
+        let mut vertices = alloc::vec::Vec::new();
+        let mut indices = alloc::vec::Vec::new();
+        if vertices.try_reserve_exact(4 * n).is_err() || indices.try_reserve_exact(6 * n).is_err() {
+            Err(0x0505)
+        } else {
+            for (k, g) in core::iter::once([q.wx, q.wy, q.s, q.t])
+                .chain(q.more.iter().copied())
+                .enumerate()
+            {
+                vertices.extend((0..4).map(|i| corner(g[0][i], g[1][i], g[2][i], g[3][i])));
+                let b = (4 * k) as u16;
+                indices.extend([b, b + 1, b + 2, b, b + 2, b + 3]);
+            }
+            draw_transient(r, &vertices, &indices, indices.len() as u32, true, 0.)
+        }
+    };
     if result.is_ok() {
         state.dirty = false;
         r.pixel_applied = Some(state);
@@ -834,6 +867,7 @@ pub(crate) unsafe fn copy_color(
             size: (TEX_W, tex_h),
             fill: &mut |_| {},
             prefilled: Some(physical),
+            more: &[],
             wx: q[0],
             wy: q[1],
             s: q[2],
@@ -869,6 +903,7 @@ pub(crate) unsafe fn draw_image(
             size: (tw, th),
             fill: &mut |p| fill(p, tw, th),
             prefilled: None,
+            more: &[],
             wx: [sw, x1, x1, sw],
             wy: [sh, sh, y1, y1],
             s: [0., w as f32 / tw as f32, w as f32 / tw as f32, 0.],
@@ -878,7 +913,21 @@ pub(crate) unsafe fn draw_image(
     )
 }
 
+/// A frame is begun (begins one if needed); false if that failed.
+pub(crate) unsafe fn frame_begun(r: &mut Renderer) -> bool {
+    r.active || begin_frame(r, true, None) == 0
+}
+
 impl Renderer {
+    /// Frame memory (see `Arena::alloc_aligned`).
+    pub(crate) unsafe fn arena_alloc(
+        &mut self,
+        size: usize,
+        align: usize,
+    ) -> Result<(*mut u8, u32), u32> {
+        self.arena.alloc_aligned(size, align)
+    }
+
     unsafe fn create() -> Option<alloc::boxed::Box<Self>> {
         // Fallible allocation and RAII rollback for every intermediate failure.
         let commands = Buffer::new(COMMAND_WORDS * 4, false)?;
@@ -909,6 +958,8 @@ impl Renderer {
         core::ptr::addr_of_mut!((*slot).immediate).write(crate::immediate::Immediate::new());
         core::ptr::addr_of_mut!((*slot).arena).write(Arena::new());
         core::ptr::addr_of_mut!((*slot).lit).write(LitCache::new());
+        core::ptr::addr_of_mut!((*slot).poly_scratch).write(Default::default());
+        core::ptr::addr_of_mut!((*slot).glyphs).write(Default::default());
         core::ptr::addr_of_mut!((*slot).gathered).write(Gathered::default());
         core::ptr::addr_of_mut!((*slot).pixel_applied).write(None);
         core::ptr::addr_of_mut!((*slot).readback).write(None);
@@ -1105,6 +1156,9 @@ unsafe fn begin_frame(r: &mut Renderer, sync: bool, clear: Option<u32>) -> i32 {
     r.arrays.collected();
     r.frame.textures.collected();
     r.arena.reset();
+    // Atlases of an earlier frame are gone with its memory.
+    r.glyphs.atlas = None;
+    r.glyphs.quads.clear();
     r.pixel_applied = None;
     r.frame_serial = r.frame_serial.wrapping_add(1);
 
@@ -2128,7 +2182,11 @@ unsafe fn light_vertices(
     }
     let mv = r.matrices.modelview();
     for (v, n) in vertices.iter_mut().zip(normals) {
-        let (front, back) = r.frame.light.light_vertex(&mv, v.position, *n, v.color);
+        let serial = r.matrices.modelview_serial;
+        let (front, back) = r
+            .frame
+            .light
+            .with_modelview_serial(serial, |l| l.light_vertex(&mv, v.position, *n, v.color));
         v.color = front;
         if let Some(b) = back {
             backs.push(b.map(|c| c as f32));
@@ -2247,8 +2305,11 @@ unsafe fn draw_gathered(
             .arrays
             .edge_flags(first, count, kind, indices)?
             .unwrap_or_else(|| alloc::vec![true; source.len()]);
-        let items = crate::polygon::assemble(mode, source, &backs, &edges, settings)?;
-        return draw_items(r, items);
+        let mut scratch = core::mem::take(&mut r.poly_scratch);
+        let items =
+            crate::polygon::assemble_with(mode, source, &backs, &edges, settings, &mut scratch);
+        r.poly_scratch = scratch;
+        return draw_items(r, items?);
     }
     if !r.frame.raster.drawable() {
         return Ok(());
@@ -2302,6 +2363,13 @@ unsafe fn draw_items(
     r: &mut Renderer,
     items: alloc::vec::Vec<crate::polygon::Item>,
 ) -> Result<(), u32> {
+    let result = draw_item_list(r, &items);
+    // The vectors are used again by the next assembly.
+    r.poly_scratch.recycle(items);
+    result
+}
+
+unsafe fn draw_item_list(r: &mut Renderer, items: &[crate::polygon::Item]) -> Result<(), u32> {
     for item in items {
         match item {
             crate::polygon::Item::Fill { indices, .. } if indices.is_empty() => {}
@@ -2309,9 +2377,9 @@ unsafe fn draw_items(
                 vertices,
                 indices,
                 bias,
-            } => draw_transient(r, &vertices, &indices, indices.len() as u32, false, bias)?,
+            } => draw_transient(r, vertices, indices, indices.len() as u32, false, *bias)?,
             crate::polygon::Item::Clip { vertices, indices } => {
-                draw_transient(r, &vertices, &indices, indices.len() as u32, true, 0.)?
+                draw_transient(r, vertices, indices, indices.len() as u32, true, 0.)?
             }
         }
     }
@@ -2396,14 +2464,17 @@ pub(crate) unsafe fn end_immediate() {
                 settings.flat = false;
             }
             if settings.needed() {
-                let items = crate::polygon::assemble(
+                let mut scratch = core::mem::take(&mut r.poly_scratch);
+                let items = crate::polygon::assemble_with(
                     batch.primitive,
                     &batch.vertices,
                     &batch.backs,
                     &batch.edges,
                     &settings,
-                )?;
-                return draw_items(r, items);
+                    &mut scratch,
+                );
+                r.poly_scratch = scratch;
+                return draw_items(r, items?);
             }
 
             if !r.frame.raster.drawable() {

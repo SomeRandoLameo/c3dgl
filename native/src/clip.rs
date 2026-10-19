@@ -59,6 +59,11 @@ impl Planes {
         self.n > 0
     }
 
+    /// Whether `v` is on the inside of every plane (a polygon of such vertices is not clipped).
+    pub fn inside(&self, v: &GpuVertex) -> bool {
+        self.p[..self.n].iter().all(|p| distance(p, v) >= 0.)
+    }
+
     /// Points are kept or dropped whole.
     pub fn point_clipped(&self, v: &GpuVertex) -> bool {
         self.p[..self.n].iter().any(|p| distance(p, v) < 0.)

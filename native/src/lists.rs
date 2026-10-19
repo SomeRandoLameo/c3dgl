@@ -269,6 +269,19 @@ pub(crate) unsafe fn compiling() -> bool {
 }
 
 unsafe fn execute(cmd: &Cmd) {
+    // Collected glyphs are drawn before anything else could change the state.
+    if !matches!(
+        cmd,
+        Cmd::Bitmap { .. } | Cmd::CallList(_) | Cmd::CallLists(_) | Cmd::ListBase(_)
+    ) {
+        with_immediate(|r| {
+            if !r.glyphs.quads.is_empty() {
+                if let Err(e) = crate::pixels::flush_glyphs(r) {
+                    r.matrices.fail(e);
+                }
+            }
+        });
+    }
     use crate::{
         accum::*, blend::*, clip::*, evaluator::*, fog::*, frame::*, immediate::*, lighting::*,
         matrix::*, pixels::*, raster::*, stipple::*, texgen::*, texture::*,
@@ -679,12 +692,22 @@ pub unsafe extern "C" fn glCallLists(n: i32, ty: u32, lists: *const c_void) {
         with_immediate(|r| r.matrices.fail(0x0500));
         return;
     }
+    // Bitmaps of the called lists (text) are collected and drawn together.
+    with_immediate(|r| r.glyphs.depth += 1);
     for i in 0..n as usize {
         // The base is read per name: a called list may change it.
         let mut base = 0;
         with_immediate(|r| base = r.frame.lists.base);
         execute_list(base.wrapping_add(name_at(ty, lists, i)));
     }
+    with_immediate(|r| {
+        r.glyphs.depth -= 1;
+        if r.glyphs.depth == 0 {
+            if let Err(e) = crate::pixels::flush_glyphs(r) {
+                r.matrices.fail(e);
+            }
+        }
+    });
 }
 
 #[no_mangle]

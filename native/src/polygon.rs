@@ -68,6 +68,8 @@ struct Builder<'a> {
     bs: Vec<[f32; 4]>,
     edges: Vec<bool>,
     scratch: crate::clip::Scratch,
+    /// Where the source vertices start in the first fill item, once polygons index them.
+    direct: Option<u16>,
 }
 
 fn transform(m: &[f32; 16], p: [f32; 4]) -> [f32; 4] {
@@ -127,6 +129,24 @@ fn polygon_offset(s: &Settings, vs: &[GpuVertex]) -> f32 {
 }
 
 impl Builder<'_> {
+    /// The first index of the source vertices in the first fill item (appended at the first
+    /// use); None when they do not fit.
+    fn direct_base(&mut self, src: &Src) -> Result<Option<u16>, u32> {
+        if self.direct.is_none() {
+            let Some(Item::Fill { vertices, bias, .. }) = self.items.first_mut() else {
+                return Ok(None);
+            };
+            if *bias != 0. || vertices.len() + src.v.len() > LIMIT {
+                return Ok(None);
+            }
+            let base = vertices.len() as u16;
+            vertices.try_reserve(src.v.len()).map_err(|_| 0x0505u32)?;
+            vertices.extend_from_slice(src.v);
+            self.direct = Some(base);
+        }
+        Ok(self.direct)
+    }
+
     /// The fill item for `n` more vertices with `bias`.
     fn fill(&mut self, bias: f32, n: usize) -> (&mut Vec<GpuVertex>, &mut Vec<u16>) {
         let new = !matches!(
@@ -176,6 +196,28 @@ impl Builder<'_> {
         pv: Option<usize>,
     ) -> Result<(), u32> {
         let two_sided = !src.backs.is_empty();
+        // Filled, smooth, one-sided and not clipped: the polygon's triangles index the source
+        // vertices (taken over once), as the copied path would draw them.
+        let s = self.s;
+        if !s.modes_active()
+            && !s.flat
+            && !two_sided
+            && !s.offset[0]
+            // Only while everything goes to the first item (the drawing order stays).
+            && self.items.len() == 1
+            && idx.iter().all(|&i| s.style.clip.inside(&src.v[i]))
+        {
+            if let Some(base) = self.direct_base(src)? {
+                if let Some(Item::Fill { indices, .. }) = self.items.first_mut() {
+                    let n = idx.len();
+                    indices.try_reserve(3 * (n - 2)).map_err(|_| 0x0505u32)?;
+                    for i in 1..n - 1 {
+                        indices.extend([idx[0], idx[i], idx[i + 1]].map(|k| base + k as u16));
+                    }
+                    return Ok(());
+                }
+            }
+        }
         let mut vs = core::mem::take(&mut self.vs);
         let mut bs = core::mem::take(&mut self.bs);
         let mut flags = core::mem::take(&mut self.edges);
@@ -373,6 +415,35 @@ pub(crate) fn visit(
 
 /// Assemble the primitives of `mode` (4..=9) from `v` (drawing order; `backs`: back colors of
 /// two-sided lighting or empty; `edges`: GL edge flags of each vertex) into ordered draws.
+/// Buffers of `assemble` kept between draws (no allocation per draw).
+#[derive(Default)]
+pub(crate) struct Scratch {
+    items: Vec<Item>,
+    vs: Vec<GpuVertex>,
+    bs: Vec<[f32; 4]>,
+    edges: Vec<bool>,
+    clip: crate::clip::Scratch,
+    /// The vectors of the first fill item of the last draw.
+    fill: (Vec<GpuVertex>, Vec<u16>),
+}
+
+impl Scratch {
+    /// Take back the items of a drawn assembly.
+    pub fn recycle(&mut self, mut items: Vec<Item>) {
+        if let Some(Item::Fill {
+            mut vertices,
+            mut indices,
+            ..
+        }) = items.drain(..).next()
+        {
+            vertices.clear();
+            indices.clear();
+            self.fill = (vertices, indices);
+        }
+        self.items = items;
+    }
+}
+
 pub(crate) fn assemble(
     mode: u32,
     v: &[GpuVertex],
@@ -380,18 +451,32 @@ pub(crate) fn assemble(
     edges: &[bool],
     s: &Settings,
 ) -> Result<Vec<Item>, u32> {
+    assemble_with(mode, v, backs, edges, s, &mut Scratch::default())
+}
+
+/// `assemble` with reused buffers.
+pub(crate) fn assemble_with(
+    mode: u32,
+    v: &[GpuVertex],
+    backs: &[[f32; 4]],
+    edges: &[bool],
+    s: &Settings,
+    scratch: &mut Scratch,
+) -> Result<Vec<Item>, u32> {
     let mut b = Builder {
         s,
-        items: Vec::new(),
-        vs: Vec::new(),
-        bs: Vec::new(),
-        edges: Vec::new(),
-        scratch: Default::default(),
+        items: core::mem::take(&mut scratch.items),
+        vs: core::mem::take(&mut scratch.vs),
+        bs: core::mem::take(&mut scratch.bs),
+        edges: core::mem::take(&mut scratch.edges),
+        scratch: core::mem::take(&mut scratch.clip),
+        direct: None,
     };
+    b.items.clear();
     let src = Src { v, backs, edges };
     // Filled output: at most three vertices per input vertex (fans, strips, clipped polygons).
     if !s.modes_active() && !s.offset[0] {
-        let (mut first, mut indices) = (Vec::new(), Vec::new());
+        let (mut first, mut indices) = core::mem::take(&mut scratch.fill);
         first
             .try_reserve((2 * v.len()).min(LIMIT))
             .map_err(|_| 0x0505u32)?;
@@ -405,14 +490,16 @@ pub(crate) fn assemble(
         });
     }
     // GL_POLYGON is one polygon when its outline is drawn.
-    visit(
+    let result = visit(
         mode,
         v.len(),
         edges,
         s.flat,
         s.modes_active(),
         &mut |idx, flags, pv| b.polygon(&src, idx, flags, pv),
-    )?;
+    );
+    (scratch.vs, scratch.bs, scratch.edges, scratch.clip) = (b.vs, b.bs, b.edges, b.scratch);
+    result?;
     Ok(b.items)
 }
 
