@@ -9,7 +9,7 @@ bool c3dglInit(void)
     memset(&gl, 0, sizeof(gl));
     memset(litCache, 0, sizeof(litCache));     // Generations restart at 0
 
-    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) { LOG("C3D_Init failed\n"); return false; }
+    if (!C3D_Init(2*C3D_DEFAULT_CMDBUF_SIZE)) { LOG("C3D_Init failed\n"); return false; }
 
     // Render targets are portrait (240x400, 240x320) because the screens are rotated.
     // The bottom one is linked to its display on the first c3dglSetScreen(), so a console there stays untouched

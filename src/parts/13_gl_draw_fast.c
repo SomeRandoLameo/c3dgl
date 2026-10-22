@@ -60,6 +60,7 @@ extern u8 __C3D_Context[];
 static void drawCompactCache(GpuBufferCache *cache)
 {
     flush();  // Preserve submission order with ordinary immediate/array geometry.
+    if (cmdBufLow()) return;
     PROF_ENTER();
     if (!gl.compactLayout)
     {
@@ -107,6 +108,7 @@ static void drawGpuCache(GpuBufferCache *cache)
 {
     if (cache->compact) { drawCompactCache(cache); return; }
     flush();  // Preserve submission order with ordinary immediate/array geometry.
+    if (cmdBufLow()) return;
     useStandardLayout();
     PROF_ENTER();
     C3D_BufInfo saved = *C3D_GetBufInfo();

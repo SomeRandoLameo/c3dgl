@@ -231,10 +231,29 @@ static void useStandardLayout(void)
     gl.compactBufBound = false;
 }
 
+// A frame that asks for more commands than the command buffer holds ends the program (libctru's GPUCMD_Add is a svcBreak, and the
+// console goes back to the launcher with a bare exception screen). Near the end of the buffer draws are left out instead of
+// asked for: a few things missing for a frame is better than losing the game. Every draw needs some hundreds of bytes (state
+// and the draw itself), a frame the clears and the swap: 24 KB is kept free for those
+static bool cmdBufLow(void)
+{
+    u32 *buffer, size, offset;
+    GPUCMD_GetBuffer(&buffer, &size, &offset);
+    if (size - offset >= 6144) return false;
+    static u32 skipped = 0;
+    if ((skipped++ % 500) == 0) LOG("GPU command buffer nearly full (%u of %u words): draws are left out\n", (unsigned)offset, (unsigned)size);
+    return true;
+}
+
 static void flush(void)
 {
     int count = gl.vertexCount - gl.batchStart;
     if (count <= 0) return;
+    if (cmdBufLow())
+    {
+        gl.batchStart = gl.vertexCount;     // (the vertices of this batch are dropped)
+        return;
+    }
     useStandardLayout();
 
     {
