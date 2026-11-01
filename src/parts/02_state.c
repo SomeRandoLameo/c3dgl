@@ -28,11 +28,12 @@ static struct {
     bool frameActive;
     bool drawnThisFrame;
 #ifdef C3DGL_PROFILE_GPU_CACHE
-    u32 gpuCacheHits, gpuCacheMisses;
+    u32 gpuCacheHits, gpuCacheMisses, gpuMeshDirect, gpuMeshGl, gpuNoRoom;
 #endif
     u64 bufferRevision;
     size_t gpuCacheBytes;
     GpuBufferCache *retiredGpuCaches;
+    GpuBufferCache *lruHead, *lruTail;      // Live caches by last draw: eviction takes the head without scanning every buffer
     u32 frameSerial;                    // Counts the waits for the GPU (frame begun, frame resumed), see textureBusy()
     C3D_Tex dummyTexture;               // 8x8, bound to units 1/2 while they are unused (see applyState)
     u8 *vbo;                            // Vertex buffer 0, GPU_VERTEX_SIZE per vertex; linear memory, rewritten every frame
@@ -144,7 +145,7 @@ static struct {
     GLenum fogMode;
     float fogDensity, fogStart, fogEnd, fogColor[4], fogIndex;
     C3D_FogLut fogLut;
-    float fogLutInputs[10];
+    float fogLutInputs[11];     // (what updateFogLut() compares: eleven values)
     bool fogLutValid;
 
     // User clip planes (glClipPlane), see clipPolygon()

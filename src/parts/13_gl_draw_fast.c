@@ -97,7 +97,7 @@ static void drawCompactCache(GpuBufferCache *cache)
         gl.compactBufBound = true;
     }
     C3D_DrawElements(GPU_TRIANGLES, cache->count, C3D_UNSIGNED_SHORT, cache->indices);
-    cache->drawnFrame = gl.frameSerial;
+    gpuCacheTouch(cache);
     for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
         gl.textures[gl.batch.units[unit].texture].drawnFrame = gl.frameSerial;
     gl.drawnThisFrame = true;
@@ -119,7 +119,7 @@ static void drawGpuCache(GpuBufferCache *cache)
     C3D_SetBufInfo(&info);
     C3D_DrawArrays(GPU_TRIANGLES, 0, cache->count);
     C3D_SetBufInfo(&saved);
-    cache->drawnFrame = gl.frameSerial;
+    gpuCacheTouch(cache);
     for (int unit = 0; unit < C3DGL_TEXTURE_UNITS; unit++)
         gl.textures[gl.batch.units[unit].texture].drawnFrame = gl.frameSerial;
     gl.drawnThisFrame = true;
@@ -156,10 +156,32 @@ static GpuBufferCache *makeCompactCache(Buffer *source, const ClientArray *av, c
     int maxIndex = 0;
     bool quads = true;      // 0 1 2 0 2 3, 4 5 6 4 6 7, ...: gl.quadIndices serves
     static const u8 quadPattern[6] = { 0, 1, 2, 0, 2, 3 };
-    for (int i = 0; i < n; i++)
+    // Six indices at a time, no division (there is no divide instruction: i/6 and i%6 for each of thousands of indices took
+    // most of the time of a cache miss)
     {
-        if (index[i] > maxIndex) maxIndex = index[i];
-        quads = quads && (index[i] == (i/6)*4 + quadPattern[i % 6]);
+        const int groups = n/6;
+        const u16 *p = index;
+        int b = 0;
+        int g = 0;
+        for (; g < groups; g++, p += 6, b += 4)
+        {
+            if ((p[0] != b) | (p[1] != b + 1) | (p[2] != b + 2) | (p[3] != b) | (p[4] != b + 2) | (p[5] != b + 3)) { quads = false; break; }
+        }
+        if (quads)
+        {
+            // A group is ascending, so its last vertex b + 3 is its highest; the rest of a partial group follows the pattern too
+            maxIndex = g? b - 1 : 0;
+            for (int i = 0; i < n - groups*6; i++)
+            {
+                if (p[i] != b + quadPattern[i]) { quads = false; break; }
+                if (p[i] > maxIndex) maxIndex = p[i];
+            }
+        }
+        if (!quads)
+        {
+            maxIndex = 0;
+            for (int i = 0; i < n; i++) if (index[i] > maxIndex) maxIndex = index[i];
+        }
     }
     const size_t vertexBytes = (size_t)(maxIndex + 1)*16;
     if (base + vertexBytes > (size_t)source->size) return NULL;
@@ -263,8 +285,7 @@ static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, in
 #ifdef C3DGL_PROFILE_GPU_CACHE
             gl.gpuCacheMisses++;
 #endif
-            source->gpuCache = compact;
-            gl.gpuCacheBytes += compact->bytes;
+            installGpuCache(source, compact);
             drawGpuCache(compact);
             PROF_PATH(PB_EL_FAST);
             return true;
@@ -272,6 +293,9 @@ static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, in
     }
     // A cache miss is validated and converted below exactly like the existing
     // fast path. Optional allocation failure simply uses the per-frame buffer.
+#ifdef C3DGL_PROFILE_GPU_CACHE
+    if (cacheable) gl.gpuNoRoom++;
+#endif
     if (cacheable && makeGpuCacheRoom((size_t)n * GPU_VERTEX_SIZE)) {
         cache = calloc(1, sizeof(*cache));
         if (cache) {
@@ -349,8 +373,7 @@ static bool indexedTriangleFastPath(GLenum mode, GLenum type, const u8 *data, in
 #ifdef C3DGL_PROFILE_GPU_CACHE
         gl.gpuCacheMisses++;
 #endif
-        source->gpuCache = cache;
-        gl.gpuCacheBytes += cache->bytes;
+        installGpuCache(source, cache);
         GSPGPU_FlushDataCache(cache->data, cache->bytes);
         drawGpuCache(cache);
     } else gl.vertexCount += n;
@@ -575,7 +598,17 @@ void c3dglDrawMeshes(const C3DGLmesh *meshes, int n, float scale)
                 (memcmp(&cache->depthBias, &gl.current.depthBias, sizeof(float)) != 0) ||
                 (memcmp(cache->arrays, arrays, sizeof(arrays)) != 0)) cache = NULL;
         }
-        if (cache == NULL) { drawMeshGL(m, scale); continue; }
+        if (cache == NULL)
+        {
+#ifdef C3DGL_PROFILE_GPU_CACHE
+            gl.gpuMeshGl++;
+#endif
+            drawMeshGL(m, scale);
+            continue;
+        }
+#ifdef C3DGL_PROFILE_GPU_CACHE
+        gl.gpuMeshDirect++;
+#endif
 
         PROF_ENTER();
         if (!prepared || gl.batch.matrixSerial != ~0u)

@@ -3,6 +3,38 @@
 //----------------------------------------------------------------------------------
 // Frame and batch management
 //----------------------------------------------------------------------------------
+static void lruUnlink(GpuBufferCache *cache)
+{
+    if (cache->lruPrev) cache->lruPrev->lruNext = cache->lruNext; else if (gl.lruHead == cache) gl.lruHead = cache->lruNext;
+    if (cache->lruNext) cache->lruNext->lruPrev = cache->lruPrev; else if (gl.lruTail == cache) gl.lruTail = cache->lruPrev;
+    cache->lruPrev = cache->lruNext = NULL;
+}
+
+static void lruAppend(GpuBufferCache *cache)
+{
+    cache->lruPrev = gl.lruTail;
+    cache->lruNext = NULL;
+    if (gl.lruTail) gl.lruTail->lruNext = cache; else gl.lruHead = cache;
+    gl.lruTail = cache;
+}
+
+// A draw used `cache`: it is now the youngest (once per frame, repeated draws leave it where it is)
+static void gpuCacheTouch(GpuBufferCache *cache)
+{
+    if (cache->drawnFrame == gl.frameSerial) return;
+    cache->drawnFrame = gl.frameSerial;
+    if (gl.lruTail != cache) { lruUnlink(cache); lruAppend(cache); }
+}
+
+// A new cache becomes the buffer's
+static void installGpuCache(Buffer *b, GpuBufferCache *cache)
+{
+    cache->owner = (GLuint)(b - gl.buffers);
+    b->gpuCache = cache;
+    gl.gpuCacheBytes += cache->bytes;
+    lruAppend(cache);
+}
+
 static void freeGpuCache(GpuBufferCache *cache)
 {
     gl.gpuCacheBytes -= cache->bytes;
@@ -15,6 +47,7 @@ static void invalidateGpuCache(Buffer *b)
     GpuBufferCache *cache = b->gpuCache;
     if (cache == NULL) return;
     b->gpuCache = NULL;
+    lruUnlink(cache);
     // Commands may reference this memory even after a frame was submitted.
     // frameSerial advances only after the GPU wait, never on FrameSplit/End.
     if (cache->drawnFrame && cache->drawnFrame == gl.frameSerial) {
@@ -41,14 +74,9 @@ static bool makeGpuCacheRoom(size_t bytes)
     collectGpuCaches();
     while (gl.gpuCacheBytes + bytes > C3DGL_GPU_CACHE_BYTES ||
            linearSpaceFree() < bytes + 1024u * 1024u) {
-        Buffer *oldest = NULL;
-        for (GLuint i = 1; i < gl.bufferCount; i++) {
-            GpuBufferCache *cache = gl.buffers[i].gpuCache;
-            if (!cache || cache->drawnFrame == gl.frameSerial) continue;
-            if (!oldest || cache->drawnFrame < oldest->gpuCache->drawnFrame) oldest = &gl.buffers[i];
-        }
-        if (!oldest) return false;
-        invalidateGpuCache(oldest);
+        GpuBufferCache *oldest = gl.lruHead;
+        if (!oldest || oldest->drawnFrame == gl.frameSerial) return false;
+        invalidateGpuCache(&gl.buffers[oldest->owner]);
     }
     return true;
 }
@@ -170,10 +198,11 @@ static void ensureFrame(void)
     gl.frameSerial++;           // The GPU is done with the previous frame
 #ifdef C3DGL_PROFILE_GPU_CACHE
     if ((gl.frameSerial % 120) == 0) {
-        LOG("GPU cache hits=%lu misses=%lu bytes=%lu linear_free=%lu\n",
-            (unsigned long)gl.gpuCacheHits, (unsigned long)gl.gpuCacheMisses,
+        LOG("GPU cache hits=%lu misses=%lu direct=%lu gl=%lu expanded=%lu bytes=%lu linear_free=%lu\n",
+            (unsigned long)gl.gpuCacheHits, (unsigned long)gl.gpuCacheMisses, (unsigned long)gl.gpuMeshDirect,
+            (unsigned long)gl.gpuMeshGl, (unsigned long)gl.gpuNoRoom,
             (unsigned long)gl.gpuCacheBytes, (unsigned long)linearSpaceFree());
-        gl.gpuCacheHits = gl.gpuCacheMisses = 0;
+        gl.gpuCacheHits = gl.gpuCacheMisses = gl.gpuMeshDirect = gl.gpuMeshGl = gl.gpuNoRoom = 0;
     }
 #endif
     gl.vertexCount = 0;

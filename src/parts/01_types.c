@@ -270,6 +270,8 @@ typedef struct {
 // authoritative; unsupported state still uses the ordinary vertex pipeline.
 typedef struct GpuBufferCache {
     struct GpuBufferCache *next;
+    struct GpuBufferCache *lruPrev, *lruNext;   // gl.lruHead (drawn longest ago) ... gl.lruTail; retired and unlinked caches are in neither
+    GLuint owner;                               // The buffer whose gpuCache this is
     u8 *data;
     size_t bytes;
     u32 drawnFrame;
