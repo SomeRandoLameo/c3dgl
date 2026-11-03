@@ -40,6 +40,18 @@ path = "stipple/main.rs"
 name = "texgen"
 path = "texgen/main.rs"
 
+[[bin]]
+name = "fog"
+path = "fog/main.rs"
+
+[[bin]]
+name = "clipplane"
+path = "clipplane/main.rs"
+
+[[bin]]
+name = "fragment"
+path = "fragment/main.rs"
+
 [profile.release]
 panic = "abort"
 lto = true

@@ -170,3 +170,31 @@ pub unsafe fn shaded_cube(texcoords: bool) {
     glEnd();
     glColor4fv(color.as_ptr());
 }
+
+/// Counter for the non-visual checks shown on the console.
+#[derive(Default)]
+pub struct Checks {
+    pub total: u32,
+    pub failures: u32,
+}
+
+impl Checks {
+    pub fn check(&mut self, ok: bool, what: &str, line: u32) {
+        self.total += 1;
+        if !ok {
+            self.failures += 1;
+            println!("FAIL {line}: {what}");
+        }
+    }
+
+    pub fn passed(&self) -> u32 {
+        self.total - self.failures
+    }
+}
+
+/// `check!(checks, condition)`: records the result and prints the failing condition and line.
+macro_rules! check {
+    ($checks:expr, $cond:expr) => {
+        $checks.check($cond, stringify!($cond), line!())
+    };
+}

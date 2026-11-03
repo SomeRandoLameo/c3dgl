@@ -1,14 +1,42 @@
 # Examples
 
-The same demo in all three integrations: a spinning, textured, vertex-colored cube
-(depth test, back-face culling, client arrays). A toggles nearest/linear filtering,
-START exits. Each directory is a standalone downstream project.
+Every example lives in its own folder. There is one self-contained set per language; no set
+depends on another one or on any other code outside `include/` and `external/glu`.
 
-| Directory | Integration | Build |
-| --- | --- | --- |
-| `c/` | C against the C ABI (`c3dgl_native.h`, `GL/gl.h`) | `cmake -S examples/c -B build-example-c -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/3DS.cmake && cmake --build build-example-c` |
-| `cpp/` | C++17 with RAII wrappers over the same ABI | `cmake -S examples/cpp -B build-example-cpp -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/3DS.cmake && cmake --build build-example-cpp` |
-| `rust/` | Cargo dependency (`c3dgl::raw`) with ctru-rs | `cd examples/rust && cargo 3ds build --release` (needs `cargo install cargo-3ds`) |
+| Set | Language | Integration | Examples |
+| --- | --- | --- | --- |
+| [`c/`](c) | C99 | C ABI (`c3dgl_native.h`, `GL/gl.h`), static library via CMake | `api`, `accum`, `clipplane`, `cube`, `fog`, `fragment`, `glu`, `lighting`, `lists`, `pixels`, `points`, `primitives`, `select`, `stipple`, `texgen`, `texture` |
+| [`cpp/`](cpp) | C++17 | same ABI, from C++ | `accum`, `clipplane`, `cube`, `fog`, `fragment`, `glu`, `lighting`, `lists`, `pixels`, `points`, `primitives`, `select`, `stipple`, `texgen`, `texture` |
+| [`rust/`](rust) | Rust | Cargo dependency, `c3dgl::raw` | `accum`, `clipplane`, `cube`, `fog`, `fragment`, `lists`, `pixels`, `select`, `stipple`, `texgen` (see below) |
 
-Requires devkitPro (3ds-dev) and the pinned nightly Rust toolchain. The acceptance
-and benchmark consumers live in `tests/consumers/` and `rust3ds/`.
+The examples are small test programs: the top screen shows the scene, the bottom screen the
+expected result and the frame statistics. START exits, A/B and the circle pad are described on
+the bottom screen of each example.
+
+## Build
+
+Requires devkitPro (3ds-dev, 3ds-libpng) and, for Rust, the pinned nightly toolchain plus
+`cargo install cargo-3ds`.
+
+```sh
+export DEVKITPRO=/opt/devkitpro
+
+cmake -S examples/c -B build-examples-c -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/3DS.cmake
+cmake --build build-examples-c
+
+cmake -S examples/cpp -B build-examples-cpp -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/3DS.cmake
+cmake --build build-examples-cpp
+
+cd examples/rust && cargo 3ds build --release
+```
+
+The `.3dsx` files appear in the build directory (`target/armv6k-nintendo-3ds/release/` for Rust).
+
+## Notes
+
+- `glu` and `select` use Mesa GLU (`external/glu`) in the C and C++ sets. GLU is a C/C++ library
+  and not part of the Rust crate, so the Rust set has no `glu` example; its `select` uses a small
+  pick-matrix helper instead of `gluPickMatrix`.
+- The Rust set is not complete yet: `glu`, `api`, `lighting`, `points`, `primitives` and
+  `texture` are still missing there.
+- `cube` loads `romfs:/tonk.png` (C, C++: libpng from romfs; Rust: the `png` crate, embedded).

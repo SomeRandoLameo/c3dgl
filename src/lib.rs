@@ -222,12 +222,10 @@ pub mod raw {
     pub use crate::frame::*;
     pub use crate::immediate::*;
     pub use crate::lighting::*;
-    pub use crate::lines::*;
     pub use crate::lists::*;
     pub use crate::matrix::*;
     pub use crate::pixels::*;
     pub use crate::points::*;
-    pub use crate::polygon::*;
     pub use crate::raster::*;
     pub use crate::renderer::{
         c3dglClose, c3dglInit, c3dglNativeBegin, c3dglNativeDraw, c3dglNativeGetStats,
