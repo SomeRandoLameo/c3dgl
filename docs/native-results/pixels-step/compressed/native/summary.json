@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "173b6475c20e3e0ee85d55433649c336a7b04d642c2d499c96af5383e91b75b6",
+  "images": {
+    "c3dgl-old-compressed-native.ppm": "c72d111ad460a4359169179f6d8cfcf602921b70aa52563b10e4e8808c581041"
+  },
+  "process_exit": -9
+}

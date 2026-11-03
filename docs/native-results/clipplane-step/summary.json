@@ -1,0 +1,500 @@
+{
+  "repetitions": 1,
+  "cases": {
+    "primitives": {
+      "source": "examples/primitives/main.cpp",
+      "source_sha256": "12a955c1ed58ff13fcda53aac0cd1c6b39c1f0c95ccce51c199d746828c43f4a",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "95a56e4394dc2132e9ecde2c628672c2dffda1361e3e706a387c19c2c53ec531",
+        "images": {
+          "c3dgl-old-primitives-reference.ppm": "1fa9b97f703cd0da021d98d7df33f280c1d0ff61ed12f3041935971d99f90cdd"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "328dbdbeac50db6ea7ab37b74ac4c2c9eb07ec90e2174884d524eee46f468450",
+        "images": {
+          "c3dgl-old-primitives-native.ppm": "1fa9b97f703cd0da021d98d7df33f280c1d0ff61ed12f3041935971d99f90cdd"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "texture": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "3b6c04dc8201a867d9abe2c7940773e0d8f42c03824962938974e876a05c17da",
+        "images": {
+          "c3dgl-old-texture-reference.ppm": "8769c18bde15d7d0a7c98721d245f8b9c2f86b51a6f175f25a9589a04fadf1db"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "c38d23080d30dfb68e18b71dfd188257bc9d09c9793818d6d4743ab6eabb42d4",
+        "images": {
+          "c3dgl-old-texture-native.ppm": "8769c18bde15d7d0a7c98721d245f8b9c2f86b51a6f175f25a9589a04fadf1db"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "cube": {
+      "source": "examples/cube/main.cpp",
+      "source_sha256": "b52080ba5a51929390d51da50dcec9ba20d8b6b23b5e7129088695600de6c7b0",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "82892bc0f7c1b83819f3e7bf6e63bee12a084848a92cc7ca2ac285f2c94cd6be",
+        "images": {
+          "c3dgl-old-cube-reference.ppm": "7b2e5e6bb7b1f8275c82a13d77a0d00a492b64d56514c1dd536ca179a3011618"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "1d7d122de90eafaaed707fa39492d538bec3788067021c4c9257588d35627f58",
+        "images": {
+          "c3dgl-old-cube-native.ppm": "7b2e5e6bb7b1f8275c82a13d77a0d00a492b64d56514c1dd536ca179a3011618"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "texcoords": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "af7c35c910980b7db47638d2bae94a25b0942e07dab9ab1e0b3ae592114ebad7",
+        "images": {
+          "c3dgl-old-texcoords-reference.ppm": "ac17052ae74f4a51b5236fcffa482b6c0a6fd7cb9ce03c2a5d2ab83ee53de838"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "05d00437fde82960ebaf4dc37adc05f67a54fe5452917311af9c98a039d283f5",
+        "images": {
+          "c3dgl-old-texcoords-native.ppm": "ac17052ae74f4a51b5236fcffa482b6c0a6fd7cb9ce03c2a5d2ab83ee53de838"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "texmatrix": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "3a1c428a9829ccc53d10c00dfaf59c0967a97b10cec06cab7964efbc8b167272",
+        "images": {
+          "c3dgl-old-texmatrix-reference.ppm": "ce240b951c4c8176b0cba6a0b5a7339d82afd5ff3733b2d9e5fa9033f96fd307"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "e63c0ab5d9242403cfcf587f7db3b244e84deb5990bb9de077dc9cbbe49aa7ce",
+        "images": {
+          "c3dgl-old-texmatrix-native.ppm": "ce240b951c4c8176b0cba6a0b5a7339d82afd5ff3733b2d9e5fa9033f96fd307"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "multitexture": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "3db463ac6d5384de43be1302f956c812da94ac971b2f0a69b9e60e858d61570a",
+        "images": {
+          "c3dgl-old-multitexture-reference.ppm": "fafed4eefffe51d3732af386b79cd6ae8a54ab6051b9ca93a18701929b182303"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "5b20688904231caae99f4a9995c8698563cda4e5690f728abd5b72d7f0cc2d17",
+        "images": {
+          "c3dgl-old-multitexture-native.ppm": "fafed4eefffe51d3732af386b79cd6ae8a54ab6051b9ca93a18701929b182303"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "mipmap": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "bdba941b45545a5ed31953051d637570228927cfe29907e06121018ac036d3c9",
+        "images": {
+          "c3dgl-old-mipmap-reference.ppm": "df16f1efce174b9a6ee13c494f02e88901b10a346962757a03758d5fe0757126"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "d18e3f321ebfdbded22b51bccacd97f63930acf2c13de3b51681960f84b43253",
+        "images": {
+          "c3dgl-old-mipmap-native.ppm": "df16f1efce174b9a6ee13c494f02e88901b10a346962757a03758d5fe0757126"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "compressed": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "48379ab3959c76818f8fa00e1a847df434d2fcf98206a841d06cdbe1d8b5954a",
+        "images": {
+          "c3dgl-old-compressed-reference.ppm": "c72d111ad460a4359169179f6d8cfcf602921b70aa52563b10e4e8808c581041"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "0da297c9a8e2cd8c295d2ad65289a311b2ff96baf2f7ba0ce715bd3cb515a594",
+        "images": {
+          "c3dgl-old-compressed-native.ppm": "c72d111ad460a4359169179f6d8cfcf602921b70aa52563b10e4e8808c581041"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "overlay": {
+      "source": "examples/cube/main.cpp",
+      "source_sha256": "b52080ba5a51929390d51da50dcec9ba20d8b6b23b5e7129088695600de6c7b0",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "99625dac1572c86e73db354876fdd1a239e7883160a5753400afdf43b36b2115",
+        "images": {
+          "c3dgl-old-overlay-reference.ppm": "8fc3dffad77af5cd43b4855c46cb93b55e8b9ce47fff81cded51b95466af83af"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "d4f950469d110610e2494e1899088a078b23840d955e5b29ccb117015e236582",
+        "images": {
+          "c3dgl-old-overlay-native.ppm": "8fc3dffad77af5cd43b4855c46cb93b55e8b9ce47fff81cded51b95466af83af"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "primitives2": {
+      "source": "examples/primitives/main.cpp",
+      "source_sha256": "12a955c1ed58ff13fcda53aac0cd1c6b39c1f0c95ccce51c199d746828c43f4a",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "5d971acf8cc967fb3acebb1406fc1a7667b3615a35657e52a68a5710c586b20c",
+        "images": {
+          "c3dgl-old-primitives2-reference.ppm": "3274f58d227d696134d6e6ebd7673403065cad6d72bb7b41608f1acbf8d11846"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "de7b043bcbe23471ce546537058bc9bb095baae630445076ef97104ce52774e0",
+        "images": {
+          "c3dgl-old-primitives2-native.ppm": "3274f58d227d696134d6e6ebd7673403065cad6d72bb7b41608f1acbf8d11846"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "primitives3": {
+      "source": "examples/primitives/main.cpp",
+      "source_sha256": "12a955c1ed58ff13fcda53aac0cd1c6b39c1f0c95ccce51c199d746828c43f4a",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "b3a71789095ee548c2d53ad715812d703eeb3753ba0956504d3ce0724a83f3dd",
+        "images": {
+          "c3dgl-old-primitives3-reference.ppm": "9d60290b2be9215fc7f9a52640096fc48004a322ebd9895ab1c1fae01e473b0d"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "60505d9770b93ebf7089f22d793ab8a934116edb5821abacb29113cfa4c4da23",
+        "images": {
+          "c3dgl-old-primitives3-native.ppm": "9d60290b2be9215fc7f9a52640096fc48004a322ebd9895ab1c1fae01e473b0d"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "lighting": {
+      "source": "examples/lighting/main.cpp",
+      "source_sha256": "1f1a4de5bf2e7604910b7d2a46ec57550ebee0636493f2420f9f7f3c76a3ceb6",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "1c2ebacf8d11521059fc1f186434bbddb637347ed402ecec62a137939b983f16",
+        "images": {
+          "c3dgl-old-lighting-reference.ppm": "02623bcc0b363a69ad7468d01397b646f4c0193461df2cb5c0fcf780f64b82aa"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "03768f0fd492c56b15866f22922f555dfc2526702cfb0cbc9161f94516c67746",
+        "images": {
+          "c3dgl-old-lighting-native.ppm": "02623bcc0b363a69ad7468d01397b646f4c0193461df2cb5c0fcf780f64b82aa"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "texgen": {
+      "source": "examples/texgen/main.cpp",
+      "source_sha256": "a931cebfcce86f0dadaf95a54ad2d5d73117dd19854520d621aa767ee7435678",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "ebc9dfcae5c43a6022f3baf3a043875d99a629799f3ff8b05aa0d65c9a96eed0",
+        "images": {
+          "c3dgl-old-texgen-reference.ppm": "2c9961477e0063eb2b0aa6abbf22ca9ac6c1d906400e17d18c6bae175fb875eb"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "75771c2e60e54809423fdeb1ae9508f1b49eac87ad1a8f616070b3bb5d7b4ef1",
+        "images": {
+          "c3dgl-old-texgen-native.ppm": "2c9961477e0063eb2b0aa6abbf22ca9ac6c1d906400e17d18c6bae175fb875eb"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "fog": {
+      "source": "examples/fog/main.cpp",
+      "source_sha256": "e43acec62d92eed859cc05518cf8f90bc287b0e3de188cd251101abd4bd3fcdc",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "fbadda45622edbdddfb803cec552920b48379e8ed8e0798bd3fb27408372f2ce",
+        "images": {
+          "c3dgl-old-fog-reference.ppm": "5ff94a62c51eec20f9cd81852282a0a832a80ea64c9112b8bac6326b8390c5a8"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "21584531cc2203d65236e1240178c85dd4b4c5200cab75e347d7bbaeb8cbe1d6",
+        "images": {
+          "c3dgl-old-fog-native.ppm": "5ff94a62c51eec20f9cd81852282a0a832a80ea64c9112b8bac6326b8390c5a8"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "fragment": {
+      "source": "examples/fragment/main.cpp",
+      "source_sha256": "5b055aed30c84484be681ffc58d97b4e4367d516929ca5bdc525d4d69b78af8a",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "51b70585500041247f53775e423b2b4421e1e387e3506af8dabba03eb492f698",
+        "images": {
+          "c3dgl-old-fragment-reference.ppm": "831728d80f10b768a71fd2c0b6b20bb21ba1eb6b7b8d29bb214140cb8554763f"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "c414818198c3c0648338885fca65235a6142433ca38310f94edcc0f0992d16b2",
+        "images": {
+          "c3dgl-old-fragment-native.ppm": "831728d80f10b768a71fd2c0b6b20bb21ba1eb6b7b8d29bb214140cb8554763f"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "fragment2": {
+      "source": "examples/fragment/main.cpp",
+      "source_sha256": "5b055aed30c84484be681ffc58d97b4e4367d516929ca5bdc525d4d69b78af8a",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "90d6a5bccfe8b9de903328ee7f7d261f57e1cad0174794807024bb909c8d85e1",
+        "images": {
+          "c3dgl-old-fragment2-reference.ppm": "adcd50aedff372492d5614ca6da01e9b06e39bcfa9dde990160b60b5e190e142"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "c348d6f8ee3a3729f896f1972c202c908b8ce68cce8c681837d265e127f11826",
+        "images": {
+          "c3dgl-old-fragment2-native.ppm": "adcd50aedff372492d5614ca6da01e9b06e39bcfa9dde990160b60b5e190e142"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "clipplane": {
+      "source": "examples/clipplane/main.cpp",
+      "source_sha256": "d531a75c618ab957017e46dfc71a80804e90f9392d6b1c284818dcc401287b3c",
+      "adapter_sha256": "3ab69f428e8aeb886024e6fb7980f6c4bda5a0da830db4550d8d119fb9af92c8",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "af9131ece07badc023fcb8c4ca55dee7cb335d4517177c2459ba0b536605323d",
+        "images": {
+          "c3dgl-old-clipplane-reference.ppm": "b8197350703a86b4a1342943005f8a36e2d6544ae6dff808b55dde90192a137c"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "7b833cfd00545eab0f3e2fbcd1948c7fdbffa02d485eb2a9f65c23bc6f87d26a",
+        "images": {
+          "c3dgl-old-clipplane-native.ppm": "b8197350703a86b4a1342943005f8a36e2d6544ae6dff808b55dde90192a137c"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    }
+  },
+  "whole_original_programs": false,
+  "native_dependency_audits_passed": true
+}

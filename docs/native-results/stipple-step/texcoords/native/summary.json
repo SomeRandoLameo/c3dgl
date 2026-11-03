@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "2d18ad453a8cb321a5b66faded6e883422c96227afddb749326fe156fec02bce",
+  "images": {
+    "c3dgl-old-texcoords-native.ppm": "ac17052ae74f4a51b5236fcffa482b6c0a6fd7cb9ce03c2a5d2ab83ee53de838"
+  },
+  "process_exit": -9
+}

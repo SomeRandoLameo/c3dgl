@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "bd4ce87aad4b0c8d60749ea874fba7fab299cb0dfc155958b815dfd42290b70a",
+  "images": {
+    "c3dgl-old-mipmap-native.ppm": "df16f1efce174b9a6ee13c494f02e88901b10a346962757a03758d5fe0757126"
+  },
+  "process_exit": -9
+}

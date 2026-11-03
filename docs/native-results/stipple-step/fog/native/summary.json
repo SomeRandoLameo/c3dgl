@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "2e441b8a60b25ea5d7714ea2787de946435ca6914e52f48a5d38866dd770b039",
+  "images": {
+    "c3dgl-old-fog-native.ppm": "5ff94a62c51eec20f9cd81852282a0a832a80ea64c9112b8bac6326b8390c5a8"
+  },
+  "process_exit": -9
+}

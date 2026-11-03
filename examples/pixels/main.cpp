@@ -117,6 +117,78 @@ void printStats() {
 
 }  // namespace
 
+GLuint setupScene() {
+    const GLuint font = createFont();
+    setPalette();
+    glClearColor(0.08f, 0.08f, 0.15f, 1.0f);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    return font;
+}
+
+void drawFrame(GLuint font, GLubyte *image, float t) {
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // The cube in the upper left, in perspective
+    glViewport(0, 0, C3DGL_TOP_SCREEN_WIDTH, C3DGL_SCREEN_HEIGHT);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    const double aspect = static_cast<double>(C3DGL_TOP_SCREEN_WIDTH) / C3DGL_SCREEN_HEIGHT;
+    glFrustum(-aspect * 0.5, aspect * 0.5, -0.5, 0.5, 1.0, 20.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glTranslatef(-1.6f, 1.0f, -6.0f);
+    glRotatef(t * 40.0f, 0.3f, 1.0f, 0.1f);
+    glScalef(0.6f, 0.6f, 0.6f);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    cube();
+
+    // Label just outside a corner: hidden by the cube when the corner turns away
+    glColor3ub(255, 255, 255);
+    glRasterPos3f(1.15f, 1.15f, 1.15f);
+    text(font, "<corner");
+    glDisable(GL_DEPTH_TEST);
+
+    // Window coordinates from here on
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, C3DGL_TOP_SCREEN_WIDTH, 0.0, C3DGL_SCREEN_HEIGHT, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    // Reflection: the band above y = 112 copied upside down and squashed below it
+    glRasterPos2i(0, 110);
+    glPixelZoom(1.0f, -0.5f);
+    glCopyPixels(0, 112, 200, 112, GL_COLOR);
+
+    // Animated image, zoomed around its center, and its mirror image
+    makeImage(image, t * 2.0f);
+    const float zoom = 1.25f + 0.25f * std::sin(t * 2.0f);
+    const float half = IMAGE_SIZE * zoom * 0.5f;
+    glRasterPos2f(270.0f - half, 150.0f - half);
+    glPixelZoom(zoom, zoom);
+    glPixelTransferi(GL_INDEX_OFFSET, static_cast<int>(t * 60.0f) & 255);
+    glDrawPixels(IMAGE_SIZE, IMAGE_SIZE, GL_COLOR_INDEX, GL_UNSIGNED_BYTE, image);
+    glPixelTransferi(GL_INDEX_OFFSET, 0);
+    glRasterPos2i(370, 30);
+    glPixelZoom(-1.0f, 1.0f);
+    glPixelTransferf(GL_RED_SCALE, 0.3f);
+    glPixelTransferf(GL_GREEN_SCALE, 0.7f);
+    glPixelTransferf(GL_BLUE_BIAS, 0.4f);
+    glDrawPixels(IMAGE_SIZE, IMAGE_SIZE, GL_LUMINANCE, GL_UNSIGNED_BYTE, image);
+    glPixelTransferf(GL_RED_SCALE, 1.0f);
+    glPixelTransferf(GL_GREEN_SCALE, 1.0f);
+    glPixelTransferf(GL_BLUE_BIAS, 0.0f);
+    glPixelZoom(1.0f, 1.0f);
+
+    glColor3ub(255, 220, 90);
+    windowText(font, 8, 228, "glBitmap / glDrawPixels / glCopyPixels");
+    glColor3ub(150, 200, 255);
+    windowText(font, 40, 4, "glCopyPixels");
+    windowText(font, 278, 18, "zoom -1, tinted");
+    windowText(font, 214, 214, "glPixelMap palette");
+}
+
 int main() {
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, nullptr);
@@ -132,11 +204,8 @@ int main() {
         return 1;
     }
 
-    const GLuint font = createFont();
+    const GLuint font = setupScene();
     static GLubyte image[IMAGE_SIZE * IMAGE_SIZE];
-    setPalette();
-    glClearColor(0.08f, 0.08f, 0.15f, 1.0f);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
     std::printf("c3dgl pixels\n\n\n\n\n"
                 "Left: a cube with a glBitmap label\n"
@@ -163,67 +232,7 @@ int main() {
         if (keys & KEY_A) paused = !paused;
         if (!paused) t += 1.0f / 60.0f;
 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        // The cube in the upper left, in perspective
-        glViewport(0, 0, C3DGL_TOP_SCREEN_WIDTH, C3DGL_SCREEN_HEIGHT);
-        glMatrixMode(GL_PROJECTION);
-        glLoadIdentity();
-        const double aspect = static_cast<double>(C3DGL_TOP_SCREEN_WIDTH) / C3DGL_SCREEN_HEIGHT;
-        glFrustum(-aspect * 0.5, aspect * 0.5, -0.5, 0.5, 1.0, 20.0);
-        glMatrixMode(GL_MODELVIEW);
-        glLoadIdentity();
-        glTranslatef(-1.6f, 1.0f, -6.0f);
-        glRotatef(t * 40.0f, 0.3f, 1.0f, 0.1f);
-        glScalef(0.6f, 0.6f, 0.6f);
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LEQUAL);
-        cube();
-
-        // Label just outside a corner: hidden by the cube when the corner turns away
-        glColor3ub(255, 255, 255);
-        glRasterPos3f(1.15f, 1.15f, 1.15f);
-        text(font, "<corner");
-        glDisable(GL_DEPTH_TEST);
-
-        // Window coordinates from here on
-        glMatrixMode(GL_PROJECTION);
-        glLoadIdentity();
-        glOrtho(0.0, C3DGL_TOP_SCREEN_WIDTH, 0.0, C3DGL_SCREEN_HEIGHT, -1.0, 1.0);
-        glMatrixMode(GL_MODELVIEW);
-        glLoadIdentity();
-
-        // Reflection: the band above y = 112 copied upside down and squashed below it
-        glRasterPos2i(0, 110);
-        glPixelZoom(1.0f, -0.5f);
-        glCopyPixels(0, 112, 200, 112, GL_COLOR);
-
-        // Animated image, zoomed around its center, and its mirror image
-        makeImage(image, t * 2.0f);
-        const float zoom = 1.25f + 0.25f * std::sin(t * 2.0f);
-        const float half = IMAGE_SIZE * zoom * 0.5f;
-        glRasterPos2f(270.0f - half, 150.0f - half);
-        glPixelZoom(zoom, zoom);
-        glPixelTransferi(GL_INDEX_OFFSET, static_cast<int>(t * 60.0f) & 255);
-        glDrawPixels(IMAGE_SIZE, IMAGE_SIZE, GL_COLOR_INDEX, GL_UNSIGNED_BYTE, image);
-        glPixelTransferi(GL_INDEX_OFFSET, 0);
-        glRasterPos2i(370, 30);
-        glPixelZoom(-1.0f, 1.0f);
-        glPixelTransferf(GL_RED_SCALE, 0.3f);
-        glPixelTransferf(GL_GREEN_SCALE, 0.7f);
-        glPixelTransferf(GL_BLUE_BIAS, 0.4f);
-        glDrawPixels(IMAGE_SIZE, IMAGE_SIZE, GL_LUMINANCE, GL_UNSIGNED_BYTE, image);
-        glPixelTransferf(GL_RED_SCALE, 1.0f);
-        glPixelTransferf(GL_GREEN_SCALE, 1.0f);
-        glPixelTransferf(GL_BLUE_BIAS, 0.0f);
-        glPixelZoom(1.0f, 1.0f);
-
-        glColor3ub(255, 220, 90);
-        windowText(font, 8, 228, "glBitmap / glDrawPixels / glCopyPixels");
-        glColor3ub(150, 200, 255);
-        windowText(font, 40, 4, "glCopyPixels");
-        windowText(font, 278, 18, "zoom -1, tinted");
-        windowText(font, 214, 214, "glPixelMap palette");
+        drawFrame(font, image, t);
 
         c3dglSwapBuffers();
     }

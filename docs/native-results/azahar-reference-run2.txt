@@ -1,0 +1,9 @@
+C c3dgl + Citro3D reference
+Persistent cached indexed VBO
+draws=1 CPU 0.4244 GPU 0.2495
+total 16.7121 ms/frame
+draws=64 CPU 1.5869 GPU 0.2495
+total 16.7121 ms/frame
+draws=512 CPU 9.8531 GPU 0.2495
+total 16.7121 ms/frame
+GL error=0 - START exits

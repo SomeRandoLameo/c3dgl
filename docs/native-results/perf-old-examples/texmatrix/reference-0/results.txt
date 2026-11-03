@@ -1,0 +1,2 @@
+perf case=texmatrix backend=reference frames=120 CPU 0.7534 GPU 0.5200 total 16.7118 cmd 1.2085
+ALL CHECKS PASSED: old example=texmatrix backend=reference GL=0 readback=0 image=1

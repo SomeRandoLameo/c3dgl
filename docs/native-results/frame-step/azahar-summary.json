@@ -1,0 +1,1082 @@
+{
+  "rom_sha256": {
+    "native": "2f453ea11e9da0dc307a488a753596743a62fa4d21c1e1e84e81346b3ba1d550",
+    "reference": "8936851c4e245127e595f2f13f4c7c543b5ae840efc12371366575b6bb4cc309",
+    "native-cpp": "5b4e5622fdeb4dbeac674366fec7aa6208ee8e2fc0130ad228d48d905ef61427",
+    "rust3ds": "7a598743d52368bcd38c158f38c40d4edefea6edef5c4afbc7b6032f96e4382e"
+  },
+  "measurements": [
+    {
+      "renderer": "native",
+      "run": 1,
+      "workload": "static",
+      "draws": 1,
+      "cpu_ms": 0.334,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 1,
+      "workload": "static",
+      "draws": 64,
+      "cpu_ms": 0.4072,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 1,
+      "workload": "static",
+      "draws": 512,
+      "cpu_ms": 0.9268,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 1,
+      "workload": "matrix",
+      "draws": 1,
+      "cpu_ms": 0.3363,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 1,
+      "workload": "matrix",
+      "draws": 64,
+      "cpu_ms": 0.5514,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 1,
+      "workload": "matrix",
+      "draws": 512,
+      "cpu_ms": 2.092,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 1,
+      "workload": "viewport",
+      "draws": 1,
+      "cpu_ms": 0.335,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 1,
+      "workload": "viewport",
+      "draws": 64,
+      "cpu_ms": 0.4741,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 1,
+      "workload": "viewport",
+      "draws": 512,
+      "cpu_ms": 1.4683,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "reference",
+      "run": 1,
+      "workload": "static",
+      "draws": 1,
+      "cpu_ms": 0.4244,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 1,
+      "workload": "static",
+      "draws": 64,
+      "cpu_ms": 1.5879,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 1,
+      "workload": "static",
+      "draws": 512,
+      "cpu_ms": 9.8608,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 1,
+      "workload": "matrix",
+      "draws": 1,
+      "cpu_ms": 0.426,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 1,
+      "workload": "matrix",
+      "draws": 64,
+      "cpu_ms": 2.3439,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 1,
+      "workload": "matrix",
+      "draws": 512,
+      "cpu_ms": 16.038,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 1,
+      "workload": "viewport",
+      "draws": 1,
+      "cpu_ms": 0.4247,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 1,
+      "workload": "viewport",
+      "draws": 64,
+      "cpu_ms": 2.4752,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 1,
+      "workload": "viewport",
+      "draws": 512,
+      "cpu_ms": 17.1205,
+      "gpu_ms": 0.2495,
+      "total_ms": 17.1306
+    },
+    {
+      "renderer": "native-cpp",
+      "run": 1,
+      "workload": "static",
+      "draws": 1,
+      "cpu_ms": 0.334,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native-cpp",
+      "run": 1,
+      "workload": "static",
+      "draws": 64,
+      "cpu_ms": 0.4072,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native-cpp",
+      "run": 1,
+      "workload": "static",
+      "draws": 512,
+      "cpu_ms": 0.9268,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native-cpp",
+      "run": 1,
+      "workload": "matrix",
+      "draws": 1,
+      "cpu_ms": 0.3364,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native-cpp",
+      "run": 1,
+      "workload": "matrix",
+      "draws": 64,
+      "cpu_ms": 0.5626,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native-cpp",
+      "run": 1,
+      "workload": "matrix",
+      "draws": 512,
+      "cpu_ms": 2.1818,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native-cpp",
+      "run": 1,
+      "workload": "viewport",
+      "draws": 1,
+      "cpu_ms": 0.335,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native-cpp",
+      "run": 1,
+      "workload": "viewport",
+      "draws": 64,
+      "cpu_ms": 0.4741,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native-cpp",
+      "run": 1,
+      "workload": "viewport",
+      "draws": 512,
+      "cpu_ms": 1.4683,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 1,
+      "workload": "static",
+      "draws": 1,
+      "cpu_ms": 0.3338,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 1,
+      "workload": "static",
+      "draws": 64,
+      "cpu_ms": 0.3981,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 1,
+      "workload": "static",
+      "draws": 512,
+      "cpu_ms": 0.8542,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 1,
+      "workload": "matrix",
+      "draws": 1,
+      "cpu_ms": 0.336,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 1,
+      "workload": "matrix",
+      "draws": 64,
+      "cpu_ms": 0.5335,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 1,
+      "workload": "matrix",
+      "draws": 512,
+      "cpu_ms": 1.9488,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 1,
+      "workload": "viewport",
+      "draws": 1,
+      "cpu_ms": 0.3348,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 1,
+      "workload": "viewport",
+      "draws": 64,
+      "cpu_ms": 0.4538,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 1,
+      "workload": "viewport",
+      "draws": 512,
+      "cpu_ms": 1.306,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "native",
+      "run": 2,
+      "workload": "static",
+      "draws": 1,
+      "cpu_ms": 0.334,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 2,
+      "workload": "static",
+      "draws": 64,
+      "cpu_ms": 0.4072,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 2,
+      "workload": "static",
+      "draws": 512,
+      "cpu_ms": 0.9268,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 2,
+      "workload": "matrix",
+      "draws": 1,
+      "cpu_ms": 0.3363,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 2,
+      "workload": "matrix",
+      "draws": 64,
+      "cpu_ms": 0.5514,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 2,
+      "workload": "matrix",
+      "draws": 512,
+      "cpu_ms": 2.092,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 2,
+      "workload": "viewport",
+      "draws": 1,
+      "cpu_ms": 0.335,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 2,
+      "workload": "viewport",
+      "draws": 64,
+      "cpu_ms": 0.4741,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 2,
+      "workload": "viewport",
+      "draws": 512,
+      "cpu_ms": 1.4683,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "reference",
+      "run": 2,
+      "workload": "static",
+      "draws": 1,
+      "cpu_ms": 0.4244,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 2,
+      "workload": "static",
+      "draws": 64,
+      "cpu_ms": 1.5879,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 2,
+      "workload": "static",
+      "draws": 512,
+      "cpu_ms": 9.8608,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 2,
+      "workload": "matrix",
+      "draws": 1,
+      "cpu_ms": 0.426,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 2,
+      "workload": "matrix",
+      "draws": 64,
+      "cpu_ms": 2.3439,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 2,
+      "workload": "matrix",
+      "draws": 512,
+      "cpu_ms": 16.038,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 2,
+      "workload": "viewport",
+      "draws": 1,
+      "cpu_ms": 0.4247,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 2,
+      "workload": "viewport",
+      "draws": 64,
+      "cpu_ms": 2.4752,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 2,
+      "workload": "viewport",
+      "draws": 512,
+      "cpu_ms": 17.1205,
+      "gpu_ms": 0.2495,
+      "total_ms": 17.1306
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 2,
+      "workload": "static",
+      "draws": 1,
+      "cpu_ms": 0.3338,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 2,
+      "workload": "static",
+      "draws": 64,
+      "cpu_ms": 0.3981,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 2,
+      "workload": "static",
+      "draws": 512,
+      "cpu_ms": 0.8542,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 2,
+      "workload": "matrix",
+      "draws": 1,
+      "cpu_ms": 0.336,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 2,
+      "workload": "matrix",
+      "draws": 64,
+      "cpu_ms": 0.5335,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 2,
+      "workload": "matrix",
+      "draws": 512,
+      "cpu_ms": 1.9488,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 2,
+      "workload": "viewport",
+      "draws": 1,
+      "cpu_ms": 0.3348,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 2,
+      "workload": "viewport",
+      "draws": 64,
+      "cpu_ms": 0.4538,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 2,
+      "workload": "viewport",
+      "draws": 512,
+      "cpu_ms": 1.306,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "native",
+      "run": 3,
+      "workload": "static",
+      "draws": 1,
+      "cpu_ms": 0.334,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 3,
+      "workload": "static",
+      "draws": 64,
+      "cpu_ms": 0.4072,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 3,
+      "workload": "static",
+      "draws": 512,
+      "cpu_ms": 0.9268,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 3,
+      "workload": "matrix",
+      "draws": 1,
+      "cpu_ms": 0.3363,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 3,
+      "workload": "matrix",
+      "draws": 64,
+      "cpu_ms": 0.5514,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 3,
+      "workload": "matrix",
+      "draws": 512,
+      "cpu_ms": 2.092,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 3,
+      "workload": "viewport",
+      "draws": 1,
+      "cpu_ms": 0.335,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 3,
+      "workload": "viewport",
+      "draws": 64,
+      "cpu_ms": 0.4741,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "native",
+      "run": 3,
+      "workload": "viewport",
+      "draws": 512,
+      "cpu_ms": 1.4683,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7123
+    },
+    {
+      "renderer": "reference",
+      "run": 3,
+      "workload": "static",
+      "draws": 1,
+      "cpu_ms": 0.4244,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 3,
+      "workload": "static",
+      "draws": 64,
+      "cpu_ms": 1.5879,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 3,
+      "workload": "static",
+      "draws": 512,
+      "cpu_ms": 9.8608,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 3,
+      "workload": "matrix",
+      "draws": 1,
+      "cpu_ms": 0.426,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 3,
+      "workload": "matrix",
+      "draws": 64,
+      "cpu_ms": 2.3439,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 3,
+      "workload": "matrix",
+      "draws": 512,
+      "cpu_ms": 16.038,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 3,
+      "workload": "viewport",
+      "draws": 1,
+      "cpu_ms": 0.4247,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 3,
+      "workload": "viewport",
+      "draws": 64,
+      "cpu_ms": 2.4752,
+      "gpu_ms": 0.2495,
+      "total_ms": 16.7121
+    },
+    {
+      "renderer": "reference",
+      "run": 3,
+      "workload": "viewport",
+      "draws": 512,
+      "cpu_ms": 17.1205,
+      "gpu_ms": 0.2495,
+      "total_ms": 17.1306
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 3,
+      "workload": "static",
+      "draws": 1,
+      "cpu_ms": 0.3338,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 3,
+      "workload": "static",
+      "draws": 64,
+      "cpu_ms": 0.3981,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 3,
+      "workload": "static",
+      "draws": 512,
+      "cpu_ms": 0.8542,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 3,
+      "workload": "matrix",
+      "draws": 1,
+      "cpu_ms": 0.336,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 3,
+      "workload": "matrix",
+      "draws": 64,
+      "cpu_ms": 0.5335,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 3,
+      "workload": "matrix",
+      "draws": 512,
+      "cpu_ms": 1.9488,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 3,
+      "workload": "viewport",
+      "draws": 1,
+      "cpu_ms": 0.3348,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 3,
+      "workload": "viewport",
+      "draws": 64,
+      "cpu_ms": 0.4538,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    },
+    {
+      "renderer": "rust3ds",
+      "run": 3,
+      "workload": "viewport",
+      "draws": 512,
+      "cpu_ms": 1.306,
+      "gpu_ms": 0.2494,
+      "total_ms": 16.7122
+    }
+  ],
+  "comparisons": [
+    {
+      "workload": "static",
+      "draws": 1,
+      "native_cpu_ms": 0.334,
+      "reference_cpu_ms": 0.4244,
+      "reduction_percent": 21.30065975494816
+    },
+    {
+      "workload": "static",
+      "draws": 64,
+      "native_cpu_ms": 0.4072,
+      "reference_cpu_ms": 1.5879,
+      "reduction_percent": 74.35606776245356
+    },
+    {
+      "workload": "static",
+      "draws": 512,
+      "native_cpu_ms": 0.9268,
+      "reference_cpu_ms": 9.8608,
+      "reduction_percent": 90.60116826220997
+    },
+    {
+      "workload": "matrix",
+      "draws": 1,
+      "native_cpu_ms": 0.3363,
+      "reference_cpu_ms": 0.426,
+      "reduction_percent": 21.05633802816902
+    },
+    {
+      "workload": "matrix",
+      "draws": 64,
+      "native_cpu_ms": 0.5514,
+      "reference_cpu_ms": 2.3439,
+      "reduction_percent": 76.47510559324203
+    },
+    {
+      "workload": "matrix",
+      "draws": 512,
+      "native_cpu_ms": 2.092,
+      "reference_cpu_ms": 16.038,
+      "reduction_percent": 86.95597954857213
+    },
+    {
+      "workload": "viewport",
+      "draws": 1,
+      "native_cpu_ms": 0.335,
+      "reference_cpu_ms": 0.4247,
+      "reduction_percent": 21.120791146691786
+    },
+    {
+      "workload": "viewport",
+      "draws": 64,
+      "native_cpu_ms": 0.4741,
+      "reference_cpu_ms": 2.4752,
+      "reduction_percent": 80.84599224305107
+    },
+    {
+      "workload": "viewport",
+      "draws": 512,
+      "native_cpu_ms": 1.4683,
+      "reference_cpu_ms": 17.1205,
+      "reduction_percent": 91.42373178353435
+    }
+  ],
+  "image_sha256": {
+    "azahar-native-run1.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-native-run1-matrix.ppm": "23fef89417ced4f4fc879f8c340271c793d02765092633a061ad4fefb9253756",
+    "azahar-native-run1-viewport.ppm": "812b59ae9c2655ee10ae3d899e97fb049f0454127aa4d7a6bc1ea3e97879a110",
+    "azahar-native-run1-state.ppm": "8a878d586b0b9cd958974400a7dc46fde232d89c62c65d2444925d8e9351e178",
+    "azahar-reference-run1.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-reference-run1-matrix.ppm": "23fef89417ced4f4fc879f8c340271c793d02765092633a061ad4fefb9253756",
+    "azahar-reference-run1-viewport.ppm": "812b59ae9c2655ee10ae3d899e97fb049f0454127aa4d7a6bc1ea3e97879a110",
+    "azahar-reference-run1-state.ppm": "8a878d586b0b9cd958974400a7dc46fde232d89c62c65d2444925d8e9351e178",
+    "azahar-native-cpp-run1.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-native-cpp-run1-matrix.ppm": "23fef89417ced4f4fc879f8c340271c793d02765092633a061ad4fefb9253756",
+    "azahar-native-cpp-run1-viewport.ppm": "812b59ae9c2655ee10ae3d899e97fb049f0454127aa4d7a6bc1ea3e97879a110",
+    "azahar-native-cpp-run1-state.ppm": "8a878d586b0b9cd958974400a7dc46fde232d89c62c65d2444925d8e9351e178",
+    "azahar-rust3ds-run1.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-rust3ds-run1-matrix.ppm": "23fef89417ced4f4fc879f8c340271c793d02765092633a061ad4fefb9253756",
+    "azahar-rust3ds-run1-viewport.ppm": "812b59ae9c2655ee10ae3d899e97fb049f0454127aa4d7a6bc1ea3e97879a110",
+    "azahar-rust3ds-run1-state.ppm": "8a878d586b0b9cd958974400a7dc46fde232d89c62c65d2444925d8e9351e178",
+    "azahar-native-run2.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-native-run2-matrix.ppm": "23fef89417ced4f4fc879f8c340271c793d02765092633a061ad4fefb9253756",
+    "azahar-native-run2-viewport.ppm": "812b59ae9c2655ee10ae3d899e97fb049f0454127aa4d7a6bc1ea3e97879a110",
+    "azahar-native-run2-state.ppm": "8a878d586b0b9cd958974400a7dc46fde232d89c62c65d2444925d8e9351e178",
+    "azahar-reference-run2.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-reference-run2-matrix.ppm": "23fef89417ced4f4fc879f8c340271c793d02765092633a061ad4fefb9253756",
+    "azahar-reference-run2-viewport.ppm": "812b59ae9c2655ee10ae3d899e97fb049f0454127aa4d7a6bc1ea3e97879a110",
+    "azahar-reference-run2-state.ppm": "8a878d586b0b9cd958974400a7dc46fde232d89c62c65d2444925d8e9351e178",
+    "azahar-rust3ds-run2.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-rust3ds-run2-matrix.ppm": "23fef89417ced4f4fc879f8c340271c793d02765092633a061ad4fefb9253756",
+    "azahar-rust3ds-run2-viewport.ppm": "812b59ae9c2655ee10ae3d899e97fb049f0454127aa4d7a6bc1ea3e97879a110",
+    "azahar-rust3ds-run2-state.ppm": "8a878d586b0b9cd958974400a7dc46fde232d89c62c65d2444925d8e9351e178",
+    "azahar-native-run3.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-native-run3-matrix.ppm": "23fef89417ced4f4fc879f8c340271c793d02765092633a061ad4fefb9253756",
+    "azahar-native-run3-viewport.ppm": "812b59ae9c2655ee10ae3d899e97fb049f0454127aa4d7a6bc1ea3e97879a110",
+    "azahar-native-run3-state.ppm": "8a878d586b0b9cd958974400a7dc46fde232d89c62c65d2444925d8e9351e178",
+    "azahar-reference-run3.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-reference-run3-matrix.ppm": "23fef89417ced4f4fc879f8c340271c793d02765092633a061ad4fefb9253756",
+    "azahar-reference-run3-viewport.ppm": "812b59ae9c2655ee10ae3d899e97fb049f0454127aa4d7a6bc1ea3e97879a110",
+    "azahar-reference-run3-state.ppm": "8a878d586b0b9cd958974400a7dc46fde232d89c62c65d2444925d8e9351e178",
+    "azahar-rust3ds-run3.ppm": "8dda7aac9018e31727a3314a72d4870a3ef3f40cf26bffe3f7f996381421fb8a",
+    "azahar-rust3ds-run3-matrix.ppm": "23fef89417ced4f4fc879f8c340271c793d02765092633a061ad4fefb9253756",
+    "azahar-rust3ds-run3-viewport.ppm": "812b59ae9c2655ee10ae3d899e97fb049f0454127aa4d7a6bc1ea3e97879a110",
+    "azahar-rust3ds-run3-state.ppm": "8a878d586b0b9cd958974400a7dc46fde232d89c62c65d2444925d8e9351e178"
+  },
+  "rust3ds_comparisons": [
+    {
+      "workload": "static",
+      "draws": 1,
+      "rust3ds_cpu_ms": 0.3338,
+      "reference_cpu_ms": 0.4244,
+      "reduction_percent": 21.34778510838832
+    },
+    {
+      "workload": "static",
+      "draws": 64,
+      "rust3ds_cpu_ms": 0.3981,
+      "reference_cpu_ms": 1.5879,
+      "reduction_percent": 74.92915170980541
+    },
+    {
+      "workload": "static",
+      "draws": 512,
+      "rust3ds_cpu_ms": 0.8542,
+      "reference_cpu_ms": 9.8608,
+      "reduction_percent": 91.33741684244686
+    },
+    {
+      "workload": "matrix",
+      "draws": 1,
+      "rust3ds_cpu_ms": 0.336,
+      "reference_cpu_ms": 0.426,
+      "reduction_percent": 21.126760563380277
+    },
+    {
+      "workload": "matrix",
+      "draws": 64,
+      "rust3ds_cpu_ms": 0.5335,
+      "reference_cpu_ms": 2.3439,
+      "reduction_percent": 77.23879005077009
+    },
+    {
+      "workload": "matrix",
+      "draws": 512,
+      "rust3ds_cpu_ms": 1.9488,
+      "reference_cpu_ms": 16.038,
+      "reduction_percent": 87.84885895997007
+    },
+    {
+      "workload": "viewport",
+      "draws": 1,
+      "rust3ds_cpu_ms": 0.3348,
+      "reference_cpu_ms": 0.4247,
+      "reduction_percent": 21.16788321167884
+    },
+    {
+      "workload": "viewport",
+      "draws": 64,
+      "rust3ds_cpu_ms": 0.4538,
+      "reference_cpu_ms": 2.4752,
+      "reduction_percent": 81.6661279896574
+    },
+    {
+      "workload": "viewport",
+      "draws": 512,
+      "rust3ds_cpu_ms": 1.306,
+      "reference_cpu_ms": 17.1205,
+      "reduction_percent": 92.37171811570923
+    }
+  ],
+  "rust3ds_baseline_changes": [
+    {
+      "workload": "static",
+      "draws": 1,
+      "previous_rust3ds_cpu_ms": 0.3335,
+      "current_rust3ds_cpu_ms": 0.3338,
+      "change_percent": 0.08995502248874132
+    },
+    {
+      "workload": "static",
+      "draws": 64,
+      "previous_rust3ds_cpu_ms": 0.3888,
+      "current_rust3ds_cpu_ms": 0.3981,
+      "change_percent": 2.3919753086419915
+    },
+    {
+      "workload": "static",
+      "draws": 512,
+      "previous_rust3ds_cpu_ms": 0.7814,
+      "current_rust3ds_cpu_ms": 0.8542,
+      "change_percent": 9.316611210647551
+    },
+    {
+      "workload": "matrix",
+      "draws": 1,
+      "previous_rust3ds_cpu_ms": 0.3353,
+      "current_rust3ds_cpu_ms": 0.336,
+      "change_percent": 0.20876826722340258
+    },
+    {
+      "workload": "matrix",
+      "draws": 64,
+      "previous_rust3ds_cpu_ms": 0.5033,
+      "current_rust3ds_cpu_ms": 0.5335,
+      "change_percent": 6.000397377309752
+    },
+    {
+      "workload": "matrix",
+      "draws": 512,
+      "previous_rust3ds_cpu_ms": 1.7081,
+      "current_rust3ds_cpu_ms": 1.9488,
+      "change_percent": 14.091680814940588
+    }
+  ],
+  "baseline_summary": "docs/native-results/rust3ds-step/azahar-summary.json",
+  "baseline_changes": [
+    {
+      "workload": "static",
+      "draws": 1,
+      "previous_native_cpu_ms": 0.3338,
+      "current_native_cpu_ms": 0.334,
+      "change_percent": 0.059916117435609983
+    },
+    {
+      "workload": "static",
+      "draws": 64,
+      "previous_native_cpu_ms": 0.4044,
+      "current_native_cpu_ms": 0.4072,
+      "change_percent": 0.6923837784371889
+    },
+    {
+      "workload": "static",
+      "draws": 512,
+      "previous_native_cpu_ms": 0.9056,
+      "current_native_cpu_ms": 0.9268,
+      "change_percent": 2.3409893992932806
+    },
+    {
+      "workload": "matrix",
+      "draws": 1,
+      "previous_native_cpu_ms": 0.3359,
+      "current_native_cpu_ms": 0.3363,
+      "change_percent": 0.11908306043466599
+    },
+    {
+      "workload": "matrix",
+      "draws": 64,
+      "previous_native_cpu_ms": 0.5383,
+      "current_native_cpu_ms": 0.5514,
+      "change_percent": 2.433587219022848
+    },
+    {
+      "workload": "matrix",
+      "draws": 512,
+      "previous_native_cpu_ms": 1.987,
+      "current_native_cpu_ms": 2.092,
+      "change_percent": 5.284348263714134
+    }
+  ],
+  "caveat": "Emulated guest timing; not a real-3DS performance claim."
+}

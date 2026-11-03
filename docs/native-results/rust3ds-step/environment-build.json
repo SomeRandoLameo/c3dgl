@@ -1,0 +1,6 @@
+{
+  "build-native/c3dgl_native_triangle.3dsx": "17a86f6193709857bb5a0526662c311586892fd8459738090d9f0b95a0daf195",
+  "build-native/c3dgl_native_triangle_cpp.3dsx": "785989acbc535d0d6356ac8ac8496d47c92e8e1b15dffc42745b76466823ae4f",
+  "build-native-reference/c3dgl_reference_triangle.3dsx": "8339f035fa0f26a8c64bff44db9019a5558e8edf059384c3916f625d7cb16f2d",
+  "build-native-rust3ds/armv6k-nintendo-3ds/release/c3dgl-rust3ds-triangle.3dsx": "49bb86450bfc5758422b45e974df12809e64ce8d827de82111fdf5c572294ecb"
+}

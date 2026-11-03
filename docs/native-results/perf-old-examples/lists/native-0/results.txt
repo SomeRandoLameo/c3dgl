@@ -1,0 +1,2 @@
+perf case=lists backend=native frames=120 CPU 23.0458 GPU 1.0638 total 33.4256 cmd 2160.0000
+ALL CHECKS PASSED: old example=lists backend=native GL=0 readback=0 image=1

@@ -142,25 +142,7 @@ void printStats() {
 
 }  // namespace
 
-int main() {
-    gfxInitDefault();
-    consoleInit(GFX_BOTTOM, nullptr);
-
-    if (!c3dglInit()) {
-        std::printf("c3dglInit failed\n");
-        while (aptMainLoop()) {
-            hidScanInput();
-            if (hidKeysDown() & KEY_START) break;
-            gspWaitForVBlank();
-        }
-        gfxExit();
-        return 1;
-    }
-
-    const Torus torus(1.0f, 0.45f, 32, 16);
-    const GLuint environment = makeEnvironment();
-    const GLuint stripes = makeStripes();
-
+void setupScene() {
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     const double aspect = static_cast<double>(C3DGL_TOP_SCREEN_WIDTH) / C3DGL_SCREEN_HEIGHT;
@@ -186,6 +168,75 @@ int main() {
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_NORMAL_ARRAY);
     glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
+}
+
+void drawFrame(const Torus& torus, GLuint environment, GLuint stripes, float angle, float offset, float tiltX, float tiltY) {
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    glMatrixMode(GL_TEXTURE);
+    glLoadIdentity();
+    glTranslatef(offset, 0.0f, 0.0f);
+    glMatrixMode(GL_MODELVIEW);
+
+    for (int i = 0; i < 3; i++) {
+        glPushMatrix();
+        glTranslatef((i - 1) * 2.9f, 0.0f, -8.0f);
+        glRotatef(tiltX, 1.0f, 0.0f, 0.0f);
+        glRotatef(tiltY + angle, 0.0f, 1.0f, 0.0f);
+        glRotatef(angle * 0.7f, 0.0f, 0.0f, 1.0f);
+
+        if (i == 0) {
+            // Chrome: the environment replaces the color; the texture matrix stays out of it
+            glMatrixMode(GL_TEXTURE);
+            glPushMatrix();
+            glLoadIdentity();
+            glMatrixMode(GL_MODELVIEW);
+            glBindTexture(GL_TEXTURE_2D, environment);
+            glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+            glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP);
+            glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP);
+            glEnable(GL_TEXTURE_GEN_S);
+            glEnable(GL_TEXTURE_GEN_T);
+            torus.draw();
+            glDisable(GL_TEXTURE_GEN_T);
+            glMatrixMode(GL_TEXTURE);
+            glPopMatrix();
+            glMatrixMode(GL_MODELVIEW);
+        } else {
+            // Lit stripes: s from a plane, t from the current texcoord (rows of the texture are all the same)
+            glBindTexture(GL_TEXTURE_2D, stripes);
+            glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+            glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, i == 1 ? GL_OBJECT_LINEAR : GL_EYE_LINEAR);
+            glEnable(GL_TEXTURE_GEN_S);
+            glEnable(GL_LIGHTING);
+            torus.draw();
+            glDisable(GL_LIGHTING);
+        }
+        glDisable(GL_TEXTURE_GEN_S);
+        glPopMatrix();
+    }
+}
+
+int main() {
+    gfxInitDefault();
+    consoleInit(GFX_BOTTOM, nullptr);
+
+    if (!c3dglInit()) {
+        std::printf("c3dglInit failed\n");
+        while (aptMainLoop()) {
+            hidScanInput();
+            if (hidKeysDown() & KEY_START) break;
+            gspWaitForVBlank();
+        }
+        gfxExit();
+        return 1;
+    }
+
+    const Torus torus(1.0f, 0.45f, 32, 16);
+    const GLuint environment = makeEnvironment();
+    const GLuint stripes = makeStripes();
+
+    setupScene();
 
     std::printf("c3dgl texgen\n\n\n\n\n"
                 "Tori without texcoords, glTexGen\n"
@@ -214,50 +265,7 @@ int main() {
         tiltY += pad.dx / 50.0f;
         tiltX -= pad.dy / 50.0f;
 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        glMatrixMode(GL_TEXTURE);
-        glLoadIdentity();
-        glTranslatef(offset, 0.0f, 0.0f);
-        glMatrixMode(GL_MODELVIEW);
-
-        for (int i = 0; i < 3; i++) {
-            glPushMatrix();
-            glTranslatef((i - 1) * 2.9f, 0.0f, -8.0f);
-            glRotatef(tiltX, 1.0f, 0.0f, 0.0f);
-            glRotatef(tiltY + angle, 0.0f, 1.0f, 0.0f);
-            glRotatef(angle * 0.7f, 0.0f, 0.0f, 1.0f);
-
-            if (i == 0) {
-                // Chrome: the environment replaces the color; the texture matrix stays out of it
-                glMatrixMode(GL_TEXTURE);
-                glPushMatrix();
-                glLoadIdentity();
-                glMatrixMode(GL_MODELVIEW);
-                glBindTexture(GL_TEXTURE_2D, environment);
-                glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-                glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP);
-                glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP);
-                glEnable(GL_TEXTURE_GEN_S);
-                glEnable(GL_TEXTURE_GEN_T);
-                torus.draw();
-                glDisable(GL_TEXTURE_GEN_T);
-                glMatrixMode(GL_TEXTURE);
-                glPopMatrix();
-                glMatrixMode(GL_MODELVIEW);
-            } else {
-                // Lit stripes: s from a plane, t from the current texcoord (rows of the texture are all the same)
-                glBindTexture(GL_TEXTURE_2D, stripes);
-                glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-                glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, i == 1 ? GL_OBJECT_LINEAR : GL_EYE_LINEAR);
-                glEnable(GL_TEXTURE_GEN_S);
-                glEnable(GL_LIGHTING);
-                torus.draw();
-                glDisable(GL_LIGHTING);
-            }
-            glDisable(GL_TEXTURE_GEN_S);
-            glPopMatrix();
-        }
+        drawFrame(torus, environment, stripes, angle, offset, tiltX, tiltY);
 
         c3dglSwapBuffers();
         angle += 1.0f;

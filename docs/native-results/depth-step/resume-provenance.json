@@ -1,0 +1,12 @@
+{
+  "verified_unchanged": [
+    "native",
+    "native-cpp",
+    "rust3ds"
+  ],
+  "changed": "reference",
+  "reason": "C3DGL_W_DEPTH=0 and correctness-only CPU polygon cull for FRONT_AND_BACK",
+  "reused": [
+    "azahar-native-run1.txt"
+  ]
+}

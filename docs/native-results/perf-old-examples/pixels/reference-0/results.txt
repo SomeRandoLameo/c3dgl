@@ -1,0 +1,2 @@
+perf case=pixels backend=reference frames=120 CPU 6.1431 GPU 0.9599 total 16.7118 cmd 0.9216
+ALL CHECKS PASSED: old example=pixels backend=reference GL=0 readback=0 image=1

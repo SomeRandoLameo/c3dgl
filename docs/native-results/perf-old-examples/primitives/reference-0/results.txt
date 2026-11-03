@@ -1,0 +1,2 @@
+perf case=primitives backend=reference frames=120 CPU 1.1718 GPU 0.5200 total 16.7118 cmd 0.9460
+ALL CHECKS PASSED: old example=primitives backend=reference GL=0 readback=0 image=1

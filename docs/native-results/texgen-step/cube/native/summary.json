@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "896c96630626bf171c8755437d740c6a5e32bb5d6bfbdac3a7e0a9bac61ffc3d",
+  "images": {
+    "c3dgl-old-cube-native.ppm": "7b2e5e6bb7b1f8275c82a13d77a0d00a492b64d56514c1dd536ca179a3011618"
+  },
+  "process_exit": -9
+}

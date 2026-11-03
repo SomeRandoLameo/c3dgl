@@ -1,0 +1,2 @@
+perf case=glu2 backend=native frames=120 CPU 60.3164 GPU 0.9884 total 66.8528 cmd 40400.0000
+ALL CHECKS PASSED: old example=glu2 backend=native GL=0 readback=0 image=1

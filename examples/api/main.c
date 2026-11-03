@@ -3485,26 +3485,8 @@ static void testTexUpdateInFrame(void)
     glPopAttrib();
 }
 
-int main(void)
+void runTests(void)
 {
-    gfxInitDefault();
-    consoleInit(GFX_BOTTOM, NULL);
-    checkLog = fopen("sdmc:/c3dgl-api.log", "w");
-
-    if (!c3dglInit()) {
-        printf("c3dglInit failed\n");
-        while (aptMainLoop()) {
-            hidScanInput();
-            if (hidKeysDown() & KEY_START) break;
-            gspWaitForVBlank();
-        }
-        gfxExit();
-        return 1;
-    }
-
-    printf("c3dgl api test\n\n\n\n\n"
-           "(C3DGL warnings below come from\n"
-           " the error checks, they are expected)\n\n");
     testErrors();
     testCapabilities();
     testQueries();
@@ -3531,6 +3513,29 @@ int main(void)
     testTexUpdateInFrame();
     createBuffers();
     CHECK(glGetError() == GL_NO_ERROR);         // Nothing left over
+}
+
+int main(void)
+{
+    gfxInitDefault();
+    consoleInit(GFX_BOTTOM, NULL);
+    checkLog = fopen("sdmc:/c3dgl-api.log", "w");
+
+    if (!c3dglInit()) {
+        printf("c3dglInit failed\n");
+        while (aptMainLoop()) {
+            hidScanInput();
+            if (hidKeysDown() & KEY_START) break;
+            gspWaitForVBlank();
+        }
+        gfxExit();
+        return 1;
+    }
+
+    printf("c3dgl api test\n\n\n\n\n"
+           "(C3DGL warnings below come from\n"
+           " the error checks, they are expected)\n\n");
+    runTests();
     if (checkLog) {
         fprintf(checkLog, "checks=%d failures=%d\n", checks, failures);
         fclose(checkLog);

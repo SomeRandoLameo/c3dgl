@@ -53,3 +53,14 @@ Thumbs.db
 .claude/settings.local.json
 CLAUDE.local.md
 .freebuff/project-id
+
+# Rust native rewrite
+native/target/
+native/rust3ds/target/
+
+# Generated Python bytecode
+__pycache__/
+*.pyc
+# Keep protocol attribution and license notices for the native renderer.
+!native/third_party/
+!native/third_party/**

@@ -1,0 +1,2 @@
+perf case=fragment backend=reference frames=120 CPU 1.1988 GPU 0.5200 total 16.7118 cmd 2.2461
+ALL CHECKS PASSED: old example=fragment backend=reference GL=0 readback=0 image=1

@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "56d090eaf9ddc01978fe96e831a527671ac5f1c4a60eadd811fde91d37d97643",
+  "images": {
+    "c3dgl-old-overlay-native.ppm": "8fc3dffad77af5cd43b4855c46cb93b55e8b9ce47fff81cded51b95466af83af"
+  },
+  "process_exit": -9
+}

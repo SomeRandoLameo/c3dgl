@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "c54463ec801a46ef2f05d8a24e1288810bf296d270da2b2f50c2baa5cbd7072b",
+  "images": {
+    "c3dgl-old-glu2-native.ppm": "534c7369d71d4e5c0c064b599da984bc952a3dba43c857f04b5a103ea24f67f9"
+  },
+  "process_exit": -9
+}

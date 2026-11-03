@@ -1,0 +1,36 @@
+{
+  "repetitions": 1,
+  "cases": {
+    "accum": {
+      "source": "examples/accum/main.cpp",
+      "source_sha256": "4fc7cefb8f40c0d4379d440fdf34a5b4de571da405ec3674c7e5256fa2be0068",
+      "adapter_sha256": "1447005f4a0a4d1d76fb1abb98d6287629947dc5b448e944a5deb66b3297bb6e",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "ca4c8063a00fb1d6c9cb56196998d8c302c7a46ee94f3412d8905a955ecdfe38",
+        "images": {
+          "c3dgl-old-accum-reference.ppm": "fde1644a3bbc7958dd33c2856a32d6960c35e06b25cbc4c571dda93ce22c3f91"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "cb2e226739183ef51f5e9e3732f28ed9dab0848b3273dec2f9b9591a493fd22d",
+        "images": {
+          "c3dgl-old-accum-native.ppm": "fde1644a3bbc7958dd33c2856a32d6960c35e06b25cbc4c571dda93ce22c3f91"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    }
+  },
+  "whole_original_programs": false,
+  "native_dependency_audits_passed": true
+}

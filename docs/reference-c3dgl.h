@@ -1,0 +1,152 @@
+// c3dgl: OpenGL 1.1 subset for the Nintendo 3DS on citro3d (GPU), see GL/gl.h.
+//
+// This header is the platform side: setup and buffer swap, like EGL/GLX on a PC.
+// It does not include <3ds.h>, so it can be used next to headers that clash with libctru.
+//
+// Usage:
+//     gfxInitDefault();
+//     c3dglInit();
+//     while (aptMainLoop()) {
+//         glClear(GL_COLOR_BUFFER_BIT);
+//         ... immediate mode or client arrays ...
+//         c3dglSwapBuffers();
+//     }
+//     c3dglClose();
+//     gfxExit();
+//
+// Supported:
+//   - glBegin/glEnd and glDrawArrays/glDrawElements (client arrays of all GL 1.1 / ES 1.1 types) with all primitives
+//     (points, lines, line strips/loops, triangles, triangle strips/fans, quads, quad strips, convex polygons)
+//   - Matrix stacks (modelview, projection, texture), glOrtho/glFrustum/glTranslate/glRotate/glScale/glMultMatrix
+//   - Textures: RGBA8, RGB8, LA8, L8, A8, RGB565, RGBA5551, RGBA4; any size up to 1024x1024
+//   - Texture environment: GL_MODULATE, GL_REPLACE, GL_DECAL, GL_BLEND, GL_ADD, GL_COMBINE (incl. DOT3)
+//   - Mipmaps (all levels, mipmap filters, GL_GENERATE_MIPMAP)
+//   - Compressed textures: paletted (GL_OES_compressed_paletted_texture, expanded on load) and ETC1 (native)
+//   - Attribute stacks (glPushAttrib, glPushClientAttrib)
+//   - Display lists (glNewList, glCallList(s), ...)
+//   - Multitexturing: 3 units (glActiveTexture, glClientActiveTexture, glMultiTexCoord)
+//   - Blending, logic ops, alpha test, stencil, depth test/mask, color mask, face culling, scissor, viewport, line width, point size
+//   - Point parameters (size min/max, distance attenuation) and point sprites (GL_OES_point_sprite)
+//   - glClear of color/depth/stencil honors scissor and write masks
+//   - glGetError, glGet*v, glIsEnabled; common glVertex/glColor/glTexCoord/glRect/matrix variants
+//   - Lighting: 8 lights, materials, glColorMaterial, two-sided, GL_NORMALIZE/GL_RESCALE_NORMAL (per vertex, on the CPU)
+//   - Fog: GL_LINEAR, GL_EXP, GL_EXP2 per pixel (PICA fog table, eye distance |z_eye|)
+//   - 6 user clip planes (glClipPlane), clipped on the CPU
+//   - Texture coordinate generation (glTexGen: object linear, eye linear, sphere map), per vertex on the CPU
+//   - GL_FLAT, glPolygonMode (with edge flags), glPolygonOffset, glDepthRange
+//   - Pixel store modes, texture borders, proxy textures, glGetTexLevelParameter
+//   - glRasterPos, glBitmap, glDrawPixels, glCopyPixels, glPixelZoom (color on the GPU, depth/stencil on the CPU)
+//   - glPixelTransfer, glPixelMap, glGetPixelMap; GL_COLOR_INDEX images through the pixel maps
+//   - Feedback and selection (glRenderMode, glFeedbackBuffer, glSelectBuffer, name stack, glPassThrough)
+//   - Line stipple (glLineStipple) and polygon stipple (glPolygonStipple, window-aligned, needs texture unit 2 free)
+//   - Accumulation buffer (glAccum, glClearAccum): 16 bits per component, on the CPU; GL_ACCUM/GL_LOAD wait for the GPU
+//   - GLU: Mesa GLU as c3dgl::glu (<GL/glu.h>), see README
+//   - Buffer objects (VBOs) for vertex arrays and indices
+//   - OpenGL ES 1.1: <GLES/gl.h>, fixed-point x functions, glOrthof/glFrustumf/... for the implemented features
+//
+// Mipmaps work down to 8x8; smaller levels are accepted but PICA cannot sample them. Points are always square (no GL_POINT_SMOOTH).
+//
+// Stereoscopic 3D: c3dglSetStereo() + c3dglSetEye(), see below.
+//
+// Screens: rendering goes to the top screen (400x240) by default. c3dglSetScreen() switches to the
+// bottom screen (320x240) and back, also within a frame; both are presented by c3dglSwapBuffers().
+// The bottom screen is only touched once something is drawn on it, until then it can be used for
+// consoleInit(). Do not use the console on a screen that c3dgl renders to.
+#ifndef C3DGL_H
+#define C3DGL_H
+
+#include <stdbool.h>
+
+#define C3DGL_TOP_SCREEN_WIDTH      400     // Landscape
+#define C3DGL_BOTTOM_SCREEN_WIDTH   320
+#define C3DGL_SCREEN_HEIGHT         240     // Both screens
+
+typedef enum {
+    C3DGL_SCREEN_TOP = 0,
+    C3DGL_SCREEN_BOTTOM,
+} C3DGLscreen;
+
+typedef enum {
+    C3DGL_EYE_LEFT = 0,
+    C3DGL_EYE_RIGHT,
+} C3DGLeye;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Initialize citro3d and the render targets of both screens; the top screen is current.
+// Requires gfxInit*() to be done. Call before any gl* function.
+bool c3dglInit(void);
+void c3dglClose(void);
+
+// Select the screen that following gl* calls draw on and glClear clears (like binding a framebuffer).
+// All other GL state is shared, except that viewport and scissor box are reset to the full screen.
+void c3dglSetScreen(C3DGLscreen screen);
+C3DGLscreen c3dglGetScreen(void);
+int c3dglGetScreenWidth(C3DGLscreen screen);   // 400 or 320; the height is always C3DGL_SCREEN_HEIGHT
+
+// Stereoscopic 3D on the top screen. While it is on, the top screen has a render target per eye: select one with
+// c3dglSetEye() and draw the scene once per eye (both start with the same GL state; the right eye is not cleared
+// for you). Both eyes have to be drawn every frame, otherwise the 3D display shows an old picture for one eye.
+// The bottom screen is not affected. Without stereo c3dglSetEye() is ignored and the left (only) target is used.
+// Call c3dglSetStereo() between frames (after c3dglSwapBuffers, before the first draw); it returns false if the
+// right eye render target could not be allocated (VRAM) and stereo stays off.
+// Turn it off while the 3D slider is at 0: a stereo frame costs about twice the render time and VRAM.
+bool c3dglSetStereo(bool enable);
+bool c3dglGetStereo(void);
+void c3dglSetEye(C3DGLeye eye);
+C3DGLeye c3dglGetEye(void);
+float c3dglGet3DSlider(void);   // Position of the 3D slider, 0..1
+
+// Submit everything drawn since the last call and present it on the screens drawn on in this frame.
+// The next frame starts lazily with the next gl* call that draws or clears;
+// that is also where citro3d waits for VBlank (C3D_FRAME_SYNCDRAW).
+void c3dglSwapBuffers(void);
+
+// Frame statistics from citro3d: GPU time of the last drawn frame (ms), CPU time spent building
+// its command list (ms) and command buffer use (0..1). Only meaningful on real hardware.
+void c3dglGetFrameStats(float *gpuMs, float *cpuMs, float *cmdBufUsage);
+
+// Milliseconds the CPU spent blocked since the last call; resets: waiting for the GPU to finish the previous frame
+// (C3D_FrameBegin) and for the VBlank before presenting (C3D_FrameSync). What is left of a window is CPU work.
+double c3dglGetGpuWaitMs(void);
+// The same waits in system ticks (SYSCLOCK_ARM11), summed since c3dglInit() and never reset
+unsigned long long c3dglGetWaitTicksTotal(void);
+
+// Sends what the frame has drawn so far to the GPU (C3D_FrameSplit) instead of all of it at c3dglSwapBuffers(). The
+// GPU then renders that part while the CPU goes on with the rest: citro3d begins no frame before the GPU finished the
+// previous one, so whatever the GPU still has to do at the swap is time the next frame waits. Does nothing outside a
+// frame or before its first draw.
+void c3dglSubmit(void);
+
+// Keeps the last `count` vertices of the frame's vertex buffer back from the draws that follow (0: none), so that what
+// is drawn later in the frame (a HUD) still fits after a heavy scene. Geometry that does not fit is dropped, as before.
+void c3dglReserveVertices(int count);
+
+// One mesh for c3dglDrawMeshes(): a buffer of 16-byte vertices (short x, y, z, pad; short s, t; ubyte RGBA) and the
+// number of indices to draw from the bound element array buffer, at (x, y, z)
+typedef struct {
+    unsigned int buffer;        // GLuint
+    int count;                  // GLsizei
+    float x, y, z;
+} C3DGLmesh;
+
+// Draws `n` meshes as this would for each of them, with the element array buffer bound and the vertex, texcoord and
+// color arrays enabled (the modelview matrix and the array state are left as it leaves them):
+//   glPushMatrix(); glTranslatef(x, y, z); glScalef(scale, scale, scale); glBindBuffer(GL_ARRAY_BUFFER, buffer);
+//   glVertexPointer(3, GL_SHORT, 16, 0); glTexCoordPointer(2, GL_SHORT, 16, 8); glColorPointer(4, GL_UNSIGNED_BYTE, 16, 12);
+//   glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_SHORT, 0); glPopMatrix();
+// A mesh whose buffer already has its GPU cache for exactly this draw is drawn straight from it: the matrix is computed
+// with the same operations, the state is set once for all. Every other mesh takes the GL calls above.
+void c3dglDrawMeshes(const C3DGLmesh *meshes, int n, float scale);
+
+// CPU time inside c3dgl by category (draw paths, state changes, flushes, uploads), averaged over `frames` frames and
+// printed. Resets the totals. Does nothing unless c3dgl was built with C3DGL_PROFILE.
+void c3dglProfileDump(int frames);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // C3DGL_H

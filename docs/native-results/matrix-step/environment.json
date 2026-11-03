@@ -1,0 +1,18 @@
+{
+  "tested_date": "2026-10-13",
+  "emulator": "Azahar 2126.1.2",
+  "renderer_backend": "Vulkan / MoltenVK",
+  "resolution_factor": 1,
+  "cpu_clock_percentage": 100,
+  "cpu_jit": true,
+  "shader_jit": true,
+  "rust": "1.101.0-nightly (21b707e3f 2026-09-30)",
+  "pinned_toolchain": "nightly-2026-10-01",
+  "devkitARM": "GCC 16.1.0",
+  "reference_commit": "9c77e37464d140ae0f1b8470876c24ce55dc7bbc",
+  "archive_sha256": "613b24a46d40a2c9d924a3e95a9e051f806804ab0e0bbf8f5fe45ff640d1dcd8",
+  "native_c_3dsx_sha256": "17a86f6193709857bb5a0526662c311586892fd8459738090d9f0b95a0daf195",
+  "native_cpp_3dsx_sha256": "785989acbc535d0d6356ac8ac8496d47c92e8e1b15dffc42745b76466823ae4f",
+  "reference_3dsx_sha256": "8339f035fa0f26a8c64bff44db9019a5558e8edf059384c3916f625d7cb16f2d",
+  "checkpoint": "GL modelview/projection matrices"
+}

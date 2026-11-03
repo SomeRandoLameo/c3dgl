@@ -517,6 +517,28 @@ void testPointSizeArrayApi() {
 
 } // namespace
 
+void setupScene() {
+    sizeBuffer = createSizeBuffer();
+    testPointApi();
+    testPointSizeArrayApi();
+    quadrants = createQuadrants();
+    disc = createDisc();
+    createParticles();
+    glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
+}
+
+void drawFrame(float angle) {
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    beginCell(0, 0, false); drawClamp(); endCell();
+    beginCell(1, 0, true); drawAttenuation(false); endCell();
+    beginCell(2, 0, true); drawAttenuation(true); endCell();
+    beginCell(3, 0, false); drawSprite(false); endCell();
+    beginCell(0, 1, false); drawSprite(true); endCell();
+    beginCell(1, 1, false); drawNoReplace(); endCell();
+    beginCell(2, 1, false); drawMultitexture(); endCell();
+    beginCell(3, 1, true); drawParticles(angle); endCell();
+}
+
 static void printStats() {
     // Rows 2-5 of the console: timings of the last frame, frames per second over the last second; the cursor stays
     // where the text ended
@@ -555,9 +577,7 @@ int main() {
     }
 
     std::printf("c3dgl points\n\n\n\n\n");
-    sizeBuffer = createSizeBuffer();
-    testPointApi();
-    testPointSizeArrayApi();
+    setupScene();
     std::printf("%i/%i checks passed\n\n"
                 "Top screen: left/right of every\n"
                 "pair must match\n"
@@ -582,26 +602,13 @@ int main() {
                 "START: exit\n",
                 checks - failures, checks);
 
-    quadrants = createQuadrants();
-    disc = createDisc();
-    createParticles();
-    glClearColor(0.12f, 0.12f, 0.15f, 1.0f);
-
     float angle = 0.0f;
     while (aptMainLoop()) {
         hidScanInput();
         printStats();
         if (hidKeysDown() & KEY_START) break;
 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        beginCell(0, 0, false); drawClamp(); endCell();
-        beginCell(1, 0, true); drawAttenuation(false); endCell();
-        beginCell(2, 0, true); drawAttenuation(true); endCell();
-        beginCell(3, 0, false); drawSprite(false); endCell();
-        beginCell(0, 1, false); drawSprite(true); endCell();
-        beginCell(1, 1, false); drawNoReplace(); endCell();
-        beginCell(2, 1, false); drawMultitexture(); endCell();
-        beginCell(3, 1, true); drawParticles(angle); endCell();
+        drawFrame(angle);
         c3dglSwapBuffers();
         angle += 0.5f;
     }

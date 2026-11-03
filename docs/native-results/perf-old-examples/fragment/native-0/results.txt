@@ -1,0 +1,2 @@
+perf case=fragment backend=native frames=120 CPU 2.5134 GPU 0.5200 total 16.7119 cmd 8016.0000
+ALL CHECKS PASSED: old example=fragment backend=native GL=0 readback=0 image=1

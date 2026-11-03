@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "6dac9282fbaa7fc664f997765852edcc8abe4004edb8a424fe8b978f860346c8",
+  "images": {
+    "c3dgl-old-stipple-native.ppm": "91ac5320005c34e0a494fc20bfe71ed3241264636e0d1ff238cb856dea68b796"
+  },
+  "process_exit": -9
+}

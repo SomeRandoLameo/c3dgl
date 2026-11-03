@@ -1,0 +1,2 @@
+perf case=accum backend=reference frames=120 CPU 392.2457 GPU 0.4588 total 392.6254 cmd 0.2930
+ALL CHECKS PASSED: old example=accum backend=reference GL=0 readback=0 image=1

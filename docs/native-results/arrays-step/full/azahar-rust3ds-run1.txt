@@ -1,0 +1,49 @@
+rust3ds ctru-rs / native Rust dependency
+cycle 1/8 errors=0
+cycle 2/8 errors=0
+cycle 3/8 errors=0
+cycle 4/8 errors=0
+cycle 5/8 errors=0
+cycle 6/8 errors=0
+cycle 7/8 errors=0
+cycle 8/8 errors=0
+workload=static draws=1 CPU 0.3345 GPU 0.2494
+total 16.7122 ms/frame
+workload=static draws=64 CPU 0.4351 GPU 0.2494
+total 16.7122 ms/frame
+workload=static draws=512 CPU 1.1502 GPU 0.2494
+total 16.7122 ms/frame
+workload=matrix draws=1 CPU 0.3366 GPU 0.2494
+total 16.7122 ms/frame
+workload=matrix draws=64 CPU 0.5693 GPU 0.2494
+total 16.7122 ms/frame
+workload=matrix draws=512 CPU 2.2352 GPU 0.2494
+total 16.7122 ms/frame
+workload=viewport draws=1 CPU 0.3354 GPU 0.2494
+total 16.7122 ms/frame
+workload=viewport draws=64 CPU 0.4892 GPU 0.2494
+total 16.7122 ms/frame
+workload=viewport draws=512 CPU 1.5887 GPU 0.2494
+total 16.7122 ms/frame
+workload=indexed draws=1 CPU 0.3358 GPU 0.2494
+total 16.7122 ms/frame
+workload=indexed draws=64 CPU 0.5172 GPU 0.2494
+total 16.7122 ms/frame
+workload=indexed draws=512 CPU 1.8071 GPU 0.2494
+total 16.7122 ms/frame
+workload=update draws=1 CPU 0.4084 GPU 0.2494
+total 16.7122 ms/frame
+workload=update draws=64 CPU 0.5898 GPU 0.2494
+total 16.7122 ms/frame
+workload=update draws=512 CPU 1.8798 GPU 0.2494
+total 16.7122 ms/frame
+PASS array image client arrays
+PASS array image client u8 indices
+PASS array image client u16 indices
+PASS array image cached VBO elements
+PASS array image cached VBO elements
+PASS array image cached VBO elements
+PASS array image in-frame subdata preserves previous draw
+PASS array image in-frame data replacement and deletion
+PASS VBO GPU memory recovery
+ALL CHECKS PASSED - START exits

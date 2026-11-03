@@ -1,0 +1,27 @@
+[ 28%] Built target c3dgl_native_platform
+[ 42%] Built target c3dgl_native_build
+[ 57%] Building C object CMakeFiles/c3dgl_native_texture_smoke.dir/examples/textured.o
+[ 71%] Linking C executable c3dgl_native_texture_smoke.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 71%] Built target c3dgl_native_texture_smoke
+[ 85%] Building 3DSX executable target c3dgl_native_texture_smoke_3dsx
+[100%] Built target c3dgl_native_texture_smoke_3dsx
+[ 28%] Built target c3dgl_native_platform
+[ 42%] Built target c3dgl_native_build
+[ 57%] Building C object CMakeFiles/c3dgl_native_textured.dir/examples/textured.o
+[ 71%] Linking C executable c3dgl_native_textured.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 71%] Built target c3dgl_native_textured
+[ 85%] Building 3DSX executable target c3dgl_native_textured_3dsx
+[100%] Built target c3dgl_native_textured_3dsx
+[ 28%] Built target c3dgl_native_platform
+[ 42%] Built target c3dgl_native_build
+[ 57%] Building CXX object CMakeFiles/c3dgl_native_textured_cpp.dir/examples/textured.o
+[ 71%] Linking CXX executable c3dgl_native_textured_cpp.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 71%] Built target c3dgl_native_textured_cpp
+[ 85%] Building 3DSX executable target c3dgl_native_textured_cpp_3dsx
+[100%] Built target c3dgl_native_textured_cpp_3dsx

@@ -1,0 +1,38 @@
+-- Configuring done (0.0s)
+-- Generating done (0.1s)
+-- Build files have been written to: /Users/elias/Documents/projekte/c3dgl/build-native-old-examples
+[  3%] Built target c3dgl_vsh
+[ 12%] Built target c3dgl_shaders
+[ 18%] Built target c3dgl
+[ 21%] Linking CXX executable old_primitives_reference.elf
+[ 24%] Built target old_primitives_reference
+[ 27%] Building 3DSX executable target old_primitives_reference_3dsx
+[ 30%] Built target old_primitives_reference_3dsx
+[ 36%] Built target c3dgl_native_platform
+[ 39%] Built target c3dgl_native_build
+[ 42%] Linking CXX executable old_primitives_native.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 45%] Built target old_primitives_native
+[ 48%] Building 3DSX executable target old_primitives_native_3dsx
+[ 51%] Built target old_primitives_native_3dsx
+[ 54%] Linking CXX executable old_texture_reference.elf
+[ 57%] Built target old_texture_reference
+[ 60%] Building 3DSX executable target old_texture_reference_3dsx
+[ 63%] Built target old_texture_reference_3dsx
+[ 66%] Linking CXX executable old_texture_native.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 69%] Built target old_texture_native
+[ 72%] Building 3DSX executable target old_texture_native_3dsx
+[ 75%] Built target old_texture_native_3dsx
+[ 78%] Linking CXX executable old_cube_reference.elf
+[ 81%] Built target old_cube_reference
+[ 84%] Building 3DSX executable target old_cube_reference_3dsx
+[ 87%] Built target old_cube_reference_3dsx
+[ 90%] Linking CXX executable old_cube_native.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 93%] Built target old_cube_native
+[ 96%] Building 3DSX executable target old_cube_native_3dsx
+[100%] Built target old_cube_native_3dsx

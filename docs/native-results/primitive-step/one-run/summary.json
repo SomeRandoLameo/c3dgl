@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "c6e41f83170219457e4b36124fcdce9d45a6cc33d2567fd957e6a5dabab3d5a0",
+  "images": {
+    "c3dgl-primitive-smoke.ppm": "a2d53e9ff1a07f9b165b6ac31785b8bb86dc336151dbe74e48d0ece1847bbde0"
+  },
+  "process_exit": -9
+}

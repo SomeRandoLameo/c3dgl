@@ -1,0 +1,68 @@
+C c3dgl + Citro3D reference
+Persistent cached indexed VBO
+Reference Z-buffer only (C3DGL_W_DEPTH=0)
+PASS reference resident GPU cache workload=static draws=1
+workload=static draws=1 CPU 0.3593 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=static draws=64
+workload=static draws=64 CPU 1.6148 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=static draws=512
+workload=static draws=512 CPU 10.5427 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=matrix draws=1
+workload=matrix draws=1 CPU 0.3608 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=matrix draws=64
+workload=matrix draws=64 CPU 1.8762 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=matrix draws=512
+workload=matrix draws=512 CPU 12.6522 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=viewport draws=1
+workload=viewport draws=1 CPU 0.3596 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=viewport draws=64
+workload=viewport draws=64 CPU 2.0077 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=viewport draws=512
+workload=viewport draws=512 CPU 13.7277 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=indexed draws=1
+workload=indexed draws=1 CPU 0.3595 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=indexed draws=64
+workload=indexed draws=64 CPU 1.6150 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=indexed draws=512
+workload=indexed draws=512 CPU 10.5429 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=update draws=1
+workload=update draws=1 CPU 0.4264 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=update draws=64
+workload=update draws=64 CPU 1.6819 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=update draws=512
+workload=update draws=512 CPU 10.6098 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=cube draws=1
+workload=cube draws=1 CPU 0.3613 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=cube draws=64
+workload=cube draws=64 CPU 1.6236 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=cube draws=512
+workload=cube draws=512 CPU 10.5999 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=raster draws=1
+workload=raster draws=1 CPU 0.3615 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=raster draws=64
+workload=raster draws=64 CPU 2.1100 GPU 0.2495
+total 16.7122 ms/frame
+PASS reference resident GPU cache workload=raster draws=512
+workload=raster draws=512 CPU 14.5461 GPU 0.2495
+total 16.7122 ms/frame
+PASS 20 depth/cull cells
+GL error=0 - START exits

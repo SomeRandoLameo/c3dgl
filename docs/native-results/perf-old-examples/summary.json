@@ -1,0 +1,470 @@
+{
+  "cube": {
+    "reference": [
+      {
+        "cpu_ms": 0.3815,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7118,
+        "cmd": 0.293
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 0.4701,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7119,
+        "cmd": 688.0
+      }
+    ]
+  },
+  "overlay": {
+    "reference": [
+      {
+        "cpu_ms": 0.4056,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7118,
+        "cmd": 0.3296
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 0.5042,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7119,
+        "cmd": 688.0
+      }
+    ]
+  },
+  "primitives": {
+    "reference": [
+      {
+        "cpu_ms": 1.1718,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7118,
+        "cmd": 0.946
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 2.5259,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7119,
+        "cmd": 3296.0
+      }
+    ]
+  },
+  "primitives2": {
+    "reference": [
+      {
+        "cpu_ms": 1.3437,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7118,
+        "cmd": 1.1536
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 2.7683,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7119,
+        "cmd": 3440.0
+      }
+    ]
+  },
+  "primitives3": {
+    "reference": [
+      {
+        "cpu_ms": 12.036,
+        "gpu_ms": 0.8426,
+        "total_ms": 16.7118,
+        "cmd": 0.8667
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 27.8596,
+        "gpu_ms": 0.863,
+        "total_ms": 33.4256,
+        "cmd": 9488.0
+      }
+    ]
+  },
+  "texture": {
+    "reference": [
+      {
+        "cpu_ms": 0.3306,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7118,
+        "cmd": 0.293
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 0.344,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7119,
+        "cmd": 576.0
+      }
+    ]
+  },
+  "texcoords": {
+    "reference": [
+      {
+        "cpu_ms": 0.7483,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7118,
+        "cmd": 0.8667
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 1.1278,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7119,
+        "cmd": 2288.0
+      }
+    ]
+  },
+  "texmatrix": {
+    "reference": [
+      {
+        "cpu_ms": 0.7534,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7118,
+        "cmd": 1.2085
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 1.4387,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7119,
+        "cmd": 4592.0
+      }
+    ]
+  },
+  "multitexture": {
+    "reference": [
+      {
+        "cpu_ms": 0.9014,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7118,
+        "cmd": 1.4771
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 1.8587,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7119,
+        "cmd": 4704.0
+      }
+    ]
+  },
+  "mipmap": {
+    "reference": [
+      {
+        "cpu_ms": 0.731,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7118,
+        "cmd": 1.4099
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 1.4141,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7119,
+        "cmd": 4560.0
+      }
+    ]
+  },
+  "compressed": {
+    "reference": [
+      {
+        "cpu_ms": 0.8086,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7118,
+        "cmd": 1.4465
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 1.4247,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7119,
+        "cmd": 4816.0
+      }
+    ]
+  },
+  "lighting": {
+    "reference": [
+      {
+        "cpu_ms": 102.4866,
+        "gpu_ms": 2.8734,
+        "total_ms": 105.2188,
+        "cmd": 0.9644
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 222.272,
+        "gpu_ms": 2.9048,
+        "total_ms": 233.9898,
+        "cmd": 12656.0
+      }
+    ]
+  },
+  "texgen": {
+    "reference": [
+      {
+        "cpu_ms": 53.7343,
+        "gpu_ms": 1.3421,
+        "total_ms": 54.9353,
+        "cmd": 0.47
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 166.0547,
+        "gpu_ms": 1.6953,
+        "total_ms": 183.8487,
+        "cmd": 1600.0
+      }
+    ]
+  },
+  "fog": {
+    "reference": [
+      {
+        "cpu_ms": 10.2897,
+        "gpu_ms": 0.9333,
+        "total_ms": 16.7118,
+        "cmd": 8.5938
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 20.6499,
+        "gpu_ms": 0.9517,
+        "total_ms": 33.4256,
+        "cmd": 27680.0
+      }
+    ]
+  },
+  "fragment": {
+    "reference": [
+      {
+        "cpu_ms": 1.1988,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7118,
+        "cmd": 2.2461
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 2.5134,
+        "gpu_ms": 0.52,
+        "total_ms": 16.7119,
+        "cmd": 8016.0
+      }
+    ]
+  },
+  "fragment2": {
+    "reference": [
+      {
+        "cpu_ms": 2.696,
+        "gpu_ms": 0.7285,
+        "total_ms": 16.7118,
+        "cmd": 3.009
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 6.8911,
+        "gpu_ms": 0.8749,
+        "total_ms": 16.7119,
+        "cmd": 15504.0
+      }
+    ]
+  },
+  "clipplane": {
+    "reference": [
+      {
+        "cpu_ms": 10.5254,
+        "gpu_ms": 0.5838,
+        "total_ms": 16.7118,
+        "cmd": 1.2817
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 37.1283,
+        "gpu_ms": 0.5778,
+        "total_ms": 50.1393,
+        "cmd": 7632.0
+      }
+    ]
+  },
+  "lists": {
+    "reference": [
+      {
+        "cpu_ms": 8.7791,
+        "gpu_ms": 0.7933,
+        "total_ms": 16.7118,
+        "cmd": 0.3906
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 23.0458,
+        "gpu_ms": 1.0638,
+        "total_ms": 33.4256,
+        "cmd": 2160.0
+      }
+    ]
+  },
+  "select": {
+    "reference": [
+      {
+        "cpu_ms": 4.6195,
+        "gpu_ms": 0.7933,
+        "total_ms": 16.7118,
+        "cmd": 0.6958
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 6.794,
+        "gpu_ms": 0.933,
+        "total_ms": 16.7119,
+        "cmd": 2160.0
+      }
+    ]
+  },
+  "stipple": {
+    "reference": [
+      {
+        "cpu_ms": 4.6791,
+        "gpu_ms": 0.7933,
+        "total_ms": 16.7118,
+        "cmd": 1.0986
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 7.4531,
+        "gpu_ms": 0.955,
+        "total_ms": 16.7119,
+        "cmd": 5088.0
+      }
+    ]
+  },
+  "accum": {
+    "reference": [
+      {
+        "cpu_ms": 392.2457,
+        "gpu_ms": 0.4588,
+        "total_ms": 392.6254,
+        "cmd": 0.293
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 761.4435,
+        "gpu_ms": 13.3524,
+        "total_ms": 785.5412,
+        "cmd": 87968.0
+      }
+    ]
+  },
+  "pixels": {
+    "reference": [
+      {
+        "cpu_ms": 6.1431,
+        "gpu_ms": 0.9599,
+        "total_ms": 16.7118,
+        "cmd": 0.9216
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 39.0204,
+        "gpu_ms": 1.4104,
+        "total_ms": 50.1393,
+        "cmd": 56672.0
+      }
+    ]
+  },
+  "points": {
+    "reference": [
+      {
+        "cpu_ms": 4.3968,
+        "gpu_ms": 0.7933,
+        "total_ms": 16.7118,
+        "cmd": 1.6602
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 10.1234,
+        "gpu_ms": 1.0145,
+        "total_ms": 16.7119,
+        "cmd": 11152.0
+      }
+    ]
+  },
+  "glu0": {
+    "reference": [
+      {
+        "cpu_ms": 15.2331,
+        "gpu_ms": 1.1849,
+        "total_ms": 16.2773,
+        "cmd": 2.533
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 33.417,
+        "gpu_ms": 1.2132,
+        "total_ms": 50.1393,
+        "cmd": 16432.0
+      }
+    ]
+  },
+  "glu1": {
+    "reference": [
+      {
+        "cpu_ms": 20.4636,
+        "gpu_ms": 1.0613,
+        "total_ms": 21.3852,
+        "cmd": 1.947
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 32.8258,
+        "gpu_ms": 1.0578,
+        "total_ms": 50.1393,
+        "cmd": 5136.0
+      }
+    ]
+  },
+  "glu2": {
+    "reference": [
+      {
+        "cpu_ms": 26.4748,
+        "gpu_ms": 0.8817,
+        "total_ms": 27.2166,
+        "cmd": 0.9277
+      }
+    ],
+    "native": [
+      {
+        "cpu_ms": 60.3164,
+        "gpu_ms": 0.9884,
+        "total_ms": 66.8528,
+        "cmd": 40400.0
+      }
+    ]
+  }
+}

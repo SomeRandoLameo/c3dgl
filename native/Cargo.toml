@@ -1,0 +1,26 @@
+[package]
+name = "c3dgl-native"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+host-tests = []
+# Host build of the renderer with a mock platform (native/bench): CPU profiling of the example scenes.
+host-bench = []
+# Use the application-owned std runtime/allocator; compile the libctru adapter.
+rust3ds = []
+
+[lib]
+name = "c3dgl"
+crate-type = ["staticlib", "rlib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+# Line tables only (no runtime cost): addr2line for profiles.
+debug = "line-tables-only"

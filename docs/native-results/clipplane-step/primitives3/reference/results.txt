@@ -1,0 +1,1 @@
+ALL CHECKS PASSED: old example=primitives3 backend=reference GL=0 readback=0 image=1

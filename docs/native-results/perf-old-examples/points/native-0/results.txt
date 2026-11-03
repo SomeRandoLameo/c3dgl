@@ -1,0 +1,2 @@
+perf case=points backend=native frames=120 CPU 10.1234 GPU 1.0145 total 16.7119 cmd 11152.0000
+ALL CHECKS PASSED: old example=points backend=native GL=0 readback=0 image=1

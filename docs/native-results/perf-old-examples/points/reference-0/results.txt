@@ -1,0 +1,2 @@
+perf case=points backend=reference frames=120 CPU 4.3968 GPU 0.7933 total 16.7118 cmd 1.6602
+ALL CHECKS PASSED: old example=points backend=reference GL=0 readback=0 image=1

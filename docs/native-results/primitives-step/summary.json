@@ -1,0 +1,326 @@
+{
+  "repetitions": 1,
+  "cases": {
+    "primitives": {
+      "source": "examples/primitives/main.cpp",
+      "source_sha256": "12a955c1ed58ff13fcda53aac0cd1c6b39c1f0c95ccce51c199d746828c43f4a",
+      "adapter_sha256": "ef98a48735ec9bad09a0772cce9d23ad381c9e5e89b53706b3437af38fae597c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "95a56e4394dc2132e9ecde2c628672c2dffda1361e3e706a387c19c2c53ec531",
+        "images": {
+          "c3dgl-old-primitives-reference.ppm": "1fa9b97f703cd0da021d98d7df33f280c1d0ff61ed12f3041935971d99f90cdd"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "1efd166c26607fbab4027032dd8552be435d9667c0ec8bc23cadde278bd48afa",
+        "images": {
+          "c3dgl-old-primitives-native.ppm": "1fa9b97f703cd0da021d98d7df33f280c1d0ff61ed12f3041935971d99f90cdd"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "texture": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "ef98a48735ec9bad09a0772cce9d23ad381c9e5e89b53706b3437af38fae597c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "3b6c04dc8201a867d9abe2c7940773e0d8f42c03824962938974e876a05c17da",
+        "images": {
+          "c3dgl-old-texture-reference.ppm": "8769c18bde15d7d0a7c98721d245f8b9c2f86b51a6f175f25a9589a04fadf1db"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "aa0caadb19c18d47ebeaf8d0a3016af2b1876580ee05df8e93e007df0c7018a0",
+        "images": {
+          "c3dgl-old-texture-native.ppm": "8769c18bde15d7d0a7c98721d245f8b9c2f86b51a6f175f25a9589a04fadf1db"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "cube": {
+      "source": "examples/cube/main.cpp",
+      "source_sha256": "b52080ba5a51929390d51da50dcec9ba20d8b6b23b5e7129088695600de6c7b0",
+      "adapter_sha256": "ef98a48735ec9bad09a0772cce9d23ad381c9e5e89b53706b3437af38fae597c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "82892bc0f7c1b83819f3e7bf6e63bee12a084848a92cc7ca2ac285f2c94cd6be",
+        "images": {
+          "c3dgl-old-cube-reference.ppm": "7b2e5e6bb7b1f8275c82a13d77a0d00a492b64d56514c1dd536ca179a3011618"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "32c1ef6d821683273af266369bbc03f46d72fb6299431263308e4203fabf1997",
+        "images": {
+          "c3dgl-old-cube-native.ppm": "7b2e5e6bb7b1f8275c82a13d77a0d00a492b64d56514c1dd536ca179a3011618"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "texcoords": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "ef98a48735ec9bad09a0772cce9d23ad381c9e5e89b53706b3437af38fae597c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "af7c35c910980b7db47638d2bae94a25b0942e07dab9ab1e0b3ae592114ebad7",
+        "images": {
+          "c3dgl-old-texcoords-reference.ppm": "ac17052ae74f4a51b5236fcffa482b6c0a6fd7cb9ce03c2a5d2ab83ee53de838"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "582f2ca065669718abe057cc19bf0688215e724e73697213981a2fcdc9c52c86",
+        "images": {
+          "c3dgl-old-texcoords-native.ppm": "ac17052ae74f4a51b5236fcffa482b6c0a6fd7cb9ce03c2a5d2ab83ee53de838"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "texmatrix": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "ef98a48735ec9bad09a0772cce9d23ad381c9e5e89b53706b3437af38fae597c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "3a1c428a9829ccc53d10c00dfaf59c0967a97b10cec06cab7964efbc8b167272",
+        "images": {
+          "c3dgl-old-texmatrix-reference.ppm": "ce240b951c4c8176b0cba6a0b5a7339d82afd5ff3733b2d9e5fa9033f96fd307"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "c91d6fbc2f6708b4824b09fd344240e62c8af24f9e2d87c0992ca3f7ba683b92",
+        "images": {
+          "c3dgl-old-texmatrix-native.ppm": "ce240b951c4c8176b0cba6a0b5a7339d82afd5ff3733b2d9e5fa9033f96fd307"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "multitexture": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "ef98a48735ec9bad09a0772cce9d23ad381c9e5e89b53706b3437af38fae597c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "3db463ac6d5384de43be1302f956c812da94ac971b2f0a69b9e60e858d61570a",
+        "images": {
+          "c3dgl-old-multitexture-reference.ppm": "fafed4eefffe51d3732af386b79cd6ae8a54ab6051b9ca93a18701929b182303"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "586091c629759635eb7e146e3eeb43ac02fa845697cef502c4bed65d4a96b299",
+        "images": {
+          "c3dgl-old-multitexture-native.ppm": "fafed4eefffe51d3732af386b79cd6ae8a54ab6051b9ca93a18701929b182303"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "mipmap": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "ef98a48735ec9bad09a0772cce9d23ad381c9e5e89b53706b3437af38fae597c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "bdba941b45545a5ed31953051d637570228927cfe29907e06121018ac036d3c9",
+        "images": {
+          "c3dgl-old-mipmap-reference.ppm": "df16f1efce174b9a6ee13c494f02e88901b10a346962757a03758d5fe0757126"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "6d8ec2443ae5aa12fbeef42ba5418813ecfaf636c44c863ae263c7a87f027f7f",
+        "images": {
+          "c3dgl-old-mipmap-native.ppm": "df16f1efce174b9a6ee13c494f02e88901b10a346962757a03758d5fe0757126"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "compressed": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "ef98a48735ec9bad09a0772cce9d23ad381c9e5e89b53706b3437af38fae597c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "48379ab3959c76818f8fa00e1a847df434d2fcf98206a841d06cdbe1d8b5954a",
+        "images": {
+          "c3dgl-old-compressed-reference.ppm": "c72d111ad460a4359169179f6d8cfcf602921b70aa52563b10e4e8808c581041"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "d8ac683bf3a4bb06a65e7200fa6cc664b9a8c7f414f147c066d7cc66e79011b1",
+        "images": {
+          "c3dgl-old-compressed-native.ppm": "c72d111ad460a4359169179f6d8cfcf602921b70aa52563b10e4e8808c581041"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "overlay": {
+      "source": "examples/cube/main.cpp",
+      "source_sha256": "b52080ba5a51929390d51da50dcec9ba20d8b6b23b5e7129088695600de6c7b0",
+      "adapter_sha256": "ef98a48735ec9bad09a0772cce9d23ad381c9e5e89b53706b3437af38fae597c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "99625dac1572c86e73db354876fdd1a239e7883160a5753400afdf43b36b2115",
+        "images": {
+          "c3dgl-old-overlay-reference.ppm": "8fc3dffad77af5cd43b4855c46cb93b55e8b9ce47fff81cded51b95466af83af"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "6bfeaf8969fc6cd65450c9559988f6fe468fd5e410098363234888dfd3cda85b",
+        "images": {
+          "c3dgl-old-overlay-native.ppm": "8fc3dffad77af5cd43b4855c46cb93b55e8b9ce47fff81cded51b95466af83af"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "primitives2": {
+      "source": "examples/primitives/main.cpp",
+      "source_sha256": "12a955c1ed58ff13fcda53aac0cd1c6b39c1f0c95ccce51c199d746828c43f4a",
+      "adapter_sha256": "ef98a48735ec9bad09a0772cce9d23ad381c9e5e89b53706b3437af38fae597c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "5d971acf8cc967fb3acebb1406fc1a7667b3615a35657e52a68a5710c586b20c",
+        "images": {
+          "c3dgl-old-primitives2-reference.ppm": "3274f58d227d696134d6e6ebd7673403065cad6d72bb7b41608f1acbf8d11846"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "1e98b2d1473bf48d63a759f766f182c43cd97692a9cad1144fa7c7492c3ec305",
+        "images": {
+          "c3dgl-old-primitives2-native.ppm": "3274f58d227d696134d6e6ebd7673403065cad6d72bb7b41608f1acbf8d11846"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "primitives3": {
+      "source": "examples/primitives/main.cpp",
+      "source_sha256": "12a955c1ed58ff13fcda53aac0cd1c6b39c1f0c95ccce51c199d746828c43f4a",
+      "adapter_sha256": "ef98a48735ec9bad09a0772cce9d23ad381c9e5e89b53706b3437af38fae597c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "b3a71789095ee548c2d53ad715812d703eeb3753ba0956504d3ce0724a83f3dd",
+        "images": {
+          "c3dgl-old-primitives3-reference.ppm": "9d60290b2be9215fc7f9a52640096fc48004a322ebd9895ab1c1fae01e473b0d"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "20c7cf5873720f77b82cf1f04a7381f0e5b47f2a2770acaeb71aa70689095aae",
+        "images": {
+          "c3dgl-old-primitives3-native.ppm": "9d60290b2be9215fc7f9a52640096fc48004a322ebd9895ab1c1fae01e473b0d"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    }
+  },
+  "whole_original_programs": false,
+  "native_dependency_audits_passed": true
+}

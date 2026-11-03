@@ -1,0 +1,145 @@
+PASS: embedded shader matches PICA source.
+   Compiling c3dgl-native v0.1.0 (/Users/elias/Documents/projekte/c3dgl/native)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src/lib.rs (native/target/debug/build/c3dgl-native/60e7ff46cc7034f5/out/c3dgl-60e7ff46cc7034f5)
+
+running 24 tests
+test gpu::tests::float_formats_match_ctru_layout ... ok
+test gpu::tests::indexed_geometry_packet_and_transactional_overflow ... ok
+test frame::tests::empty_and_offscreen_viewports ... ok
+test gpu::tests::depth_cull_packet_and_overflow ... ok
+test gpu::tests::init_and_frame_have_aligned_finalizers ... ok
+test blend::tests::factors_equations_and_disabled_copy ... ok
+test gpu::tests::landscape_subviewport_layout ... ok
+test gpu::tests::matrix_uniform_layout_and_overflow ... ok
+test gpu::tests::draw_overflow_leaves_commands_unchanged ... ok
+test arrays::tests::formats_stride_and_buffer_bounds ... ok
+test gpu::tests::texture_binding_modulation_incompleteness_and_overflow ... ok
+test immediate::tests::assembled_indices_preserve_vertex_attributes_and_current_state ... ok
+test immediate::tests::vector_reads_allow_unaligned_inputs ... ok
+test matrix::tests::multiplication_order_and_first_error ... ok
+test immediate::tests::assembly_and_errors ... ok
+test primitive::tests::topology_order_and_incomplete_tails ... ok
+test raster::tests::reversed_comparisons_and_winding ... ok
+test primitive::tests::strip_faces_keep_winding_and_degenerate_parity ... ok
+test tests::invalid_inputs_and_largest_packet ... ok
+test tests::overflow_is_transactional ... ok
+test tests::packet_layout_and_padding ... ok
+test texture::tests::tiled_layout_channels_orientation_and_unpack_stride ... ok
+test primitive::tests::output_matches_consumed_indices_at_limit ... ok
+test renderer::lifecycle_tests::allocation_rollback_lifecycle_and_overflow ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests c3dgl
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling c3dgl-native v0.1.0 (/Users/elias/Documents/projekte/c3dgl/native)
+    Finished `release` profile [optimized] target(s) in 0.15s
+-- Configuring done (0.0s)
+-- Generating done (0.1s)
+-- Build files have been written to: /Users/elias/Documents/projekte/c3dgl/build-native
+[  2%] Generating cargo/armv6k-nintendo-3ds/release/libc3dgl.a
+   Compiling c3dgl-native v0.1.0 (/Users/elias/Documents/projekte/c3dgl/native)
+    Finished `release` profile [optimized] target(s) in 0.99s
+[  2%] Built target c3dgl_native_build
+[  6%] Built target c3dgl_native_platform
+[  8%] Linking C executable c3dgl_native_abi.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 11%] Built target c3dgl_native_abi
+[ 13%] Building C object CMakeFiles/c3dgl_native_triangle.dir/examples/triangle.o
+[ 15%] Linking C executable c3dgl_native_triangle.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 15%] Built target c3dgl_native_triangle
+[ 17%] Building 3DSX executable target c3dgl_native_triangle_3dsx
+[ 20%] Built target c3dgl_native_triangle_3dsx
+[ 22%] Building C object CMakeFiles/c3dgl_native_cube.dir/examples/cube.o
+[ 24%] Linking C executable c3dgl_native_cube.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 24%] Built target c3dgl_native_cube
+[ 26%] Building 3DSX executable target c3dgl_native_cube_3dsx
+[ 28%] Built target c3dgl_native_cube_3dsx
+[ 31%] Building C object CMakeFiles/c3dgl_native_immediate.dir/examples/immediate.o
+[ 33%] Linking C executable c3dgl_native_immediate.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 33%] Built target c3dgl_native_immediate
+[ 35%] Building 3DSX executable target c3dgl_native_immediate_3dsx
+[ 37%] Built target c3dgl_native_immediate_3dsx
+[ 40%] Building C object CMakeFiles/c3dgl_native_textured.dir/examples/textured.o
+[ 42%] Linking C executable c3dgl_native_textured.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 42%] Built target c3dgl_native_textured
+[ 44%] Building 3DSX executable target c3dgl_native_textured_3dsx
+[ 46%] Built target c3dgl_native_textured_3dsx
+[ 48%] Building C object CMakeFiles/c3dgl_native_texture_smoke.dir/examples/textured.o
+[ 51%] Linking C executable c3dgl_native_texture_smoke.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 51%] Built target c3dgl_native_texture_smoke
+[ 53%] Building 3DSX executable target c3dgl_native_texture_smoke_3dsx
+[ 55%] Built target c3dgl_native_texture_smoke_3dsx
+[ 57%] Building C object CMakeFiles/c3dgl_native_primitives.dir/examples/primitives.o
+[ 60%] Linking C executable c3dgl_native_primitives.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 60%] Built target c3dgl_native_primitives
+[ 62%] Generating c3dgl_native_primitives_3dsx.default.smdh
+[ 64%] Building 3DSX executable target c3dgl_native_primitives_3dsx
+[ 64%] Built target c3dgl_native_primitives_3dsx
+[ 66%] Building C object CMakeFiles/c3dgl_native_primitive_smoke.dir/examples/primitives.o
+[ 68%] Linking C executable c3dgl_native_primitive_smoke.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 68%] Built target c3dgl_native_primitive_smoke
+[ 71%] Generating c3dgl_native_primitive_smoke_3dsx.default.smdh
+[ 73%] Building 3DSX executable target c3dgl_native_primitive_smoke_3dsx
+[ 73%] Built target c3dgl_native_primitive_smoke_3dsx
+[ 75%] Building CXX object CMakeFiles/c3dgl_native_triangle_cpp.dir/examples/triangle.o
+[ 77%] Linking CXX executable c3dgl_native_triangle_cpp.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 77%] Built target c3dgl_native_triangle_cpp
+[ 80%] Building 3DSX executable target c3dgl_native_triangle_cpp_3dsx
+[ 82%] Built target c3dgl_native_triangle_cpp_3dsx
+[ 84%] Building CXX object CMakeFiles/c3dgl_native_textured_cpp.dir/examples/textured.o
+[ 86%] Linking CXX executable c3dgl_native_textured_cpp.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 86%] Built target c3dgl_native_textured_cpp
+[ 88%] Building 3DSX executable target c3dgl_native_textured_cpp_3dsx
+[ 91%] Built target c3dgl_native_textured_cpp_3dsx
+[ 93%] Building CXX object CMakeFiles/c3dgl_native_primitives_cpp.dir/examples/primitives.o
+[ 95%] Linking CXX executable c3dgl_native_primitives_cpp.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 95%] Built target c3dgl_native_primitives_cpp
+[ 97%] Generating c3dgl_native_primitives_cpp_3dsx.default.smdh
+[100%] Building 3DSX executable target c3dgl_native_primitives_cpp_3dsx
+[100%] Built target c3dgl_native_primitives_cpp_3dsx
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/elias/Documents/projekte/c3dgl/build-native-reference
+[ 10%] Built target c3dgl_vsh
+[ 40%] Built target c3dgl_shaders
+[ 60%] Built target c3dgl
+[ 80%] Built target c3dgl_reference_triangle
+[100%] Built target c3dgl_reference_triangle_3dsx
+   Compiling c3dgl-native v0.1.0 (/Users/elias/Documents/projekte/c3dgl/native)
+   Compiling c3dgl-rust3ds-triangle v0.1.0 (/Users/elias/Documents/projekte/c3dgl/native/rust3ds)
+    Finished `release` profile [optimized] target(s) in 3.70s
+Building smdh: /Users/elias/Documents/projekte/c3dgl/build-native-rust3ds/armv6k-nintendo-3ds/release/textured.smdh
+Building 3dsx: /Users/elias/Documents/projekte/c3dgl/build-native-rust3ds/armv6k-nintendo-3ds/release/textured.3dsx
+Building smdh: /Users/elias/Documents/projekte/c3dgl/build-native-rust3ds/armv6k-nintendo-3ds/release/primitives.smdh
+Building 3dsx: /Users/elias/Documents/projekte/c3dgl/build-native-rust3ds/armv6k-nintendo-3ds/release/primitives.3dsx
+Building smdh: /Users/elias/Documents/projekte/c3dgl/build-native-rust3ds/armv6k-nintendo-3ds/release/c3dgl-rust3ds-triangle.smdh
+Building 3dsx: /Users/elias/Documents/projekte/c3dgl/build-native-rust3ds/armv6k-nintendo-3ds/release/c3dgl-rust3ds-triangle.3dsx
+PASS: rust3ds Cargo dependency, ctru-rs std runtime, 3DSX build and symbol audit.
+PASS: Rust tests, C/C++ ABI, rust3ds consumer, 3DS builds and native dependency audits.

@@ -1,0 +1,204 @@
+PASS: embedded shader matches PICA source.
+   Compiling c3dgl-native v0.1.0 (/Users/elias/Documents/projekte/c3dgl/native)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running unittests src/lib.rs (native/target/debug/build/c3dgl-native/60e7ff46cc7034f5/out/c3dgl-60e7ff46cc7034f5)
+
+running 25 tests
+test blend::tests::factors_equations_and_disabled_copy ... ok
+test gpu::tests::float_formats_match_ctru_layout ... ok
+test gpu::tests::landscape_subviewport_layout ... ok
+test gpu::tests::depth_cull_packet_and_overflow ... ok
+test gpu::tests::init_and_frame_have_aligned_finalizers ... ok
+test gpu::tests::draw_overflow_leaves_commands_unchanged ... ok
+test frame::tests::empty_and_offscreen_viewports ... ok
+test arrays::tests::formats_stride_and_buffer_bounds ... ok
+test gpu::tests::indexed_geometry_packet_and_transactional_overflow ... ok
+test gpu::tests::matrix_uniform_layout_and_overflow ... ok
+test gpu::tests::texture_binding_modulation_incompleteness_and_overflow ... ok
+test immediate::tests::assembled_indices_preserve_vertex_attributes_and_current_state ... ok
+test immediate::tests::vector_reads_allow_unaligned_inputs ... ok
+test matrix::tests::multiplication_order_and_first_error ... ok
+test immediate::tests::assembly_and_errors ... ok
+test primitive::tests::strip_faces_keep_winding_and_degenerate_parity ... ok
+test primitive::tests::topology_order_and_incomplete_tails ... ok
+test raster::tests::reversed_comparisons_and_winding ... ok
+test tests::invalid_inputs_and_largest_packet ... ok
+test tests::overflow_is_transactional ... ok
+test tests::packet_layout_and_padding ... ok
+test texture::tests::tiled_layout_channels_orientation_and_unpack_stride ... ok
+test texture::tests::npot_padding_matches_reference_wrap_and_preserves_image ... ok
+test primitive::tests::output_matches_consumed_indices_at_limit ... ok
+test renderer::lifecycle_tests::allocation_rollback_lifecycle_and_overflow ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests c3dgl
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `release` profile [optimized] target(s) in 0.15s
+-- Configuring done (0.0s)
+-- Generating done (0.1s)
+-- Build files have been written to: /Users/elias/Documents/projekte/c3dgl/build-native
+[  2%] Generating cargo/armv6k-nintendo-3ds/release/libc3dgl.a
+   Compiling c3dgl-native v0.1.0 (/Users/elias/Documents/projekte/c3dgl/native)
+    Finished `release` profile [optimized] target(s) in 1.29s
+[  2%] Built target c3dgl_native_build
+[  6%] Built target c3dgl_native_platform
+[  8%] Linking C executable c3dgl_native_abi.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 11%] Built target c3dgl_native_abi
+[ 13%] Linking C executable c3dgl_native_triangle.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 15%] Built target c3dgl_native_triangle
+[ 17%] Building 3DSX executable target c3dgl_native_triangle_3dsx
+[ 20%] Built target c3dgl_native_triangle_3dsx
+[ 22%] Linking C executable c3dgl_native_cube.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 24%] Built target c3dgl_native_cube
+[ 26%] Building 3DSX executable target c3dgl_native_cube_3dsx
+[ 28%] Built target c3dgl_native_cube_3dsx
+[ 31%] Linking C executable c3dgl_native_immediate.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 33%] Built target c3dgl_native_immediate
+[ 35%] Building 3DSX executable target c3dgl_native_immediate_3dsx
+[ 37%] Built target c3dgl_native_immediate_3dsx
+[ 40%] Linking C executable c3dgl_native_textured.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 42%] Built target c3dgl_native_textured
+[ 44%] Building 3DSX executable target c3dgl_native_textured_3dsx
+[ 46%] Built target c3dgl_native_textured_3dsx
+[ 48%] Linking C executable c3dgl_native_texture_smoke.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 51%] Built target c3dgl_native_texture_smoke
+[ 53%] Building 3DSX executable target c3dgl_native_texture_smoke_3dsx
+[ 55%] Built target c3dgl_native_texture_smoke_3dsx
+[ 57%] Linking C executable c3dgl_native_primitives.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 60%] Built target c3dgl_native_primitives
+[ 62%] Building 3DSX executable target c3dgl_native_primitives_3dsx
+[ 64%] Built target c3dgl_native_primitives_3dsx
+[ 66%] Linking C executable c3dgl_native_primitive_smoke.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 68%] Built target c3dgl_native_primitive_smoke
+[ 71%] Building 3DSX executable target c3dgl_native_primitive_smoke_3dsx
+[ 73%] Built target c3dgl_native_primitive_smoke_3dsx
+[ 75%] Linking CXX executable c3dgl_native_triangle_cpp.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 77%] Built target c3dgl_native_triangle_cpp
+[ 80%] Building 3DSX executable target c3dgl_native_triangle_cpp_3dsx
+[ 82%] Built target c3dgl_native_triangle_cpp_3dsx
+[ 84%] Linking CXX executable c3dgl_native_textured_cpp.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 86%] Built target c3dgl_native_textured_cpp
+[ 88%] Building 3DSX executable target c3dgl_native_textured_cpp_3dsx
+[ 91%] Built target c3dgl_native_textured_cpp_3dsx
+[ 93%] Linking CXX executable c3dgl_native_primitives_cpp.elf
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: warning: /opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/armv6k/fpu/crtn.o: missing .note.GNU-stack section implies executable stack
+/opt/devkitpro/devkitARM/lib/gcc/arm-none-eabi/16.1.0/../../../../arm-none-eabi/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+[ 95%] Built target c3dgl_native_primitives_cpp
+[ 97%] Building 3DSX executable target c3dgl_native_primitives_cpp_3dsx
+[100%] Built target c3dgl_native_primitives_cpp_3dsx
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/elias/Documents/projekte/c3dgl/build-native-reference
+[ 10%] Built target c3dgl_vsh
+[ 40%] Built target c3dgl_shaders
+[ 60%] Built target c3dgl
+[ 80%] Built target c3dgl_reference_triangle
+[100%] Built target c3dgl_reference_triangle_3dsx
+   Compiling libc v0.2.189
+   Compiling object v0.39.1
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling libc v0.2.190
+   Compiling glob v0.3.4
+   Compiling rand_core v0.6.4
+   Compiling memchr v2.8.3
+   Compiling gimli v0.34.0
+   Compiling adler2 v2.0.1
+   Compiling hashbrown v0.17.1
+   Compiling miniz_oxide v0.9.1
+   Compiling cfg-if v1.0.4
+   Compiling rustc-demangle v0.1.28
+   Compiling rustc-literal-escaper v0.0.8
+   Compiling siphasher v1.0.4
+   Compiling phf_shared v0.11.3
+   Compiling clang-sys v1.9.1
+   Compiling rand v0.8.8
+   Compiling prettyplease v0.2.37
+   Compiling cfg-if v1.0.5
+   Compiling minimal-lexical v0.2.1
+   Compiling unwind v0.0.0 (/private/tmp/c3dgl-rustup/toolchains/nightly-2026-10-01-aarch64-apple-darwin/lib/rustlib/src/rust/library/unwind)
+   Compiling std_detect v0.1.5 (/private/tmp/c3dgl-rustup/toolchains/nightly-2026-10-01-aarch64-apple-darwin/lib/rustlib/src/rust/library/std_detect)
+   Compiling panic_unwind v0.0.0 (/private/tmp/c3dgl-rustup/toolchains/nightly-2026-10-01-aarch64-apple-darwin/lib/rustlib/src/rust/library/panic_unwind)
+   Compiling phf_generator v0.11.3
+   Compiling regex-syntax v0.8.11
+   Compiling either v1.19.0
+   Compiling syn v2.0.119
+   Compiling libloading v0.8.9
+   Compiling anstyle v1.0.14
+   Compiling bindgen v0.72.1
+   Compiling unicode-width v0.2.2
+   Compiling itertools v0.13.0
+   Compiling bitflags v2.13.2
+   Compiling nom v7.1.3
+   Compiling annotate-snippets v0.11.5
+   Compiling serde_core v1.0.229
+   Compiling find-msvc-tools v0.1.14
+   Compiling shlex v1.3.0
+   Compiling log v0.4.34
+   Compiling shlex v2.0.1
+   Compiling rustc-hash v2.1.3
+   Compiling cc v1.8.0
+   Compiling regex-automata v0.4.18
+   Compiling which v8.0.6
+   Compiling itertools v0.14.0
+   Compiling addr2line v0.27.1
+   Compiling winnow v1.0.4
+   Compiling winnow v0.7.15
+   Compiling cexpr v0.6.0
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling toml_writer v1.1.3+spec-1.1.0
+   Compiling regex v1.13.1
+   Compiling std v0.0.0 (/private/tmp/c3dgl-rustup/toolchains/nightly-2026-10-01-aarch64-apple-darwin/lib/rustlib/src/rust/library/std)
+   Compiling phf_macros v0.11.3
+   Compiling toml_datetime v0.7.5+spec-1.1.0
+   Compiling serde_spanned v1.1.2
+   Compiling toml v0.9.12+spec-1.1.0
+   Compiling phf v0.11.3
+   Compiling doxygen-rs v0.4.2
+   Compiling ctru-rs v0.7.1 (https://github.com/rust3ds/ctru-rs.git#9576b695)
+   Compiling rustc-std-workspace-std v1.99.0 (/private/tmp/c3dgl-rustup/toolchains/nightly-2026-10-01-aarch64-apple-darwin/lib/rustlib/src/rust/library/rustc-std-workspace-std)
+   Compiling proc_macro v0.0.0 (/private/tmp/c3dgl-rustup/toolchains/nightly-2026-10-01-aarch64-apple-darwin/lib/rustlib/src/rust/library/proc_macro)
+   Compiling getopts v0.2.24
+   Compiling test v0.0.0 (/private/tmp/c3dgl-rustup/toolchains/nightly-2026-10-01-aarch64-apple-darwin/lib/rustlib/src/rust/library/test)
+   Compiling ctru-sys v0.5.0 (https://github.com/rust3ds/ctru-rs.git#9576b695)
+   Compiling static_assertions v1.1.0
+   Compiling spin v0.9.9
+   Compiling macaddr v1.0.1
+   Compiling c3dgl-native v0.1.0 (/Users/elias/Documents/projekte/c3dgl/native)
+   Compiling shim-3ds v0.1.0 (https://github.com/rust3ds/shim-3ds.git#98015084)
+   Compiling pthread-3ds v0.1.0 (https://github.com/rust3ds/pthread-3ds.git#5d9e47ae)
+   Compiling c3dgl-rust3ds-triangle v0.1.0 (/Users/elias/Documents/projekte/c3dgl/native/rust3ds)
+error: linker `arm-none-eabi-gcc` not found
+  |
+  = note: No such file or directory (os error 2)
+
+error: could not compile `c3dgl-rust3ds-triangle` (bin "textured") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `c3dgl-rust3ds-triangle` (bin "primitives") due to 1 previous error
+error: could not compile `c3dgl-rust3ds-triangle` (bin "c3dgl-rust3ds-triangle") due to 1 previous error

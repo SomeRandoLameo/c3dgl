@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "0a78a26f29b9a8e968d847d0fae04a00e07ee89715ec723fda0451e7dbcaf24d",
+  "images": {
+    "c3dgl-old-clipplane-native.ppm": "b8197350703a86b4a1342943005f8a36e2d6544ae6dff808b55dde90192a137c"
+  },
+  "process_exit": -9
+}

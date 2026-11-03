@@ -1,0 +1,1 @@
+FAILED: old example=cube backend=native GL=1281 readback=0 image=1

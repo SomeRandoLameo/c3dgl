@@ -1,0 +1,2 @@
+perf case=cube backend=native frames=120 CPU 0.4701 GPU 0.5200 total 16.7119 cmd 688.0000
+ALL CHECKS PASSED: old example=cube backend=native GL=0 readback=0 image=1

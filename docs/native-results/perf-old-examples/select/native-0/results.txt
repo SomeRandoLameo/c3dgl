@@ -1,0 +1,2 @@
+perf case=select backend=native frames=120 CPU 6.7940 GPU 0.9330 total 16.7119 cmd 2160.0000
+ALL CHECKS PASSED: old example=select backend=native GL=0 readback=0 image=1

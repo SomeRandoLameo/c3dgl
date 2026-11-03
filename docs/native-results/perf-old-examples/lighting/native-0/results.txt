@@ -1,0 +1,2 @@
+perf case=lighting backend=native frames=120 CPU 222.2720 GPU 2.9048 total 233.9898 cmd 12656.0000
+ALL CHECKS PASSED: old example=lighting backend=native GL=0 readback=0 image=1

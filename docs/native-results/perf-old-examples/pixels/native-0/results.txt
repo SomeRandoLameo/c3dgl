@@ -1,0 +1,2 @@
+perf case=pixels backend=native frames=120 CPU 39.0204 GPU 1.4104 total 50.1393 cmd 56672.0000
+ALL CHECKS PASSED: old example=pixels backend=native GL=0 readback=0 image=1

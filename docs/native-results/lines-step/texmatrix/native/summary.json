@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "0aa78265fb1e09960b8f40b3872fd728a47d752879cfa9f82e03bbfba8acc218",
+  "images": {
+    "c3dgl-old-texmatrix-native.ppm": "ce240b951c4c8176b0cba6a0b5a7339d82afd5ff3733b2d9e5fa9033f96fd307"
+  },
+  "process_exit": -9
+}

@@ -1,0 +1,9 @@
+{
+  "launches": 1,
+  "passed": true,
+  "rom_sha256": "f3be09ad7999f3135b72531519900be20a34b10f513a91ed44b385e4e8040e8c",
+  "images": {
+    "c3dgl-old-texgen-native.ppm": "2c9961477e0063eb2b0aa6abbf22ca9ac6c1d906400e17d18c6bae175fb875eb"
+  },
+  "process_exit": -9
+}

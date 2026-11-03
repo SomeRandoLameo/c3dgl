@@ -1,0 +1,1 @@
+Discarded first rust3ds run: its update payload was inferred as f64, although glVertexPointer required f32. The update image failed the full framebuffer comparison. No measurements from this rust3ds binary count toward acceptance. Successful unchanged C/C++/reference runs are reused in ../full and checked against their original executable hashes.

@@ -177,6 +177,39 @@ void printStats() {
 
 }  // namespace
 
+// 4x4 checker of light and dark texels
+GLuint createTexture() {
+    GLubyte texels[16];
+    for (int i = 0; i < 16; i++) texels[i] = (((i & 3) + (i >> 2)) & 1) ? 255 : 110;
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 4, 4, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, texels);
+    return texture;
+}
+
+void setupScene() {
+    glClearColor(0.08f, 0.08f, 0.15f, 1.0f);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+}
+
+void drawFrame(float angle, GLuint texture) {
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, C3DGL_TOP_SCREEN_WIDTH, 0.0, C3DGL_SCREEN_HEIGHT, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    lines(angle);
+    halftone();
+    glEnable(GL_DEPTH_TEST);
+    cubes(angle, texture);
+}
+
 int main() {
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, nullptr);
@@ -192,19 +225,8 @@ int main() {
         return 1;
     }
 
-    // 4x4 checker of light and dark texels
-    GLubyte texels[16];
-    for (int i = 0; i < 16; i++) texels[i] = (((i & 3) + (i >> 2)) & 1) ? 255 : 110;
-    GLuint texture;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 4, 4, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, texels);
-
-    glClearColor(0.08f, 0.08f, 0.15f, 1.0f);
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
+    GLuint texture = createTexture();
+    setupScene();
 
     std::printf("c3dgl stipple\n\n\n\n\n"
                 "Left: stippled lines (dashes,\n"
@@ -229,17 +251,7 @@ int main() {
         if (down & KEY_A) paused = !paused;
         if (!paused) angle += 0.5f;
 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glMatrixMode(GL_PROJECTION);
-        glLoadIdentity();
-        glOrtho(0.0, C3DGL_TOP_SCREEN_WIDTH, 0.0, C3DGL_SCREEN_HEIGHT, -1.0, 1.0);
-        glMatrixMode(GL_MODELVIEW);
-        glLoadIdentity();
-        glDisable(GL_DEPTH_TEST);
-        lines(angle);
-        halftone();
-        glEnable(GL_DEPTH_TEST);
-        cubes(angle, texture);
+        drawFrame(angle, texture);
         c3dglSwapBuffers();
     }
 

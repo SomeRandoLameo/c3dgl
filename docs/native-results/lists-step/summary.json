@@ -1,0 +1,529 @@
+{
+  "repetitions": 1,
+  "cases": {
+    "primitives": {
+      "source": "examples/primitives/main.cpp",
+      "source_sha256": "12a955c1ed58ff13fcda53aac0cd1c6b39c1f0c95ccce51c199d746828c43f4a",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "95a56e4394dc2132e9ecde2c628672c2dffda1361e3e706a387c19c2c53ec531",
+        "images": {
+          "c3dgl-old-primitives-reference.ppm": "1fa9b97f703cd0da021d98d7df33f280c1d0ff61ed12f3041935971d99f90cdd"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "5c415fae5fa342d7c372c714d003aea4e482313b29a03a93cdeaa7f59164f305",
+        "images": {
+          "c3dgl-old-primitives-native.ppm": "1fa9b97f703cd0da021d98d7df33f280c1d0ff61ed12f3041935971d99f90cdd"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "texture": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "3b6c04dc8201a867d9abe2c7940773e0d8f42c03824962938974e876a05c17da",
+        "images": {
+          "c3dgl-old-texture-reference.ppm": "8769c18bde15d7d0a7c98721d245f8b9c2f86b51a6f175f25a9589a04fadf1db"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "a35bb6cd4c78692d1461dc4867c9fb072e4e0a26e0507f2f117d12e89efc9db8",
+        "images": {
+          "c3dgl-old-texture-native.ppm": "8769c18bde15d7d0a7c98721d245f8b9c2f86b51a6f175f25a9589a04fadf1db"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "cube": {
+      "source": "examples/cube/main.cpp",
+      "source_sha256": "b52080ba5a51929390d51da50dcec9ba20d8b6b23b5e7129088695600de6c7b0",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "82892bc0f7c1b83819f3e7bf6e63bee12a084848a92cc7ca2ac285f2c94cd6be",
+        "images": {
+          "c3dgl-old-cube-reference.ppm": "7b2e5e6bb7b1f8275c82a13d77a0d00a492b64d56514c1dd536ca179a3011618"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "beb8afa94073d07bfdeee1551d2ac1b51784e0700324018b15a2cc7abe9396e5",
+        "images": {
+          "c3dgl-old-cube-native.ppm": "7b2e5e6bb7b1f8275c82a13d77a0d00a492b64d56514c1dd536ca179a3011618"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "texcoords": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "af7c35c910980b7db47638d2bae94a25b0942e07dab9ab1e0b3ae592114ebad7",
+        "images": {
+          "c3dgl-old-texcoords-reference.ppm": "ac17052ae74f4a51b5236fcffa482b6c0a6fd7cb9ce03c2a5d2ab83ee53de838"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "3d2152eb5da9b707c596da1d7e5db9852e48b27ae0de93954b6a5e181b2ebaa2",
+        "images": {
+          "c3dgl-old-texcoords-native.ppm": "ac17052ae74f4a51b5236fcffa482b6c0a6fd7cb9ce03c2a5d2ab83ee53de838"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "texmatrix": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "3a1c428a9829ccc53d10c00dfaf59c0967a97b10cec06cab7964efbc8b167272",
+        "images": {
+          "c3dgl-old-texmatrix-reference.ppm": "ce240b951c4c8176b0cba6a0b5a7339d82afd5ff3733b2d9e5fa9033f96fd307"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "b22653a2ed3824bd59ec29e8d71b7f2840767276df2d56d02cef240a27c9f244",
+        "images": {
+          "c3dgl-old-texmatrix-native.ppm": "ce240b951c4c8176b0cba6a0b5a7339d82afd5ff3733b2d9e5fa9033f96fd307"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "multitexture": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "3db463ac6d5384de43be1302f956c812da94ac971b2f0a69b9e60e858d61570a",
+        "images": {
+          "c3dgl-old-multitexture-reference.ppm": "fafed4eefffe51d3732af386b79cd6ae8a54ab6051b9ca93a18701929b182303"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "3ca4b3011f0a98b1bedf45ef14dd8d2acdfb846f5244e5e22b62738d2b3ee82a",
+        "images": {
+          "c3dgl-old-multitexture-native.ppm": "fafed4eefffe51d3732af386b79cd6ae8a54ab6051b9ca93a18701929b182303"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "mipmap": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "bdba941b45545a5ed31953051d637570228927cfe29907e06121018ac036d3c9",
+        "images": {
+          "c3dgl-old-mipmap-reference.ppm": "df16f1efce174b9a6ee13c494f02e88901b10a346962757a03758d5fe0757126"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "8a98e49a1142c57b8fe05f6713651b149d302bfc0901e4eef41dc08a17c32492",
+        "images": {
+          "c3dgl-old-mipmap-native.ppm": "df16f1efce174b9a6ee13c494f02e88901b10a346962757a03758d5fe0757126"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "compressed": {
+      "source": "examples/texture/main.cpp",
+      "source_sha256": "1336b1af37e3a749f297bbbe7485423dbf6f3f2edac9adcf6651a49d9c228918",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "48379ab3959c76818f8fa00e1a847df434d2fcf98206a841d06cdbe1d8b5954a",
+        "images": {
+          "c3dgl-old-compressed-reference.ppm": "c72d111ad460a4359169179f6d8cfcf602921b70aa52563b10e4e8808c581041"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "b4896847ae9c4cdf870a1c43461d8c6b4f4c719af2d0040bae57576463fa1b9c",
+        "images": {
+          "c3dgl-old-compressed-native.ppm": "c72d111ad460a4359169179f6d8cfcf602921b70aa52563b10e4e8808c581041"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "overlay": {
+      "source": "examples/cube/main.cpp",
+      "source_sha256": "b52080ba5a51929390d51da50dcec9ba20d8b6b23b5e7129088695600de6c7b0",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "99625dac1572c86e73db354876fdd1a239e7883160a5753400afdf43b36b2115",
+        "images": {
+          "c3dgl-old-overlay-reference.ppm": "8fc3dffad77af5cd43b4855c46cb93b55e8b9ce47fff81cded51b95466af83af"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "26b990ddc5a682ce44623f2c15cb204afca1480de6312d729201a6b00467cb9a",
+        "images": {
+          "c3dgl-old-overlay-native.ppm": "8fc3dffad77af5cd43b4855c46cb93b55e8b9ce47fff81cded51b95466af83af"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "primitives2": {
+      "source": "examples/primitives/main.cpp",
+      "source_sha256": "12a955c1ed58ff13fcda53aac0cd1c6b39c1f0c95ccce51c199d746828c43f4a",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "5d971acf8cc967fb3acebb1406fc1a7667b3615a35657e52a68a5710c586b20c",
+        "images": {
+          "c3dgl-old-primitives2-reference.ppm": "3274f58d227d696134d6e6ebd7673403065cad6d72bb7b41608f1acbf8d11846"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "7d684aa9d105eff1bb12d48bbe51ef63d105aa865192cc6be91092a627fc66fb",
+        "images": {
+          "c3dgl-old-primitives2-native.ppm": "3274f58d227d696134d6e6ebd7673403065cad6d72bb7b41608f1acbf8d11846"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "primitives3": {
+      "source": "examples/primitives/main.cpp",
+      "source_sha256": "12a955c1ed58ff13fcda53aac0cd1c6b39c1f0c95ccce51c199d746828c43f4a",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "b3a71789095ee548c2d53ad715812d703eeb3753ba0956504d3ce0724a83f3dd",
+        "images": {
+          "c3dgl-old-primitives3-reference.ppm": "9d60290b2be9215fc7f9a52640096fc48004a322ebd9895ab1c1fae01e473b0d"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "2585ac25933aae68b8154b54888ad37a25fed7168cdb5c064c54bfdb62b7d9d5",
+        "images": {
+          "c3dgl-old-primitives3-native.ppm": "9d60290b2be9215fc7f9a52640096fc48004a322ebd9895ab1c1fae01e473b0d"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "lighting": {
+      "source": "examples/lighting/main.cpp",
+      "source_sha256": "1f1a4de5bf2e7604910b7d2a46ec57550ebee0636493f2420f9f7f3c76a3ceb6",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "1c2ebacf8d11521059fc1f186434bbddb637347ed402ecec62a137939b983f16",
+        "images": {
+          "c3dgl-old-lighting-reference.ppm": "02623bcc0b363a69ad7468d01397b646f4c0193461df2cb5c0fcf780f64b82aa"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "6816385321b2ad060a207f10266fc971025050ad5e8d2b8244dfcb689671660f",
+        "images": {
+          "c3dgl-old-lighting-native.ppm": "02623bcc0b363a69ad7468d01397b646f4c0193461df2cb5c0fcf780f64b82aa"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "texgen": {
+      "source": "examples/texgen/main.cpp",
+      "source_sha256": "a931cebfcce86f0dadaf95a54ad2d5d73117dd19854520d621aa767ee7435678",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "ebc9dfcae5c43a6022f3baf3a043875d99a629799f3ff8b05aa0d65c9a96eed0",
+        "images": {
+          "c3dgl-old-texgen-reference.ppm": "2c9961477e0063eb2b0aa6abbf22ca9ac6c1d906400e17d18c6bae175fb875eb"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "97cda5fb81559a121dfc12f6894bc50a5732dd0884b5f4657ee1948b556936c4",
+        "images": {
+          "c3dgl-old-texgen-native.ppm": "2c9961477e0063eb2b0aa6abbf22ca9ac6c1d906400e17d18c6bae175fb875eb"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "fog": {
+      "source": "examples/fog/main.cpp",
+      "source_sha256": "e43acec62d92eed859cc05518cf8f90bc287b0e3de188cd251101abd4bd3fcdc",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "fbadda45622edbdddfb803cec552920b48379e8ed8e0798bd3fb27408372f2ce",
+        "images": {
+          "c3dgl-old-fog-reference.ppm": "5ff94a62c51eec20f9cd81852282a0a832a80ea64c9112b8bac6326b8390c5a8"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "13159ca90b15b8e303e11b70bb883be9b2ebfa4f95cb74fcd6b9507cce334ddd",
+        "images": {
+          "c3dgl-old-fog-native.ppm": "5ff94a62c51eec20f9cd81852282a0a832a80ea64c9112b8bac6326b8390c5a8"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "fragment": {
+      "source": "examples/fragment/main.cpp",
+      "source_sha256": "5b055aed30c84484be681ffc58d97b4e4367d516929ca5bdc525d4d69b78af8a",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "51b70585500041247f53775e423b2b4421e1e387e3506af8dabba03eb492f698",
+        "images": {
+          "c3dgl-old-fragment-reference.ppm": "831728d80f10b768a71fd2c0b6b20bb21ba1eb6b7b8d29bb214140cb8554763f"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "8006c6f663884c76328493f41e46988cc82dd2beec33abcbb70bad9a26a0e653",
+        "images": {
+          "c3dgl-old-fragment-native.ppm": "831728d80f10b768a71fd2c0b6b20bb21ba1eb6b7b8d29bb214140cb8554763f"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "fragment2": {
+      "source": "examples/fragment/main.cpp",
+      "source_sha256": "5b055aed30c84484be681ffc58d97b4e4367d516929ca5bdc525d4d69b78af8a",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "90d6a5bccfe8b9de903328ee7f7d261f57e1cad0174794807024bb909c8d85e1",
+        "images": {
+          "c3dgl-old-fragment2-reference.ppm": "adcd50aedff372492d5614ca6da01e9b06e39bcfa9dde990160b60b5e190e142"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "cb48a75263c49dd16cd7ade0f643d10c0055fdf99b33fc7f74db40243fa20b80",
+        "images": {
+          "c3dgl-old-fragment2-native.ppm": "adcd50aedff372492d5614ca6da01e9b06e39bcfa9dde990160b60b5e190e142"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "clipplane": {
+      "source": "examples/clipplane/main.cpp",
+      "source_sha256": "d531a75c618ab957017e46dfc71a80804e90f9392d6b1c284818dcc401287b3c",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "af9131ece07badc023fcb8c4ca55dee7cb335d4517177c2459ba0b536605323d",
+        "images": {
+          "c3dgl-old-clipplane-reference.ppm": "b8197350703a86b4a1342943005f8a36e2d6544ae6dff808b55dde90192a137c"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "6481887f24ed45f69782735ea21699292724d73c6fdd2d3344e9dae76ce824c8",
+        "images": {
+          "c3dgl-old-clipplane-native.ppm": "b8197350703a86b4a1342943005f8a36e2d6544ae6dff808b55dde90192a137c"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    },
+    "lists": {
+      "source": "examples/lists/main.cpp",
+      "source_sha256": "b3e08eca997eb92cbd03ebcde6e5d789e1ed65b1e7b35079b336df53e7162f90",
+      "adapter_sha256": "53ea48ad6e7aa6645bcacc5dcf769cffa79a65adacbec6f363a1ca1ca8732d9c",
+      "reference": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "58dd62a41bce73bd0c4a84d3d504a1d5affed5810f1ccf5f3021620ff3a138cc",
+        "images": {
+          "c3dgl-old-lists-reference.ppm": "6a401be4be07a2214e3473de241b90a56a7b17f79d5ff1a8bbffc3f39a559223"
+        },
+        "process_exit": -9
+      },
+      "native": {
+        "launches": 1,
+        "passed": true,
+        "rom_sha256": "4bf05fc1e4e15c1e12a10417baea13a916535ae121c88667c5ceb40bdb2ab4c0",
+        "images": {
+          "c3dgl-old-lists-native.ppm": "6a401be4be07a2214e3473de241b90a56a7b17f79d5ff1a8bbffc3f39a559223"
+        },
+        "process_exit": -9
+      },
+      "comparison": {
+        "exact_equal": true,
+        "different_pixels": 0,
+        "pixels_over_one": 0,
+        "max_channel_delta": 0
+      }
+    }
+  },
+  "whole_original_programs": false,
+  "native_dependency_audits_passed": true
+}

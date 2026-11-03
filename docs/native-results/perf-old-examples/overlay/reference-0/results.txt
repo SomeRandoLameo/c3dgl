@@ -1,0 +1,2 @@
+perf case=overlay backend=reference frames=120 CPU 0.4056 GPU 0.5200 total 16.7118 cmd 0.3296
+ALL CHECKS PASSED: old example=overlay backend=reference GL=0 readback=0 image=1

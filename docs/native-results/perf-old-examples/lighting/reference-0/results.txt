@@ -1,0 +1,2 @@
+perf case=lighting backend=reference frames=120 CPU 102.4866 GPU 2.8734 total 105.2188 cmd 0.9644
+ALL CHECKS PASSED: old example=lighting backend=reference GL=0 readback=0 image=1

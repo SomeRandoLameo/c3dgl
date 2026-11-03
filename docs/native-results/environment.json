@@ -1,0 +1,17 @@
+{
+  "tested_date": "2026-10-13",
+  "emulator": "Azahar 2126.1.2",
+  "renderer_backend": "Vulkan / MoltenVK",
+  "resolution_factor": 1,
+  "cpu_clock_percentage": 100,
+  "cpu_jit": true,
+  "shader_jit": true,
+  "rust": "1.101.0-nightly (21b707e3f 2026-09-30)",
+  "pinned_toolchain": "nightly-2026-10-01",
+  "devkitARM": "GCC 16.1.0",
+  "reference_commit": "9c77e37464d140ae0f1b8470876c24ce55dc7bbc",
+  "archive_sha256": "8b0b7486f6f1df723911b59a8abe971f0d1ce92936e0173ace6169d8e6149cab",
+  "native_c_3dsx_sha256": "e788e163d4be7b43f64b1b0f2e992ebf5b63e8e666081c87390d88e33b8e96f0",
+  "native_cpp_3dsx_sha256": "0d6b89c14ceb599cd542e749f4874faaa97f92133778cace4ead493e95fe21ad",
+  "reference_3dsx_sha256": "dc85926084604a31c0ed12baaf4f101142368c94ab8f0df33607a9cb07cbbcc4"
+}

@@ -1,0 +1,7 @@
+{
+  "launches": 1,
+  "passed": false,
+  "rom_sha256": "b64273b08cd1dcd58e9a2e5569f2f19955f3ed6c07c969ab93a0aaf60eea8fcf",
+  "error": "Single run exceeded 45 seconds",
+  "process_exit": -9
+}

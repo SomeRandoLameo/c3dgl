@@ -1,0 +1,15 @@
+{
+  "source": "../discarded-rust-f64",
+  "verified_unchanged_consumers": [
+    "native",
+    "reference",
+    "native-cpp"
+  ],
+  "discarded_consumer": "rust3ds",
+  "reports_reused": [
+    "azahar-native-run1.txt",
+    "azahar-native-run2.txt",
+    "azahar-native-cpp-run1.txt",
+    "azahar-reference-run1.txt"
+  ]
+}
