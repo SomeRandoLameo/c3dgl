@@ -1,4 +1,4 @@
-use c3dgl::raw::*;
+use c3dgl::*;
 use ctru::prelude::*;
 use std::ptr;
 const POSITIONS: [[f32; 3]; 4] = [

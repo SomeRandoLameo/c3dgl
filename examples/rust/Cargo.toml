@@ -52,6 +52,22 @@ path = "clipplane/main.rs"
 name = "fragment"
 path = "fragment/main.rs"
 
+[[bin]]
+name = "lighting"
+path = "lighting/main.rs"
+
+[[bin]]
+name = "points"
+path = "points/main.rs"
+
+[[bin]]
+name = "primitives"
+path = "primitives/main.rs"
+
+[[bin]]
+name = "texture"
+path = "texture/main.rs"
+
 [profile.release]
 panic = "abort"
 lto = true

@@ -10,7 +10,7 @@ c3dgl-native = { path = "..", features = ["rust3ds"] }
 ctru-rs = { git = "https://github.com/rust3ds/ctru-rs.git" }
 ```
 
-The crate is imported as `c3dgl`. Its `raw` module exposes the implemented native
+The crate is imported as `c3dgl`. Its root exposes the implemented native
 and GL entry points and `#[repr(C)]` vertex/stats types. Calls are unsafe: graphics
 must already be initialized, all renderer calls must use one application thread,
 and the renderer owns GPU submission until close. Keep `ctru::services::gfx::Gfx`
@@ -68,7 +68,7 @@ for the complete C/C++/rust3ds/reference image and performance gate.
 
 The same build now produces `textured.3dsx` from `src/bin/textured.rs`. This consumer
 uses the exported texture, UV-array, immediate-mode and blending entry points from
-`c3dgl::raw`, with a persistent VBO checkerboard and a transparent textured triangle.
+`c3dgl::*`, with a persistent VBO checkerboard and a transparent textured triangle.
 Its executable is included in the native dependency audit. Compilation/linking and
 host behavior checks pass; emulator verification for this new consumer is pending.
 

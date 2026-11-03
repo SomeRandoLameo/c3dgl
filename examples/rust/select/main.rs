@@ -7,7 +7,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use c3dgl::raw::*;
+use c3dgl::*;
 use common::gl::*;
 use common::{glu_pick_matrix, App, Renderer, StatsOverlay, SCREEN_HEIGHT, SCREEN_WIDTH};
 use ctru::prelude::*;

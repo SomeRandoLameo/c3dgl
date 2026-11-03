@@ -4,7 +4,7 @@
 
 pub mod gl;
 
-use c3dgl::raw::{c3dglClose, c3dglInit, c3dglNativeGetStats, Stats};
+use c3dgl::{c3dglClose, c3dglInit, c3dglNativeGetStats, Stats};
 use ctru::prelude::*;
 use std::time::Instant;
 
@@ -129,7 +129,7 @@ impl StatsOverlay {
 /// # Safety
 /// Renderer initialised, one thread.
 pub unsafe fn glu_pick_matrix(x: f64, y: f64, width: f64, height: f64, viewport: &[i32; 4]) {
-    use c3dgl::raw::{glScalef, glTranslatef};
+    use c3dgl::{glScalef, glTranslatef};
     if width <= 0.0 || height <= 0.0 {
         return;
     }
@@ -144,7 +144,7 @@ pub unsafe fn glu_pick_matrix(x: f64, y: f64, width: f64, height: f64, viewport:
 /// # Safety
 /// Renderer initialised, one thread.
 pub unsafe fn shaded_cube(texcoords: bool) {
-    use c3dgl::raw::{glBegin, glColor3f, glColor4fv, glEnd, glGetFloatv, glTexCoord2fv, glVertex3fv};
+    use c3dgl::{glBegin, glColor3f, glColor4fv, glEnd, glGetFloatv, glTexCoord2fv, glVertex3fv};
     const FACES: [[[f32; 3]; 4]; 6] = [
         [[-1., -1., 1.], [1., -1., 1.], [1., 1., 1.], [-1., 1., 1.]],
         [[1., -1., -1.], [-1., -1., -1.], [-1., 1., -1.], [1., 1., -1.]],
@@ -193,6 +193,7 @@ impl Checks {
 }
 
 /// `check!(checks, condition)`: records the result and prints the failing condition and line.
+#[allow(unused_macros)]
 macro_rules! check {
     ($checks:expr, $cond:expr) => {
         $checks.check($cond, stringify!($cond), line!())

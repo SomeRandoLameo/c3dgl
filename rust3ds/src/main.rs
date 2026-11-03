@@ -1,4 +1,4 @@
-use c3dgl::raw::*;
+use c3dgl::*;
 mod depth_scene;
 use ctru::prelude::*;
 use std::{fs::File, io::Write};

@@ -206,34 +206,17 @@ mod tests {
     }
 }
 
-/// Raw Rust entry points with the same single-thread/exclusive-GPU contract as C.
-/// `rust3ds` builds use the application's std allocator and panic runtime.
+// The GL entry points and the renderer calls, usable from Rust as `c3dgl::glClear(...)` etc.
+// They are `unsafe` with the same single-thread/exclusive-GPU contract as the C API.
+// `rust3ds` builds use the application's std allocator and panic runtime.
 #[cfg(target_os = "horizon")]
-pub mod raw {
-    pub use crate::accum::*;
-    pub use crate::arrays::*;
-    pub use crate::attrib::*;
-    pub use crate::blend::*;
-    pub use crate::clip::*;
-    pub use crate::compat::*;
-    pub use crate::evaluator::*;
-    pub use crate::feedback::*;
-    pub use crate::fog::*;
-    pub use crate::frame::*;
-    pub use crate::immediate::*;
-    pub use crate::lighting::*;
-    pub use crate::lists::*;
-    pub use crate::matrix::*;
-    pub use crate::pixels::*;
-    pub use crate::points::*;
-    pub use crate::raster::*;
-    pub use crate::renderer::{
-        c3dglClose, c3dglInit, c3dglNativeBegin, c3dglNativeDraw, c3dglNativeGetStats,
-        c3dglNativePresent, c3dglNativeReadback, c3dglNativeUpload, c3dglSwapBuffers, Stats,
-        Vertex,
-    };
-    pub use crate::stipple::*;
-    pub use crate::texgen::*;
-    pub use crate::texture::*;
-    pub use crate::variants::*;
-}
+pub use crate::{
+    accum::*, arrays::*, attrib::*, blend::*, clip::*, compat::*, evaluator::*, feedback::*,
+    fog::*, frame::*, immediate::*, lighting::*, lists::*, matrix::*, pixels::*, points::*,
+    raster::*, stipple::*, texgen::*, texture::*, variants::*,
+};
+#[cfg(target_os = "horizon")]
+pub use crate::renderer::{
+    c3dglClose, c3dglInit, c3dglNativeBegin, c3dglNativeDraw, c3dglNativeGetStats,
+    c3dglNativePresent, c3dglNativeReadback, c3dglNativeUpload, c3dglSwapBuffers, Stats, Vertex,
+};
