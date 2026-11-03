@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 project(c3dgl_old_example_compare LANGUAGES C CXX ASM)
 set(C3DGL_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(C3DGL_BUILD_GLU ON CACHE BOOL "" FORCE)
-add_subdirectory(../.. reference)
+add_subdirectory(../legacy reference)
 # Both implementations use Z depth; keep the C source unchanged.
 target_compile_definitions(c3dgl PRIVATE C3DGL_W_DEPTH=0)
 set(C3DGL_NATIVE_BUILD_ABI_TEST OFF CACHE BOOL "" FORCE)
@@ -56,8 +56,8 @@ foreach(example primitives texture cube texcoords texmatrix multitexture mipmap 
     if(example STREQUAL primitives2 OR example STREQUAL primitives3)
         set(source_example primitives)
     endif()
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../examples/${source_example}/${source_file}")
-    file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/../../examples/${source_example}/${source_file}" source_hash)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../legacy/examples/${source_example}/${source_file}")
+    file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/../legacy/examples/${source_example}/${source_file}" source_hash)
     set(example_adapter_hash ${adapter_hash})
     if(example STREQUAL api)
         set(example_adapter_hash ${api_adapter_hash})
@@ -81,7 +81,7 @@ foreach(example primitives texture cube texcoords texmatrix multitexture mipmap 
         target_link_options(${target} PRIVATE -Wl,--gc-sections)
         # Full legacy declarations compile the original TU. Unselected code is
         # discarded; unsupported APIs receive no implementations or stubs.
-        target_include_directories(${target} BEFORE PRIVATE ../../include)
+        target_include_directories(${target} BEFORE PRIVATE ../legacy/include)
         string(TOUPPER ${example} upper)
         target_compile_definitions(${target} PRIVATE C3DGL_OLD_${upper}=1)
         if(variant STREQUAL perf)

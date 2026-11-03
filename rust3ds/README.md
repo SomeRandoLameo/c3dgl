@@ -6,7 +6,7 @@ from Rust and does not link a separately built renderer archive.
 
 ```toml
 [dependencies]
-c3dgl-native = { path = "../native", features = ["rust3ds"] }
+c3dgl-native = { path = "..", features = ["rust3ds"] }
 ctru-rs = { git = "https://github.com/rust3ds/ctru-rs.git" }
 ```
 
@@ -33,14 +33,14 @@ cargo install --locked cargo-3ds
 export DEVKITPRO=/opt/devkitpro
 export DEVKITARM="$DEVKITPRO/devkitARM"
 export PATH="$DEVKITPRO/tools/bin:$DEVKITARM/bin:$PATH"
-cd native/rust3ds
+cd rust3ds
 cargo fetch --locked
 cargo 3ds build --release --locked
 ```
 
 `cargo-3ds` must run from this consumer's directory to find project metadata and
 package the ELF into a `.3dsx`. On macOS, set `LIBCLANG_PATH` if bindgen cannot
-find your libclang. `native/scripts/check_rust3ds.sh` performs an offline rebuild
+find your libclang. `scripts/check_rust3ds.sh` performs an offline rebuild
 and rejects Citro3D/GPUCMD/DVLB/shaderProgram symbols in the resulting executable.
 The committed lockfile pins the tested rust3ds sources and transitive packages.
 
@@ -50,7 +50,7 @@ The app uses real `Gfx`, `Apt`, `Hid`, `Console`, `Vec` and file I/O. It checks
 changes. Each workload uses 30 warmups and 120 measured frames. It saves complete
 GPU readbacks and a clear/draw ordering scene outside the timed loops.
 
-Pass its generated `.3dsx` to `native/scripts/emulator_check.py --rust3ds-rom` to
+Pass its generated `.3dsx` to `scripts/emulator_check.py --rust3ds-rom` to
 include it in the same image and CPU gates as the C/C++ consumers. Use
 `--frame-state` for the new viewport/clear checkpoint. Results describe Azahar
 execution; physical-3DS validation remains separate.

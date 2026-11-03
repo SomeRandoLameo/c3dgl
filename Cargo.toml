@@ -6,7 +6,7 @@ publish = false
 
 [features]
 host-tests = []
-# Host build of the renderer with a mock platform (native/bench): CPU profiling of the example scenes.
+# Host build of the renderer with a mock platform (bench): CPU profiling of the example scenes.
 host-bench = []
 # Use the application-owned std runtime/allocator; compile the libctru adapter.
 rust3ds = []

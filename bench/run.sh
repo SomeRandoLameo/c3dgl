@@ -1,7 +1,7 @@
 #!/bin/sh
-# Host bench CPU time per frame of each scene (microseconds), best of three runs. native/bench/build.sh first.
+# Host bench CPU time per frame of each scene (microseconds), best of three runs. bench/build.sh first.
 set -eu
-out=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)/build-native-bench
+out=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/build-native-bench
 cd "$out" && mkdir -p 'sdmc:'
 for bin in bench_*; do
     case "$bin" in *.dSYM) continue;; esac

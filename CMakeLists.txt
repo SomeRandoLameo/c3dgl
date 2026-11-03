@@ -1,162 +1,97 @@
-# c3dgl: OpenGL 1.1 subset for the Nintendo 3DS on citro3d.
-# Standalone: depends only on libctru and citro3d. Link `c3dgl::c3dgl`, then
-# #include <GL/gl.h> for the GL API and <c3dgl.h> for setup/buffer swap.
-cmake_minimum_required(VERSION 3.13)
-
-# Built on its own: use the devkitPro 3DS toolchain (must happen before project())
-if((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR) AND NOT CMAKE_TOOLCHAIN_FILE)
+# Include with add_subdirectory(native) in a devkitPro 3DS project.
+cmake_minimum_required(VERSION 3.18)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT CMAKE_TOOLCHAIN_FILE)
     if(NOT DEFINED ENV{DEVKITPRO})
-        message(FATAL_ERROR "DEVKITPRO is not set. Install devkitPro or pass -DCMAKE_TOOLCHAIN_FILE=.../cmake/3DS.cmake")
+        message(FATAL_ERROR "Set DEVKITPRO or pass the devkitPro 3DS toolchain file")
     endif()
-    set(CMAKE_TOOLCHAIN_FILE "$ENV{DEVKITPRO}/cmake/3DS.cmake" CACHE PATH "devkitPro 3DS toolchain")
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{DEVKITPRO}/cmake/3DS.cmake" CACHE FILEPATH "3DS toolchain")
 endif()
-
-project(c3dgl LANGUAGES C CXX ASM)
-
+project(c3dgl_native LANGUAGES C)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Nintendo3DS")
+    message(FATAL_ERROR "c3dgl::native requires the devkitPro Nintendo3DS CMake toolchain")
+endif()
+set(C3DGL_NATIVE_TOP_LEVEL OFF)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    set(C3DGL_TOP_LEVEL ON)
-else()
-    set(C3DGL_TOP_LEVEL OFF)
+    set(C3DGL_NATIVE_TOP_LEVEL ON)
 endif()
-option(C3DGL_BUILD_EXAMPLES "Build the c3dgl examples" ${C3DGL_TOP_LEVEL})
+find_program(C3DGL_CARGO cargo REQUIRED)
+set(C3DGL_RUST_TARGET armv6k-nintendo-3ds)
+set(C3DGL_RUST_OUT "${CMAKE_CURRENT_BINARY_DIR}/cargo")
+set(C3DGL_ARCHIVE "${C3DGL_RUST_OUT}/${C3DGL_RUST_TARGET}/release/libc3dgl.a")
+file(GLOB C3DGL_RUST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.rs")
+add_custom_command(OUTPUT "${C3DGL_ARCHIVE}"
+    COMMAND ${CMAKE_COMMAND} -E env "CARGO_TARGET_DIR=${C3DGL_RUST_OUT}"
+        ${C3DGL_CARGO} build --release --target ${C3DGL_RUST_TARGET}
+        -Zbuild-std=core,alloc --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    DEPENDS Cargo.toml build.rs rust-toolchain.toml ${C3DGL_RUST_SOURCES}
+    VERBATIM)
+add_custom_target(c3dgl_native_build ALL DEPENDS "${C3DGL_ARCHIVE}")
+add_library(c3dgl_native_rust STATIC IMPORTED GLOBAL)
+set_target_properties(c3dgl_native_rust PROPERTIES IMPORTED_LOCATION "${C3DGL_ARCHIVE}")
+add_dependencies(c3dgl_native_rust c3dgl_native_build)
+add_library(c3dgl_native_platform STATIC platform/libctru.c)
+add_library(c3dgl_native INTERFACE)
+add_library(c3dgl::native ALIAS c3dgl_native)
+target_include_directories(c3dgl_native INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(c3dgl_native INTERFACE c3dgl_native_rust c3dgl_native_platform ctru m)
 
-# Vertex shader, embedded as c3dgl_vsh_shbin.h
-ctr_add_shader_library(c3dgl_vsh shaders/c3dgl.v.pica)
-dkp_add_embedded_binary_library(c3dgl_shaders c3dgl_vsh)
-
-add_library(c3dgl STATIC src/c3dgl.c)
-add_library(c3dgl::c3dgl ALIAS c3dgl)
-
-target_include_directories(c3dgl PUBLIC include)
-target_link_libraries(c3dgl PRIVATE c3dgl_shaders citro3d PUBLIC m)
-target_compile_options(c3dgl PRIVATE -O2 -Wall -Wextra)
-set_target_properties(c3dgl PROPERTIES C_STANDARD 99 C_EXTENSIONS ON)
-
-# GLU: Mesa GLU 9.0.3, unmodified (external/glu/README.md). Link c3dgl::glu for <GL/glu.h>
-option(C3DGL_BUILD_GLU "Build GLU (c3dgl::glu)" ON)
-if(C3DGL_BUILD_GLU)
-    set(C3DGL_GLU_SOURCES
-    libutil/error.c
-    libutil/glue.c
-    libutil/mipmap.c
-    libutil/project.c
-    libutil/quad.c
-    libutil/registry.c
-    libtess/dict.c
-    libtess/geom.c
-    libtess/memalloc.c
-    libtess/mesh.c
-    libtess/normal.c
-    libtess/priorityq.c
-    libtess/render.c
-    libtess/sweep.c
-    libtess/tess.c
-    libtess/tessmono.c
-    libnurbs/interface/bezierEval.cc
-    libnurbs/interface/bezierPatch.cc
-    libnurbs/interface/bezierPatchMesh.cc
-    libnurbs/interface/glcurveval.cc
-    libnurbs/interface/glinterface.cc
-    libnurbs/interface/glrenderer.cc
-    libnurbs/interface/glsurfeval.cc
-    libnurbs/interface/incurveeval.cc
-    libnurbs/interface/insurfeval.cc
-    libnurbs/internals/arc.cc
-    libnurbs/internals/arcsorter.cc
-    libnurbs/internals/arctess.cc
-    libnurbs/internals/backend.cc
-    libnurbs/internals/basiccrveval.cc
-    libnurbs/internals/basicsurfeval.cc
-    libnurbs/internals/bin.cc
-    libnurbs/internals/bufpool.cc
-    libnurbs/internals/cachingeval.cc
-    libnurbs/internals/ccw.cc
-    libnurbs/internals/coveandtiler.cc
-    libnurbs/internals/curve.cc
-    libnurbs/internals/curvelist.cc
-    libnurbs/internals/curvesub.cc
-    libnurbs/internals/dataTransform.cc
-    libnurbs/internals/displaylist.cc
-    libnurbs/internals/flist.cc
-    libnurbs/internals/flistsorter.cc
-    libnurbs/internals/hull.cc
-    libnurbs/internals/intersect.cc
-    libnurbs/internals/knotvector.cc
-    libnurbs/internals/mapdesc.cc
-    libnurbs/internals/mapdescv.cc
-    libnurbs/internals/maplist.cc
-    libnurbs/internals/mesher.cc
-    libnurbs/internals/monoTriangulationBackend.cc
-    libnurbs/internals/monotonizer.cc
-    libnurbs/internals/mycode.cc
-    libnurbs/internals/nurbsinterfac.cc
-    libnurbs/internals/nurbstess.cc
-    libnurbs/internals/patch.cc
-    libnurbs/internals/patchlist.cc
-    libnurbs/internals/quilt.cc
-    libnurbs/internals/reader.cc
-    libnurbs/internals/renderhints.cc
-    libnurbs/internals/slicer.cc
-    libnurbs/internals/sorter.cc
-    libnurbs/internals/splitarcs.cc
-    libnurbs/internals/subdivider.cc
-    libnurbs/internals/tobezier.cc
-    libnurbs/internals/trimline.cc
-    libnurbs/internals/trimregion.cc
-    libnurbs/internals/trimvertpool.cc
-    libnurbs/internals/uarray.cc
-    libnurbs/internals/varray.cc
-    libnurbs/nurbtess/directedLine.cc
-    libnurbs/nurbtess/gridWrap.cc
-    libnurbs/nurbtess/monoChain.cc
-    libnurbs/nurbtess/monoPolyPart.cc
-    libnurbs/nurbtess/monoTriangulation.cc
-    libnurbs/nurbtess/partitionX.cc
-    libnurbs/nurbtess/partitionY.cc
-    libnurbs/nurbtess/polyDBG.cc
-    libnurbs/nurbtess/polyUtil.cc
-    libnurbs/nurbtess/primitiveStream.cc
-    libnurbs/nurbtess/quicksort.cc
-    libnurbs/nurbtess/rectBlock.cc
-    libnurbs/nurbtess/sampleComp.cc
-    libnurbs/nurbtess/sampleCompBot.cc
-    libnurbs/nurbtess/sampleCompRight.cc
-    libnurbs/nurbtess/sampleCompTop.cc
-    libnurbs/nurbtess/sampleMonoPoly.cc
-    libnurbs/nurbtess/sampledLine.cc
-    libnurbs/nurbtess/searchTree.cc
-    libnurbs/internals
-    libnurbs/interface
-    libnurbs/nurbtess
-    )
-    list(TRANSFORM C3DGL_GLU_SOURCES PREPEND external/glu/src/)
-    add_library(c3dgl_glu STATIC ${C3DGL_GLU_SOURCES})
-    add_library(c3dgl::glu ALIAS c3dgl_glu)
-    target_include_directories(c3dgl_glu PUBLIC external/glu/include
-        PRIVATE external/glu/src/include external/glu/src/libnurbs/internals external/glu/src/libnurbs/interface
-                external/glu/src/libnurbs/nurbtess)
-    target_compile_definitions(c3dgl_glu PRIVATE LIBRARYBUILD)
-    # Third-party code: build it as upstream does, without c3dgl's warning flags
-    target_compile_options(c3dgl_glu PRIVATE -O2 -w)
-    target_link_libraries(c3dgl_glu PUBLIC c3dgl)
+option(C3DGL_NATIVE_BUILD_ABI_TEST "Build a C link test (not a triangle demo)" ${C3DGL_NATIVE_TOP_LEVEL})
+if(C3DGL_NATIVE_BUILD_ABI_TEST)
+    add_executable(c3dgl_native_abi tests/abi.c)
+    target_link_libraries(c3dgl_native_abi PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_abi PRIVATE -Wall -Wextra -Werror)
 endif()
 
-if(C3DGL_BUILD_EXAMPLES)
-    add_subdirectory(tests)
-    add_subdirectory(examples/cube)
-    add_subdirectory(examples/primitives)
-    add_subdirectory(examples/fragment)
-    add_subdirectory(examples/api)
-    add_subdirectory(examples/glu)
-    add_subdirectory(examples/texture)
-    add_subdirectory(examples/lighting)
-    add_subdirectory(examples/fog)
-    add_subdirectory(examples/clipplane)
-    add_subdirectory(examples/points)
-    add_subdirectory(examples/lists)
-    add_subdirectory(examples/texgen)
-    add_subdirectory(examples/pixels)
-    add_subdirectory(examples/select)
-    add_subdirectory(examples/stipple)
-    add_subdirectory(examples/accum)
+option(C3DGL_NATIVE_BUILD_TRIANGLE "Build GPU triangle and benchmark" ${C3DGL_NATIVE_TOP_LEVEL})
+if(C3DGL_NATIVE_BUILD_TRIANGLE)
+    add_executable(c3dgl_native_triangle examples/triangle.c)
+    target_link_libraries(c3dgl_native_triangle PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_triangle PRIVATE -O2 -Wall -Wextra -Werror)
+    ctr_create_3dsx(c3dgl_native_triangle)
+    add_executable(c3dgl_native_cube examples/cube.c)
+    target_link_libraries(c3dgl_native_cube PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_cube PRIVATE -O2 -Wall -Wextra -Werror)
+    ctr_create_3dsx(c3dgl_native_cube)
+    add_executable(c3dgl_native_immediate examples/immediate.c)
+    target_link_libraries(c3dgl_native_immediate PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_immediate PRIVATE -O2 -Wall -Wextra -Werror)
+    ctr_create_3dsx(c3dgl_native_immediate)
+    add_executable(c3dgl_native_textured examples/textured.c)
+    target_link_libraries(c3dgl_native_textured PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_textured PRIVATE -O2 -Wall -Wextra -Werror)
+    ctr_create_3dsx(c3dgl_native_textured)
+    add_executable(c3dgl_native_texture_smoke examples/textured.c)
+    target_compile_definitions(c3dgl_native_texture_smoke PRIVATE C3DGL_TEXTURE_SMOKE=1)
+    target_link_libraries(c3dgl_native_texture_smoke PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_texture_smoke PRIVATE -O2 -Wall -Wextra -Werror)
+    ctr_create_3dsx(c3dgl_native_texture_smoke)
+    add_executable(c3dgl_native_primitives examples/primitives.c)
+    target_link_libraries(c3dgl_native_primitives PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_primitives PRIVATE -O2 -Wall -Wextra -Werror)
+    ctr_create_3dsx(c3dgl_native_primitives)
+    add_executable(c3dgl_native_primitive_smoke examples/primitives.c)
+    target_compile_definitions(c3dgl_native_primitive_smoke PRIVATE C3DGL_PRIMITIVE_SMOKE=1)
+    target_link_libraries(c3dgl_native_primitive_smoke PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_primitive_smoke PRIVATE -O2 -Wall -Wextra -Werror)
+    ctr_create_3dsx(c3dgl_native_primitive_smoke)
+endif()
+option(C3DGL_NATIVE_BUILD_CPP_TEST "Build the same GPU test as a C++ consumer" ${C3DGL_NATIVE_TOP_LEVEL})
+if(C3DGL_NATIVE_BUILD_CPP_TEST)
+    enable_language(CXX)
+    add_executable(c3dgl_native_triangle_cpp examples/triangle.cpp)
+    target_link_libraries(c3dgl_native_triangle_cpp PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_triangle_cpp PRIVATE -O2 -Wall -Wextra -Werror)
+    set_target_properties(c3dgl_native_triangle_cpp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    ctr_create_3dsx(c3dgl_native_triangle_cpp)
+    add_executable(c3dgl_native_textured_cpp examples/textured.cpp)
+    target_link_libraries(c3dgl_native_textured_cpp PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_textured_cpp PRIVATE -O2 -Wall -Wextra -Werror)
+    set_target_properties(c3dgl_native_textured_cpp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    ctr_create_3dsx(c3dgl_native_textured_cpp)
+    add_executable(c3dgl_native_primitives_cpp examples/primitives.cpp)
+    target_link_libraries(c3dgl_native_primitives_cpp PRIVATE c3dgl::native)
+    target_compile_options(c3dgl_native_primitives_cpp PRIVATE -O2 -Wall -Wextra -Werror)
+    set_target_properties(c3dgl_native_primitives_cpp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    ctr_create_3dsx(c3dgl_native_primitives_cpp)
 endif()

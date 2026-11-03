@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CPU/GPU/total frame time of the original example scenes: C renderer (Citro3D) versus the native Rust renderer.
 
-Runs build/perf_<case>_{reference,native}.3dsx (the scene statements of native/compare/old_examples.cpp repeated for
+Runs build/perf_<case>_{reference,native}.3dsx (the scene statements of compare/old_examples.cpp repeated for
 30 warmup and 120 measured frames) one emulator launch each. Azahar counts about one tick per ARM instruction, so the
 CPU figures follow instruction counts; its GPU times are not modelled (see docs/native-rewrite.md).
 """
@@ -39,7 +39,7 @@ for case in args.case or ALL:
         for backend in args.backend or ['reference', 'native']:
             rom = args.build / f'perf_{case}_{backend}.3dsx'
             destination = args.output / case / f'{backend}-{run}'
-            subprocess.run([sys.executable, str(root / 'native/scripts/smoke_check.py'), '--emulator', args.emulator,
+            subprocess.run([sys.executable, str(root / 'scripts/smoke_check.py'), '--emulator', args.emulator,
                             '--rom', str(rom), '--sdmc', str(args.sdmc),
                             '--report', f'c3dgl-old-{case}-{backend}-results.txt',
                             '--output', str(destination), '--timeout', str(args.timeout)], check=False,

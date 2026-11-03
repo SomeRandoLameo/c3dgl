@@ -1,11 +1,11 @@
 #!/bin/sh
 set -eu
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 : "${DEVKITPRO:=/opt/devkitpro}"
 : "${DEVKITARM:=$DEVKITPRO/devkitARM}"
 : "${CARGO_TARGET_DIR:=$root/build-native-rust3ds}"
 export DEVKITPRO DEVKITARM CARGO_TARGET_DIR
-cd "$root/native/rust3ds"
+cd "$root/rust3ds"
 cargo fmt --check
 cargo 3ds build --release --locked --offline
 for consumer in c3dgl-rust3ds-triangle textured primitives; do

@@ -2,7 +2,7 @@
 // from the existing example TU; the interactive main is not selected here.
 #define main c3dglOriginalInteractiveMain
 #if defined(C3DGL_OLD_PRIMITIVES) || defined(C3DGL_OLD_PRIMITIVES2) || defined(C3DGL_OLD_PRIMITIVES3)
-#include "../../examples/primitives/main.cpp"
+#include "../legacy/examples/primitives/main.cpp"
 #ifdef C3DGL_OLD_PRIMITIVES3
 #define CASE "primitives3"
 #elif defined(C3DGL_OLD_PRIMITIVES2)
@@ -11,7 +11,7 @@
 #define CASE "primitives"
 #endif
 #elif defined(C3DGL_OLD_TEXTURE) || defined(C3DGL_OLD_TEXCOORDS) || defined(C3DGL_OLD_TEXMATRIX) || defined(C3DGL_OLD_MULTITEXTURE) || defined(C3DGL_OLD_MIPMAP) || defined(C3DGL_OLD_COMPRESSED)
-#include "../../examples/texture/main.cpp"
+#include "../legacy/examples/texture/main.cpp"
 #ifdef C3DGL_OLD_COMPRESSED
 #define CASE "compressed"
 #elif defined(C3DGL_OLD_MIPMAP)
@@ -26,17 +26,17 @@
 #define CASE "texture"
 #endif
 #elif defined(C3DGL_OLD_LIGHTING)
-#include "../../examples/lighting/main.cpp"
+#include "../legacy/examples/lighting/main.cpp"
 #define CASE "lighting"
 #elif defined(C3DGL_OLD_FRAGMENT) || defined(C3DGL_OLD_FRAGMENT2)
-#include "../../examples/fragment/main.cpp"
+#include "../legacy/examples/fragment/main.cpp"
 #ifdef C3DGL_OLD_FRAGMENT2
 #define CASE "fragment2"
 #else
 #define CASE "fragment"
 #endif
 #elif defined(C3DGL_OLD_GLU0) || defined(C3DGL_OLD_GLU1) || defined(C3DGL_OLD_GLU2)
-#include "../../examples/glu/main.cpp"
+#include "../legacy/examples/glu/main.cpp"
 #if defined(C3DGL_OLD_GLU2)
 #define CASE "glu2"
 #elif defined(C3DGL_OLD_GLU1)
@@ -45,35 +45,35 @@
 #define CASE "glu0"
 #endif
 #elif defined(C3DGL_OLD_POINTS)
-#include "../../examples/points/main.cpp"
+#include "../legacy/examples/points/main.cpp"
 #define CASE "points"
 #define ADAPTER_FAILURES failures
 #elif defined(C3DGL_OLD_PIXELS)
-#include "../../examples/pixels/main.cpp"
+#include "../legacy/examples/pixels/main.cpp"
 #define CASE "pixels"
 #elif defined(C3DGL_OLD_ACCUM)
-#include "../../examples/accum/main.cpp"
+#include "../legacy/examples/accum/main.cpp"
 #define CASE "accum"
 #elif defined(C3DGL_OLD_STIPPLE)
-#include "../../examples/stipple/main.cpp"
+#include "../legacy/examples/stipple/main.cpp"
 #define CASE "stipple"
 #elif defined(C3DGL_OLD_SELECT)
-#include "../../examples/select/main.cpp"
+#include "../legacy/examples/select/main.cpp"
 #define CASE "select"
 #elif defined(C3DGL_OLD_LISTS)
-#include "../../examples/lists/main.cpp"
+#include "../legacy/examples/lists/main.cpp"
 #define CASE "lists"
 #elif defined(C3DGL_OLD_CLIPPLANE)
-#include "../../examples/clipplane/main.cpp"
+#include "../legacy/examples/clipplane/main.cpp"
 #define CASE "clipplane"
 #elif defined(C3DGL_OLD_FOG)
-#include "../../examples/fog/main.cpp"
+#include "../legacy/examples/fog/main.cpp"
 #define CASE "fog"
 #elif defined(C3DGL_OLD_TEXGEN)
-#include "../../examples/texgen/main.cpp"
+#include "../legacy/examples/texgen/main.cpp"
 #define CASE "texgen"
 #else
-#include "../../examples/cube/main.cpp"
+#include "../legacy/examples/cube/main.cpp"
 #ifdef C3DGL_OLD_OVERLAY
 #define CASE "overlay"
 #else

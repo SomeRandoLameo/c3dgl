@@ -1,307 +1,338 @@
-# c3dgl
+# Native Rust renderer
 
-OpenGL 1.1 subset for the Nintendo 3DS, running on the GPU through [citro3d](https://github.com/devkitPro/citro3d).
-Code written against classic fixed-function OpenGL (immediate mode, matrix stacks, client arrays) can be
-ported to the 3DS without rewriting its renderer. It depends on nothing but libctru and citro3d.
+The original C implementation lives in [`legacy/`](legacy/); it is the reference the comparison tooling builds against.
 
-**Status:** early. 2D drawing (shapes, text, lines, textures) runs at a steady 60 FPS in the
-[Azahar](https://azahar-emu.org/) emulator. Not yet tested on real hardware; 3D, scissor and sub-viewports
-are covered by the cube example but not verified yet. Issues and pull requests are welcome.
+`no_std` + `alloc` Rust static library with a C ABI. The renderer generates its
+own PICA200 commands, uploads its own vertex shader and renders into VRAM.
+Citro3D is not linked. All allocation, GSP/GX, cache, display, event, APT and timing
+calls are confined to `platform/libctru.c` and its Rust declarations.
 
-## Usage
+The current scope is top-screen colored triangles with persistent vertex data,
+RGBA8/D24S8 targets, GPU clear, asynchronous command submission, display transfer,
+VBlank presentation, readback and shutdown. The GL subset adds modelview/projection matrix
+stacks, GPU transformation, arrays/VBOs, depth/culling, immediate triangles,
+level-zero textures, blending, clear state, viewport and implemented state queries
+(see `include/GL/gl.h` for the implemented subset).
+This is **not yet the full OpenGL
+port**. Existing setup names `c3dglInit`, `c3dglClose`, `c3dglSwapBuffers` are
+exported; use `c3dgl_native.h` for the currently implemented drawing API. Do not
+link the native and C renderer into the same program.
 
-```c
-#include <3ds.h>
-#include <GL/gl.h>
-#include <c3dgl.h>              // and <GL/glu.h> for GLU
+## Build and verification
 
-int main(void)
-{
-    gfxInitDefault();
-    c3dglInit();                        // top screen (400x240) is current
+Install devkitPro and the pinned Rust toolchain in `rust-toolchain.toml`.
+From the repository root:
 
-    while (aptMainLoop())
-    {
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glBegin(GL_TRIANGLES);
-            glColor3f(1, 0, 0); glVertex2f( 0.0f,  0.5f);
-            glColor3f(0, 1, 0); glVertex2f(-0.5f, -0.5f);
-            glColor3f(0, 0, 1); glVertex2f( 0.5f, -0.5f);
-        glEnd();
+```
+export DEVKITPRO=/opt/devkitpro
+scripts/check.sh
+```
 
-        c3dglSetScreen(C3DGL_SCREEN_BOTTOM);    // 320x240, viewport is reset to the full screen
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        // ... draw the bottom screen ...
-        c3dglSetScreen(C3DGL_SCREEN_TOP);
+This runs Rust packet/lifecycle tests, C and C++ host link tests, C/C++ 3DS
+consumer builds, a real ctru-rs Rust application build and executable symbol
+audits. Install cargo-3ds and fetch the pinned Rust consumer dependencies first;
+see `rust3ds/README.md`. Native CMake is configured with
+`$DEVKITPRO/cmake/3DS.cmake`. Cargo rebuilds `core` and `alloc` for
+`armv6k-nintendo-3ds`, with abort semantics and hard-float ABI. The Rust archive is
+`build-native/cargo/armv6k-nintendo-3ds/release/libc3dgl.a`.
 
-        c3dglSwapBuffers();             // presents both screens, waits for VBlank on the next frame
-    }
+Run `build-native/c3dgl_native_triangle.3dsx` in Azahar. It automatically checks
+240 frames with alternating clears, colored pixels, API errors, eight init/close
+cycles and restoration of free linear/VRAM space. It then measures 1, 64 and 512
+draws per frame with static matrices and with a new modelview matrix before each
+draw, plus a viewport change before each draw, each with 30 warmups and 120 measured frames. Even the one-draw case changes
+its matrix between frames. START exits.
+The C++ executable performs the identical checks.
 
-    c3dglClose();
-    gfxExit();
+For repeatable emulator acceptance, with the emulator's actual SDMC directory:
+
+```
+python3 scripts/emulator_check.py \
+  --emulator /Applications/Azahar.app/Contents/MacOS/azahar \
+  --sdmc '/path/to/Azahar/sdmc' \
+  --output build-native/emulator-results --runs 3
+```
+
+The runner requires all checks to pass, identical full GPU images for both workloads versus the C
+reference, and the slowest native CPU result to beat the fastest C result for
+every tested workload. Guest CPU work excludes explicitly tracked GPU/VBlank
+waiting. Total frame time uses identical 60 Hz synchronization. Emulator GPU
+and CPU timing cannot establish performance on actual 3DS hardware.
+
+## Embed in an application
+
+```
+set(C3DGL_NATIVE_BUILD_ABI_TEST OFF CACHE BOOL "" FORCE)
+set(C3DGL_NATIVE_BUILD_TRIANGLE OFF CACHE BOOL "" FORCE)
+set(C3DGL_NATIVE_BUILD_CPP_TEST OFF CACHE BOOL "" FORCE)
+add_subdirectory(path/to/c3dgl/native native-build)
+target_link_libraries(my_app PRIVATE c3dgl::native)
+```
+
+C usage after `gfxInitDefault()`:
+
+```
+#include <c3dgl_native.h>
+if (!c3dglInit()) { /* handle failure */ }
+/* vertices: float4 object-space positions and float4 RGBA */
+if (c3dglNativeUpload(vertices, vertex_count) != 0) { /* handle failure */ }
+while (aptMainLoop()) {
+    if (c3dglNativeBegin(0x183050ff, true) != 0) break;
+    if (c3dglNativeDraw(0, vertex_count) != 0) break;
+    if (c3dglNativePresent() != 0) break;
 }
+c3dglClose();
+/* application eventually calls gfxExit() */
 ```
 
-`<GL/gl.h>` and `<c3dgl.h>` do not include `<3ds.h>`, so they also work next to headers that clash with
-libctru (e.g. other libraries defining `KEY_A`). See [`examples/cube`](examples/cube/main.cpp) for a complete program.
+All API calls run on one application thread. The application owns graphics/GSP
+initialization and shutdown; the renderer exclusively owns GPU submissions while
+initialized. Top display format must be RGB8 at 400x240, with stereo disabled.
+Mixing another active GX queue or renderer is unsupported.
 
-### Screens
+Vertices upload between frames and remain in linear storage. Steady frames
+allocate nothing and upload no vertex data. Initial state and shader commands
+are encoded once and replayed after APT restoration; each draw emits only the
+required PICA array sequence. Cache maintenance covers uploaded vertex ranges
+and the submitted command bytes, not the whole linear heap. Shutdown drains GPU
+work before freeing buffers. All five GPU allocations unwind on failure.
 
-Both screens have their own render target and share all other GL state (textures, matrices, blending, ...).
-`c3dglSetScreen()` selects where the following draws and clears go, it can be switched any number of times per
-frame and resets viewport and scissor box to the full screen. `c3dglSwapBuffers()` presents every screen that was
-drawn on in that frame, the other one keeps its last picture. The bottom screen is not touched until the first
-switch to it, so `consoleInit(GFX_BOTTOM, NULL)` works as long as nothing is rendered there.
+Include `<GL/gl.h>` from the native target to use `glMatrixMode`,
+`glLoadIdentity`, `glLoadMatrixf`, `glMultMatrixf`, `glPushMatrix`, `glPopMatrix`,
+`glTranslatef`, `glRotatef`, `glScalef`, `glOrtho`, `glFrustum`, `glGetError`,
+`glClearColor`, `glClearDepth`/`glClearDepthf`, `glClear`, `glViewport`,
+`glGetFloatv` and `glGetIntegerv`.
+Modelview has 32 stack entries, projection has 2. GL_TEXTURE, double/fixed-point
+entry points and remaining state queries are not implemented yet. The native
+header deliberately declares only implemented symbols. Presentation uses
+`c3dglSwapBuffers` or the native API. `glClear` starts a frame automatically; only color and
+depth bits are supported. Clears cover the whole target regardless of viewport.
 
-## Integration
+Vertices now stay in object space. The shader performs projection × modelview,
+screen tilt and depth conversion. Matrix uniforms upload only when changed or
+when GPU state is restored; steady frames allocate nothing. The command buffer
+is 128 KiB to fit 512 draws with a matrix change before every draw.
 
-Requires [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `3ds-dev` group (devkitARM, libctru,
-citro3d, picasso) and `$DEVKITPRO` set. Add c3dgl to your CMake project, e.g. as a git submodule:
+The next steps are the remaining OpenGL groups in `docs/native-rewrite.md`.
+libctru remains the platform backend; the port replaces Citro3D. The ordinary `alloc` allocator is
+separate from GPU-visible linear/VRAM storage. The default C/C++ 3DS archive
+remains no_std; host tests and the opt-in rust3ds consumer use Rust std.
 
-```sh
-git submodule add https://github.com/SomeRandoLameo/c3dgl.git third_party/c3dgl
+## Rust applications
+
+Use `c3dgl-native = { path = "path/to/c3dgl/native", features = ["rust3ds"] }`
+as a Cargo dependency next to `ctru-rs`. This selects the application-owned Rust
+std allocator/panic runtime and automatically builds/links the libctru adapter.
+The default C/C++ static-library configuration remains no_std. See
+[`rust3ds/README.md`](rust3ds/README.md) for the tested consumer and ownership rules.
+
+`glViewport` uses landscape coordinates, clamps size to the reported maximum
+400×240, and skips zero-size/fully offscreen draws. Viewport commands upload only
+when changed or GPU state is restored. Clear state and viewport queries, matrix
+mode/current matrices/stack depths and their implemented limits are available.
+The extra clear-order scene verifies color-only/depth-only clears, clear after a
+draw, a zero-size viewport and a subviewport against the C renderer. Use
+`emulator_check.py --frame-state --rust3ds-rom path/to/consumer.3dsx` for this gate.
+
+## Vertex arrays and buffer objects
+
+`glVertexPointer`, `glColorPointer`, client-state enable/disable, `glDrawArrays`
+and `glDrawElements` support triangles, triangle strips/fans, quads, quad strips
+and convex polygons. Vertex formats are SHORT and FLOAT
+with 2–4 components; colors support BYTE, UNSIGNED_BYTE, SHORT, UNSIGNED_SHORT
+and FLOAT with 3–4 components. Integer colors are normalized. Disabled color
+arrays supply the current color (initially white). Stride zero means tightly packed. DrawElements accepts
+UNSIGNED_BYTE, UNSIGNED_SHORT or UNSIGNED_INT and emits a real PICA indexed draw.
+Incomplete trailing primitives are ignored. The converted vertex range is limited to 4096.
+
+`glGenBuffers`, `glBindBuffer`, `glDeleteBuffers`, `glBufferData` and
+`glBufferSubData` implement ARRAY_BUFFER and ELEMENT_ARRAY_BUFFER. Pointer calls
+capture the currently bound array buffer; with a buffer bound, pointers are byte
+offsets. Index offsets use the element buffer bound at draw time. Data allocation
+accepts null data (initialized to zero); subdata bounds are checked before mutation.
+
+Client memory is copied on every draw. Fully buffer-backed draw descriptions
+cache converted float4 vertices and u16 indices in GPU-visible linear memory;
+unchanged draws reuse that storage across frames without geometry uploads.
+Updates invalidate only meshes referencing the changed buffer. Up to 64 cached
+meshes are retained; evicted, updated, deleted and client-array storage remains
+alive until the next frame has waited for GPU completion. Changes within a frame
+therefore preserve the geometry seen by previous queued draws. Matrix and viewport
+changes do not invalidate geometry. Native and GL draws explicitly select their
+geometry base, so they can be mixed.
+
+Host lifecycle tests cover client and indexed draws, cross-frame cache reuse,
+unrelated-buffer updates, rejected subdata ranges, in-frame invalidation and
+shutdown with retained geometry. Packet tests check the indexed draw command.
+
+Run the array acceptance scene in Azahar for both C and C++ consumers:
+
+```
+python3 scripts/emulator_check.py --arrays-only \
+  --emulator /path/to/azahar --sdmc /path/to/actual/sdmc \
+  --output docs/native-results/arrays-step --runs 1
 ```
 
-```cmake
-add_subdirectory(third_party/c3dgl)
-target_link_libraries(my_app PRIVATE c3dgl::c3dgl)  # c3dgl::glu as well for <GL/glu.h>
+The scene compares every GPU-readback byte against native draw baselines for
+client arrays, u8/u16 indices, cached VBO draws over three frames, SubData updates
+between draws, data replacement and deletion before submission. The runner
+requires fresh images, all eight scene checks and identical C/C++ final images;
+this mode does not apply a performance comparison against the C renderer.
+
+For the complete arrays checkpoint, include the Rust application and the C
+reference renderer, with three runs of every consumer:
+
+```
+python3 scripts/emulator_check.py --vbo-state \
+  --emulator /path/to/azahar --sdmc /path/to/actual/sdmc \
+  --rust3ds-rom build-native-rust3ds/armv6k-nintendo-3ds/release/c3dgl-rust3ds-triangle.3dsx \
+  --baseline-summary docs/native-results/frame-step/azahar-summary.json \
+  --output docs/native-results/arrays-step/full --runs 3
 ```
 
-### GLU
+`--vbo-state` requires rust3ds, retains the static/matrix/viewport regression
+workloads, and adds persistent indexed meshes plus a 6-byte vertex and 6-byte
+index update in each frame. All consumers use the same compact short3/pad/short2/ubyte4 vertex
+layout and u16 indices for these workloads. Each workload uses 30 warmup and 120
+measured frames at 1/64/512 draws. The gate compares the slowest native C, C++ and
+Rust result separately with the fastest C-reference result. It compares all
+seven GPU images across runs and consumers, verifies that updates change pixels,
+and records CPU increases relative to the previous checkpoint. C/C++ and rust3ds
+also check recovery of linear/VRAM memory after the VBO scenes.
 
-`c3dgl::glu` is [Mesa GLU](https://gitlab.freedesktop.org/mesa/glu) 9.0.3, vendored unmodified in `external/glu`
-(SGI Free Software License B 2.0, MIT style; see `external/glu/README.md`). Everything works except what needs GL
-features c3dgl does not have yet: NURBS rendering through evaluators (`GLU_NURBS_TESSELLATOR` mode works) and
-`gluBuild3DMipmaps` (GL 1.2).
-Turn it off with `-DC3DGL_BUILD_GLU=OFF`.
 
-## Building the examples
+## Depth and culling
 
-```sh
-cmake -S . -B build          # picks up $DEVKITPRO/cmake/3DS.cmake
-cmake --build build          # -> build/examples/<name>/c3dgl_<name>.3dsx
-```
+`glEnable`/`glDisable` and `glIsEnabled` implement DEPTH_TEST and CULL_FACE.
+DepthFunc supports all eight comparisons, with reversed PICA depth comparisons;
+DepthMask controls draw writes and GL depth clears. DepthRange/DepthRangef clamp
+both endpoints independently and support reversed and constant ranges. CullFace
+supports FRONT, BACK and FRONT_AND_BACK, with FrontFace CW/CCW. Both-face culling
+suppresses draws. Float/integer/boolean state queries expose these settings.
+Unsupported capabilities and invalid enumerants report GL errors. State packets
+are emitted only when changed, or after GPU restoration; geometry stays cached
+when depth/cull state changes.
 
-- `cube`: 3D, depth test, culling, textures (NPOT and PNG), scissor, sub-viewports
-- `primitives`: every primitive mode with culling on to catch wrong winding; page 2: flat shading, polygon modes,
-  edge flags, polygon offset, depth range
-- `api` (C): self-check of queries, errors, entry point variants, array types, VBOs, attribute stacks, display lists,
-  texgen, texture formats, 1D textures, color buffers, pixel drawing and transfer (rendered and read back), feedback
-  and selection, line and polygon stipple, the accumulation buffer (rendered and read back) and the ES API; green
-  screen = all passed
-- `glu`: Mesa GLU on c3dgl: matrices, image scaling, quadrics, numeric self-checks; page 2: tessellator, NURBS
-- `texture`: texture features; page 1: texture matrix, page 2: texture coordinates (per-vertex q, array types),
-  page 3: multitexturing and `GL_COMBINE`, page 4: mipmaps, page 5: compressed textures (paletted, ETC1)
-- `fragment`: per-fragment operations (alpha test, texture environment, stencil, `glClear`); A switches pages
-- `lighting`: directional, point and spot lights, specular, several lights, color material, two-sided lighting,
-  flat shading with `GL_NORMALIZE`/`GL_RESCALE_NORMAL`; self-checks of the lighting API on the bottom screen
-- `fog`: linear/exp/exp2 fog with perspective and orthographic projections, depth range, lines/points and blending,
-  each next to a reference square in the expected color; self-checks of the fog API on the bottom screen
-- `clipplane`: user clip planes on smooth-shaded, textured and lit geometry, lines, points and `glPolygonMode`
-  outlines, mostly next to the expected shape drawn without clipping; self-checks of the clip plane API on the bottom screen
-- `points` (ES API): point size min/max, distance attenuation (also through the fixed-point API), the point size
-  array, point sprites with `GL_COORD_REPLACE_OES` on one and two units, a particle field with per-particle sizes;
-  self-checks of the point API on the bottom screen
-- `lists`: display lists, the classic gears: each gear is a list (geometry, normals, material, shade model) drawn with
-  `glCallList`; A switches to immediate mode, which looks identical
-- `texgen`: texture coordinate generation on tori without texcoords: `GL_SPHERE_MAP` (chrome from a generated
-  environment map), `GL_OBJECT_LINEAR` and `GL_EYE_LINEAR` stripes; A scrolls the stripes with the texture matrix
-- `pixels`: drawing pixels: text from `glBitmap` display lists (the console font), a label at a cube corner
-  (`glRasterPos` in 3D, depth tested), the cube's reflection by `glCopyPixels` with zoom 1 x -0.5, an animated
-  color index `glDrawPixels` image (palette in the `glPixelMap` tables, cycled by `GL_INDEX_OFFSET`) with a pulsing
-  `glPixelZoom` and its mirror image (zoom -1, drawn as luminance tinted by `glPixelTransfer` scale/bias)
-- `select`: picking with a cursor (circle pad / D-pad): `GL_SELECT` with `gluPickMatrix` finds the nearest cube under
-  it in a turning ring, `GL_FEEDBACK` gives back the picked cube's front faces in window coordinates, drawn as a yellow
-  outline that must sit exactly on the cube; the hit records are listed on the bottom screen
-- `stipple`: line stipple (dashes, factor 2, dash-dot, dots, a wide line, a turning star as one line loop), two
-  rectangles with complementary halftone patterns that fill each other in, and in perspective a textured screen door
-  cube (polygon stipple fixed to the window) circling an opaque cube with dashed `glPolygonMode(GL_LINE)` edges
-- `accum`: the accumulation buffer; left: motion blur (a fading trail from `GL_MULT` and `GL_ACCUM` every frame),
-  right: depth of field (6 views from points on a lens, focused on the middle cube, averaged with `GL_LOAD`/`GL_ACCUM`);
-  the scissor box keeps the halves apart. B switches the accumulation buffer off for comparison
+`emulator_check.py --depth-state --rust3ds-rom ...` includes all previous
+regression workloads, a persistent indexed rotating cube and depth/range/winding
+changes before every cube draw. A 20-cell pixel scene covers comparisons, masked
+writes and clears, disabled depth writes, reversed/constant ranges and culling.
+The reference benchmark directly includes the unchanged C implementation, as
+the repository's regression tests do, to inspect its private GPU-cache pointer.
+Every workload must obtain a compact cache, and unchanged frames must retain it.
+The compact SHORT input is necessary: C FLOAT arrays do not use this cache.
+The C generic primitive path supplies the one FRONT_AND_BACK correctness cell,
+because its indexed path fails to reject both faces; measured draws all remain
+indexed. Run three repetitions for C, C++, rust3ds and the C reference.
 
-Every example shows the CPU and GPU time of the last frame, the command buffer usage and the frames per second
-(averaged over one second) in rows 2-5 of the bottom screen (`C3D_GetProcessingTime`, `C3D_GetDrawingTime`,
-`C3D_GetCmdBufUsage`, `osGetTime`).
+Immediate mode supports the six filled primitive modes via `glBegin` / `glEnd`,
+`glVertex2f/3f/4f`, their vector forms, `glColor3f/4f`, byte colors and vector forms, with at most 4096 vertices per begin/end pair.
+Incomplete trailing primitives are ignored. Colors persist between begin/end pairs
+and supply the default color when the color array is disabled; VBO cache keys
+include that current color. Matrix, raster and array state changes during a pair
+report `GL_INVALID_OPERATION`. Each completed batch uses its own GPU allocation,
+retained until the next completed frame wait.
 
-The cube example needs libpng from the devkitPro portlibs (`3ds-libpng`) to load a PNG texture from its romfs;
-c3dgl itself does not.
+`c3dgl_native_immediate.3dsx` is a rotating RGB triangle consumer of this API.
+Host tests verify assembly, errors, per-vertex colors and submitted storage lifetime;
+the complete build check covers its 3DS compilation and linking. The immediate
+path is also covered by the texture and primitive emulator smoke reports.
 
-Run a `.3dsx` in an emulator or send it to a 3DS with `3dslink`. The bottom screen describes the
-expected picture. Examples are built by default only when c3dgl is the top-level project
-(`-DC3DGL_BUILD_EXAMPLES=ON/OFF`).
 
-`cmake -P scripts/dev.cmake run [app.3dsx]` builds and launches an example (default: cube) in the first emulator it
-finds (Azahar, Lime3DS, Mandarine, Citra; override with `C3DGL_EMULATOR=/path/to/emu`); `build` and
-`launch` do one step each. It works on macOS, Linux and Windows. On Windows it builds through
-devkitPro's msys2 (`C:/devkitPro/msys2`, or set `C3DGL_MSYS2`), which needs `pacman -S cmake` there,
-plus a native CMake on `PATH` to run the script. The Zed tasks in `.zed/tasks.json` wrap these commands.
+## Textures and blending
 
-## Supported
+One `GL_TEXTURE_2D` unit (`GL_TEXTURE0`) supports up to 64 texture objects, including
+an instantiated default object if used. `glGenTextures`, `glBindTexture`,
+`glDeleteTextures`, `glIsTexture`, `glTexImage2D`, `glTexSubImage2D`,
+`glTexParameteri`, `glGetTexParameteriv`, `glTexEnvi` and `glPixelStorei` are available.
+Uploads support `GL_RGB` / `GL_RGBA` with `GL_UNSIGNED_BYTE`, level 0 and border 0.
+Nonempty dimensions must be powers of two in 8..1024. Unpack alignment is 1/2/4/8.
+Pixels are converted into resident RGBA8 with PICA byte order and tiled row layout.
+Missing image data is initialized deterministically. Zero dimensions remove the image.
 
-- `glBegin`/`glEnd` and client arrays (`glDrawArrays`, `glDrawElements`, `glArrayElement`, `glInterleavedArrays`)
-  with every primitive: points, lines, line strips/loops, triangles, triangle strips/fans, quads, quad strips and
-  convex polygons; arrays of every GL 1.1 / ES 1.1 type (`GL_BYTE` ... `GL_DOUBLE`, `GL_FIXED`)
-- Buffer objects (VBOs): `glGenBuffers`, `glBindBuffer`, `glBufferData`, `glBufferSubData`, ... for vertex arrays and
-  indices
-- OpenGL ES 1.1 API: `<GLES/gl.h>`, the fixed-point `x` functions and `glOrthof`/`glFrustumf`/... for everything
-  implemented
-- Modelview/projection/texture matrix stacks (projective texture matrices included), `glOrtho`, `glFrustum`,
-  `glTranslatef`, `glRotatef`, `glScalef`, `glMultMatrixf`
-- Textures of any size up to 1024x1024: RGBA8, RGB8, luminance/alpha, luminance, alpha, RGB565, RGBA5551, RGBA4;
-  `glTexSubImage2D`, `glGetTexImage`, nearest/linear filtering, repeat/clamp/mirror wrapping
-- Compressed textures (`glCompressedTexImage2D`): the 10 paletted formats of `GL_OES_compressed_paletted_texture`
-  (expanded to the palette's format on load, one image can carry all mip levels) and ETC1
-  (`GL_OES_compressed_ETC1_RGB8_texture`, sampled natively by PICA); `GL_COMPRESSED_TEXTURE_FORMATS`
-- Texture environment (`glTexEnv`): `GL_MODULATE`, `GL_REPLACE`, `GL_DECAL`, `GL_BLEND`, `GL_ADD`, `GL_TEXTURE_ENV_COLOR`,
-  and `GL_COMBINE` with all functions including `GL_DOT3_RGB(A)`
-- Multitexturing: 3 texture units (`glActiveTexture`, `glClientActiveTexture`, `glMultiTexCoord*`), each with its own
-  environment, texture matrix and texcoord array
-- Flat shading with GL's provoking vertices, `glPolygonMode` (fill/line/point per face, with edge flags),
-  `glPolygonOffset` (including the slope factor) and `glDepthRange`
-- Blending (`glBlendFunc`), logic ops (`glLogicOp`, `GL_COLOR_LOGIC_OP`), alpha test (`glAlphaFunc`), stencil (`glStencilFunc`/`Op`/`Mask`), depth
-  test/function/mask, color mask, face culling, scissor, viewport, line width, point size
-- Point parameters (`glPointParameter*`: size min/max, distance attenuation) and point sprites
-  (`GL_POINT_SPRITE_OES`, `GL_COORD_REPLACE_OES` per texture unit), listed as `GL_OES_point_sprite`; the point size
-  array (`glPointSizePointerOES`, `GL_POINT_SIZE_ARRAY_OES`), listed as `GL_OES_point_size_array`
-- `glClear` of color, depth and stencil, honoring scissor and write masks
-- `glGetError`, `glGet{Boolean,Integer,Float,Double}v` for the common state, `glIsEnabled`, `glIsTexture`
-- The common variants of the immediate mode calls (`glVertex2/3/4{f,d,i,s}[v]`, `glColor3/4{f,d,ub}[v]`, ...),
-  `glRect*`, `glLoadMatrix*`, `glTranslated`/`glRotated`/`glScaled`
-- Mipmaps: all levels, mipmap filters, `GL_GENERATE_MIPMAP`; `glGetTexParameter`
-- Attribute stacks: `glPushAttrib`/`glPopAttrib`, `glPushClientAttrib`/`glPopClientAttrib`
-- Display lists: `glNewList`/`glEndList` (`GL_COMPILE`, `GL_COMPILE_AND_EXECUTE`), `glCallList`, `glCallLists` (all
-  types) with `glListBase`, `glGenLists`, `glDeleteLists`, `glIsList`, nesting 64 deep; client data (pixels, control
-  points, vertex arrays) is copied at compile time
-- Pixel store modes (alignment, row length, skip rows/pixels, byte swapping), texture borders, proxy textures,
-  `glGetTexLevelParameter`
-- GLU: the complete Mesa GLU 9.0.3 (`c3dgl::glu`, `<GL/glu.h>`), see [GLU](#glu)
-- Lighting: 8 lights (directional, positional with attenuation, spot), materials per face, `glColorMaterial`,
-  two-sided lighting, local viewer, `GL_NORMALIZE`, `GL_RESCALE_NORMAL`; `glGetLight`, `glGetMaterial`
-- Fog: `GL_LINEAR`, `GL_EXP`, `GL_EXP2`, per pixel; `glFog*` and the fog queries
-- User clip planes: 6 (`glClipPlane`, ES `glClipPlanef/x`, `glGetClipPlane*`)
-- Texture coordinate generation (`glTexGen*`, `glGetTexGen*`): `GL_OBJECT_LINEAR`, `GL_EYE_LINEAR`, `GL_SPHERE_MAP`
-  for s, t, r, q of every texture unit
-- Dithering and smoothing can be enabled and queried but have no effect yet
-- Multisampling state (`glSampleCoverage`, `GL_MULTISAMPLE`, `GL_SAMPLE_ALPHA_TO_*`): stored and queried; there are no
-  sample buffers (`GL_SAMPLE_BUFFERS` = 0), so as the spec says it has no effect
-- `glReadPixels`: color in all GL 1.1 formats and types (plus the packed 16-bit ES types), depth and stencil;
-  waits for the GPU to finish the draws so far
-- `glCopyTexImage2D` / `glCopyTexSubImage2D` (render to texture): internal formats alpha, luminance(-alpha), RGB, RGBA;
-  like `glReadPixels` they wait for the GPU, draws before the copy keep the old texels
-- Drawing pixels: `glRasterPos*` (all variants; clipped, lit, queries), `glBitmap`, `glDrawPixels` (color in all GL 1.1
-  formats and types, depth, stencil, `GL_BITMAP` stencil), `glCopyPixels` (color, depth, stencil), `glPixelZoom`
-  (also negative); color goes through all per-fragment operations, texturing does not apply. Depth and stencil
-  images are written on the CPU and wait for the GPU; their fragments' raster color is not written
-- Pixel transfer: `glPixelTransfer{i,f}` (scale/bias of R, G, B, A and depth, `GL_INDEX_SHIFT/OFFSET`,
-  `GL_MAP_COLOR`, `GL_MAP_STENCIL`), `glPixelMap{fv,uiv,usv}` and `glGetPixelMap*` (all 10 tables, 256 entries) for
-  `glDrawPixels`, `glReadPixels`, `glCopyPixels` and texture images and copies; `GL_COLOR_INDEX` images (also
-  `GL_BITMAP`) drawn or loaded as textures through the `I_TO_*` tables
-- Feedback and selection: `glRenderMode`, `glFeedbackBuffer` (all 5 types), `glPassThrough`, `glSelectBuffer`,
-  `glInitNames`, `glLoadName`, `glPushName`, `glPopName` (64 names); points, lines (with `GL_LINE_RESET_TOKEN`),
-  polygons (clipped, culled, polygon mode) and the raster position of `glBitmap`/`glDrawPixels`/`glCopyPixels`.
-  Feedback colors have 8 bits per component, nothing is drawn or cleared meanwhile
-- Line stipple (`glLineStipple`, `GL_LINE_STIPPLE`; the counter runs on along strips and loops) and polygon stipple
-  (`glPolygonStipple`, `glGetPolygonStipple`, `GL_POLYGON_STIPPLE`) with their queries, attribute groups and display
-  lists. Polygon stipple needs texture unit 2 to be unused (drawn without stipple otherwise); with the alpha test off,
-  stippled fragments of alpha exactly 0 are dropped too
-- Accumulation buffer: `glAccum` (`GL_ACCUM`, `GL_LOAD`, `GL_ADD`, `GL_MULT`, `GL_RETURN`), `glClearAccum`,
-  `glClear(GL_ACCUM_BUFFER_BIT)`, 16 bits per component, one per screen (allocated at its first use, 750 KB for the
-  top screen). Operations work on the CPU within the scissor box; `GL_ACCUM`/`GL_LOAD` wait for the GPU like
-  `glReadPixels`, so each costs a few milliseconds
-- Top (400x240) and bottom (320x240) screen, see [Screens](#screens)
+Select `GL_NEAREST` or `GL_LINEAR` for `GL_TEXTURE_MIN_FILTER`; the GL default is
+`GL_NEAREST_MIPMAP_LINEAR`, which leaves the texture incomplete because mip levels
+are not implemented yet. Incomplete enabled textures sample black with alpha one.
+Magnification supports nearest/linear; S/T wrap supports repeat, mirrored repeat
+and clamp to edge. Texture environment supports the default `GL_MODULATE` and
+`GL_REPLACE` via `glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, mode)`.
 
-The full list of functions is `include/GL/gl.h`.
+`glTexCoord2f` supplies current UV coordinates for immediate vertices and arrays
+without an enabled coordinate array. `glTexCoordPointer(2, GL_FLOAT|GL_SHORT, ...)`
+and `GL_TEXTURE_COORD_ARRAY` support client memory and VBO offsets. Converted meshes
+now store float4 position, color and coordinates (48 bytes per GPU vertex), while
+the public `c3dglNativeUpload` ABI remains 32 bytes per input vertex. Coordinate
+buffer updates invalidate only meshes referencing that buffer. Texture uploads
+and parameter changes leave geometry caches intact.
 
-## Not supported
+Texture image updates allocate a new GPU image and copy unchanged texels for
+subimage writes. Old images used by queued draws survive updates/deletion until
+a completed frame wait. Repeated unchanged draws reuse the image allocation;
+changed texture state invalidates the texture cache. This first implementation
+copies and flushes the whole affected texture image during an update.
 
-Round points (`GL_POINT_SMOOTH`) and stereoscopic 3D. Mipmap levels
-below 8x8 are accepted but not sampled (PICA stops at 8x8).
-`GL_REPEAT` on non-power-of-two textures (an extension: GL 1.1 and ES 1.1 require power-of-two sizes) is exact for
-texture coordinates in [0, 1] only: past that the GPU wraps at the padded size. Clamping and linear filtering across the
-edges are exact (the padding holds the clamped or wrapped image), except for ETC1 textures.
+`GL_BLEND`, `glBlendFunc` / `glBlendFuncSeparate`, `glBlendEquation` /
+`glBlendEquationSeparate` and `glBlendColor` support RGB/alpha factors, constant
+color/alpha, add/subtract/reverse-subtract/min/max equations. Disabling blend
+restores source-copy behavior. Supported blend/texture state queries are declared
+in the native GL header. Texture/blend state changes inside `glBegin`/`glEnd`
+report `GL_INVALID_OPERATION`.
 
-## How it works
+Run `build-native/c3dgl_native_textured.3dsx` (or `_cpp.3dsx`) for a resident indexed
+checkerboard with a textured alpha-blended immediate overlay. A switches filtering,
+B switches wrapping; periodic subimage updates occur between the two draws.
+The Cargo consumer also builds `textured.3dsx` from `rust3ds/src/bin/textured.rs`.
+All three consumers compile/link in `scripts/check.sh`; 19 host tests cover
+packet encoding, uploads, error rollback, UV cache invalidation and GPU image
+lifetime. One short native C Azahar smoke run now passes 18 image/render checks with zero
+GL errors; its resource assertion had an uninitialized VRAM baseline, fixed in
+the harness and documented with the unchanged raw result in
+`docs/native-results/texture-step/one-run/`. No second run was made. Independent
+consumer image comparisons and performance remain pending.
 
-- Vertices are collected in one linear buffer per frame and drawn in batches. A batch is submitted when the
-  draw state (texture, matrices, blend, depth, ...) changes; the state is compared when drawing, not in the
-  setters, so code that binds and unbinds a texture around every quad still ends up in one draw call. Only the
-  parts of the state that differ from the previous batch are sent to the GPU, and the vertex buffer is flushed
-  from the CPU cache once before the command list is submitted, not per batch.
-- Static indexed VBOs with short positions/UVs and byte colors can retain their converted triangle vertices
-  in linear GPU memory. Cache hits avoid index scanning, conversion and copying each frame; matrices and
-  fragment state still use the normal draw-state pipeline. Both flat and smooth shading are preserved.
-  Buffer writes/deletion, index-buffer generations, layouts, ranges and baked vertex state invalidate the
-  expansion. Unsupported features use the existing pipeline. Cached storage is immutable until the GPU
-  finishes using it, including deletion/reuse within a frame.
-  `C3DGL_GPU_CACHE_BYTES` defaults to 4 MiB (define it on the library target; 0 disables caching). The budget
-  includes retired storage, only completed draws can be evicted, and optional allocation failure falls back
-  to the per-frame buffer. Texture/pixel allocation pressure reclaims caches after a GPU wait before retrying.
-- The PICA200 vertex shader (`shaders/c3dgl.v.pica`) applies `post * projection * modelview`, where `post`
-  rotates to the 3DS screen orientation and maps depth to PICA's [-1, 0] range.
-- Strips, fans, quads and polygons are split into triangles on the CPU. Lines and points have no PICA
-  equivalent: they are transformed on the CPU and expanded to screen-aligned quads (points with the attenuated
-  size; point sprites get their texcoords per corner, the texture matrix is not applied to them).
-- Lighting is computed per vertex on the CPU when the vertex is submitted (GL 1.1's formula), the lit color
-  replaces the vertex color. Flat shading, lines and points therefore need nothing extra; two-sided lighting computes
-  a back color too, and each polygon takes the one of the side it shows. It costs CPU time per lit vertex; a cache
-  of recently lit vertices (keyed by position, normal and color) avoids lighting shared mesh vertices again.
-- Texture coordinate generation also runs per vertex on the CPU. Planes, modelview (for eye planes) and the texture
-  matrix are folded into one small matrix per unit when one of them changes, so a vertex costs a 3x4 product (plus
-  the reflection vector for `GL_SPHERE_MAP`). The texture matrix is applied there with the generated r, which the GPU
-  path drops (vertices carry s, t, q), so projective texturing with eye linear s, t, r, q works; the shader gets an
-  identity matrix for these units.
-- Assembling primitives on the CPU also gives flat shading (the provoking vertex's color on every vertex),
-  `glPolygonMode` (outlines and vertices per polygon, culled on the CPU) and the slope part of `glPolygonOffset`
-  (computed per polygon, passed as a per-vertex depth bias that the vertex shader adds).
-- Fog runs on PICA's fog unit, which takes the fog factor from a 128-entry table indexed by the depth buffer value.
-  GL's factor depends on the eye distance, so each entry maps its window depth back through the projection to
-  `z_eye` (exact for `glFrustum`/`glOrtho`-style projections). The table is rebuilt only when the projection,
-  depth range or fog parameters change.
-- User clip planes are clipped on the CPU (PICA has only one clip plane), in object space before lines and points are
-  expanded: each plane goes to object space with the current modelview (cached per matrix change), polygons are
-  clipped Sutherland-Hodgman with all attributes interpolated, so the GPU only ever sees the remaining part.
-  Edges along a clip plane are not outlined by `glPolygonMode(GL_LINE)`.
-- Depth and stencil share one D24S8 buffer. `glClear` uses a memory fill when it can; clearing only depth or
-  only stencil (once stencil is in use), or clearing with a scissor box or color mask, draws a full-screen quad.
-- Textures are padded to power-of-two sizes and Morton-swizzled on upload; the shader applies the texture matrix
-  and scales the texcoords back. Texture unit n is TexEnv stage n; texcoords of units 1/2 are written to a second
-  vertex buffer only while those units are in use.
-- ETC1 blocks are stored as they come (byte order reversed, 4 blocks per 8x8 tile) and therefore upside down
-  compared to the other formats, whose rows are flipped on upload; the texture matrix flips t for them instead.
-- Textures deleted during a frame are freed after the GPU finished that frame.
-- One render target per screen; switching flushes the batch and changes the target within the same frame.
-- `glDrawPixels` and `glBitmap` draw quads in window coordinates with the image as a texture (in per-frame linear
-  memory, `GL_NEAREST`, in tiles of up to 256x256; zoom is the quad's size). Bitmaps are packed into one atlas per frame,
-  so a line of text is one batch; fragments outside the bitmap are discarded by the alpha test (the GL alpha test on the
-  raster color is decided on the CPU). `glCopyPixels(GL_COLOR)` queues a GX texture copy of the color buffer between the
-  draws before and after it (the color buffer is tiled like a texture), so it does not wait for the GPU. PICA cannot
-  output a per-pixel depth: depth and stencil images are read, tested and written back on the CPU.
-- The pixel transfer runs on the CPU while images are converted (unsigned byte images through 256-entry tables).
-  `glCopyPixels(GL_COLOR)` with an active color transfer is read back like `glReadPixels` (waits for the GPU) and
-  drawn like `glDrawPixels`.
-- Feedback and selection reuse the CPU primitive assembly: after user clip planes, a primitive is clipped against the
-  view volume in clip space (Sutherland-Hodgman for polygons, with colors and texcoords interpolated), culled and split
-  by polygon mode like for drawing, then written as tokens in window coordinates or recorded as a hit instead of being
-  drawn. `GL_POLYGON` is kept whole so that it comes back as one polygon.
-- Line stipple splits each expanded line into one quad per run of drawn fragments: the fragments are counted per pixel
-  along the major axis, the runs end on pixel edges.
-- Polygon stipple is a 32x32 alpha texture on PICA texture unit 0 with texcoords window position / 32, which the
-  shader computes from the vertex position in projection mode (PICA divides by w per pixel, so the pattern stays fixed
-  to the window under perspective). GL texture units 0 and 1 move to PICA units 1 and 2 meanwhile (a projective
-  texcoord of unit 0 is then divided per vertex). TexEnv stage 3 gives the fragments outside the pattern an alpha that
-  fails the alpha test, which is set up to combine with the GL alpha test: 0 or 1 from a saturating subtract or add of
-  the inverted pattern alpha (exact; an interpolation rounds down on real hardware).
-- The accumulation buffer lives in normal memory, two 16-bit components per word, so that the ARMv6 SIMD and DSP
-  instructions (`QADD16`, `SMLAWB`/`SMLAWT`, `SSAT`/`USAT`) handle a pair at a time. `GL_ACCUM` and `GL_LOAD` read
-  the color buffer like `glReadPixels` (the frame so far is run, then copied out by a display transfer). `GL_RETURN`
-  converts the result to RGBA8 textures that are drawn over the scissor box like `glDrawPixels` images, with only the
-  scissor test and the color mask, so it is queued between the draws without waiting.
-- Display lists store each command with its arguments; client memory is copied at compile time (texture images
-  tightly packed, vertex array elements as the immediate mode calls they stand for). `glCallList` runs the commands
-  through the same entry points, so a list renders exactly like the calls it recorded; it costs about as much CPU
-  time as those calls (nothing is pre-transformed or cached on the GPU).
+`c3dgl_native_texture_smoke.3dsx` runs seven deterministic frames and writes
+`sdmc:/c3dgl-texture-smoke-results.txt` plus GPU PPM readbacks, covering texture
+updates, filter/wrap changes, blending and renderer cleanup without interactive input.
 
-## License
 
-zlib, see [LICENSE](LICENSE).
+## Filled primitive compatibility
+
+`GL_TRIANGLES`, `GL_TRIANGLE_STRIP`, `GL_TRIANGLE_FAN`, `GL_QUADS`, `GL_QUAD_STRIP`
+and convex `GL_POLYGON` use shared triangle assembly for arrays, indexed VBOs and
+immediate mode. Strip parity preserves front-face winding, including degenerate
+indices. Quads use a consistent diagonal. Incomplete triangles/quads and the
+last unmatched quad-strip vertex are ignored. Current colors and UVs persist.
+
+New vector APIs are `glVertex2fv/3fv/4fv`, `glColor3fv/4fv`, `glColor3ubv/4ubv`
+and `glTexCoord2fv`; scalar `glColor3ub` is available too. Null vector pointers
+report `GL_INVALID_VALUE`. `GL_UNSIGNED_INT` index input is checked before
+conversion to PICA u16 indices: referenced vertices must remain within the
+existing 4096-vertex limit. No truncation of large u32 values occurs.
+
+Converted topology is cached with the primitive mode, descriptors and index
+source. Unchanged VBO draws reuse both vertices and generated triangle indices;
+updates retire dependent storage until GPU completion. Points, lines, concave
+polygon tessellation and flat shading remain outside this subset.
+
+`c3dgl_native_primitives.3dsx`, its C++ variant and Cargo `primitives.3dsx`
+display the six modes through arrays, indexed VBOs and immediate vector calls.
+`c3dgl_native_primitive_smoke.3dsx` captures and compares those cells automatically.
+The complete build check passes 24 host tests and all consumer/dependency audits.
+One native C Azahar run passes 32 checks, including whole-cell pixel equivalence,
+front-face culling, zero GL errors and complete GPU memory recovery; evidence is
+in `docs/native-results/primitive-step/`. Other consumers have build verification.
+
+
+## Compare existing examples directly
+
+Further GL compatibility work uses the original `examples/` scenes as its primary
+comparison. `compare/` builds identical capture entry points against the old
+C and native Rust renderer, reusing original functions without copying geometry
+or substituting unsupported APIs. Run `scripts/compare_old_examples.py`
+for one run per renderer/example and a strict whole-image comparison.
+
+The first results are in `docs/native-results/old-examples/`: the F texture matches
+exactly; primitive colors differ by at most one channel value; the old cube exposes
+missing 12x12 NPOT texture support. Selected original functions are covered;
+complete interactive pages and their remaining feature gaps are documented in
+`compare/README.md`. Missing-symbol inventory covers all existing examples.

@@ -42,10 +42,10 @@ source, adapter and both ROM hashes are recorded. Build-time source manifests ar
 checked before running so modified sources require a rebuild.
 
 ```sh
-cmake -S native/compare -B build-native-old-examples \
+cmake -S compare -B build-native-old-examples \
   -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/3DS.cmake"
 cmake --build build-native-old-examples
-python3 native/scripts/compare_old_examples.py \
+python3 scripts/compare_old_examples.py \
   --emulator /path/to/azahar --sdmc /path/to/sdmc
 ```
 

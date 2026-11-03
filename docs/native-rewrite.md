@@ -134,7 +134,7 @@ Do not replace missing original features with stubs or modified inputs. Extend
 shared selection as the port grows and make full original pages runnable. Separate
 whole-program support from selected-scene comparisons and keep every mismatch.
 
-`native/compare/` and `native/scripts/compare_old_examples.py` now provide this path.
+`compare/` and `scripts/compare_old_examples.py` now provide this path.
 The first three one-run pairs are in `native-results/old-examples/`: exact F-texture
 match, primitive channel differences of at most one, and an NPOT failure in the
 original 12x12 cube texture. Address these real-example gaps before claiming full
@@ -486,10 +486,10 @@ Host tests: 54 pass.
 ## CPU performance checkpoint
 
 The C renderer and Citro3D are no longer the target; the native renderer is. Every original example
-scene now has a performance ROM (`native/compare`, `perf_<case>_{reference,native}`: the unchanged
+scene now has a performance ROM (`compare`, `perf_<case>_{reference,native}`: the unchanged
 scene statements for 30 warmup and 120 measured frames, setup outside the loop) and
-`native/scripts/perf_old_examples.py` compares the CPU time per frame (GPU/VBlank waiting excluded)
-in Azahar. `native/bench` builds the same scenes for the host with a mock platform for profiling with
+`scripts/perf_old_examples.py` compares the CPU time per frame (GPU/VBlank waiting excluded)
+in Azahar. `bench` builds the same scenes for the host with a mock platform for profiling with
 a sampling profiler (host time tracks Azahar time at roughly 250-350x; platform calls such as cache
 flushes and linear allocations, which are system calls on the 3DS, are counted separately).
 

@@ -24,7 +24,7 @@ summary = dict(repetitions=1, cases={}, whole_original_programs=False)
 for case in cases:
     source = root/'examples'/('texture' if case in ('texcoords', 'texmatrix', 'multitexture', 'mipmap', 'compressed') else 'cube' if case == 'overlay' else 'primitives' if case in ('primitives2', 'primitives3') else 'fragment' if case == 'fragment2' else 'glu' if case.startswith('glu') else case)/('main.c' if case == 'api' else 'main.cpp')
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
-    adapter_hash = hashlib.sha256((root/'native/compare'/('old_api.c' if case == 'api' else 'old_examples.cpp')).read_bytes()).hexdigest()
+    adapter_hash = hashlib.sha256((root/'compare'/('old_api.c' if case == 'api' else 'old_examples.cpp')).read_bytes()).hexdigest()
     for backend in ['reference','native']:
         manifest = json.loads((args.build/f'old_{case}_{backend}_source.json').read_text())
         if manifest != dict(source_sha256=source_hash,adapter_sha256=adapter_hash):
@@ -34,7 +34,7 @@ for case in cases:
         target = args.build/f'old_{case}_{backend}.3dsx'
         destination = args.output/case/backend
         result = subprocess.run([
-            sys.executable,str(root/'native/scripts/smoke_check.py'),
+            sys.executable,str(root/'scripts/smoke_check.py'),
             '--emulator',args.emulator,'--rom',str(target),'--sdmc',str(args.sdmc),
             '--report',f'c3dgl-old-{case}-{backend}-results.txt',
             '--image',f'c3dgl-old-{case}-{backend}.ppm','--output',str(destination),

@@ -1,7 +1,7 @@
 // Capture entry point of the api example: every check of the original main (runTests(), extracted unchanged) and the
 // frame of its main loop. The original is plain C, so this adapter is too.
 #define main c3dglOriginalInteractiveMain
-#include "../../examples/api/main.c"
+#include "../legacy/examples/api/main.c"
 #undef main
 #ifdef C3DGL_COMPARE_NATIVE
 #include <c3dgl_native.h>
