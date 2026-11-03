@@ -210,20 +210,32 @@ mod tests {
 /// `rust3ds` builds use the application's std allocator and panic runtime.
 #[cfg(target_os = "horizon")]
 pub mod raw {
+    pub use crate::accum::*;
     pub use crate::arrays::*;
+    pub use crate::attrib::*;
     pub use crate::blend::*;
-    pub use crate::frame::{
-        glClear, glClearColor, glClearDepth, glClearDepthf, glGetBooleanv, glGetFloatv,
-        glGetIntegerv, glViewport,
-    };
+    pub use crate::clip::*;
+    pub use crate::compat::*;
+    pub use crate::evaluator::*;
+    pub use crate::feedback::*;
+    pub use crate::fog::*;
+    pub use crate::frame::*;
     pub use crate::immediate::*;
-    pub use crate::raster::*;
-    pub use crate::texture::*;
-
+    pub use crate::lighting::*;
+    pub use crate::lines::*;
+    pub use crate::lists::*;
     pub use crate::matrix::*;
+    pub use crate::pixels::*;
+    pub use crate::points::*;
+    pub use crate::polygon::*;
+    pub use crate::raster::*;
     pub use crate::renderer::{
         c3dglClose, c3dglInit, c3dglNativeBegin, c3dglNativeDraw, c3dglNativeGetStats,
         c3dglNativePresent, c3dglNativeReadback, c3dglNativeUpload, c3dglSwapBuffers, Stats,
         Vertex,
     };
+    pub use crate::stipple::*;
+    pub use crate::texgen::*;
+    pub use crate::texture::*;
+    pub use crate::variants::*;
 }

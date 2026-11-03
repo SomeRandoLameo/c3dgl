@@ -1,14 +1,44 @@
 [package]
-name = "c3dgl-example-rust"
+name = "c3dgl-examples-rust"
 version = "0.1.0"
 edition = "2021"
 publish = false
+autobins = false
 
 # Build with cargo-3ds from this directory:  cargo 3ds build --release
 [dependencies]
 c3dgl-native = { path = "../..", features = ["rust3ds"] }
 ctru-rs = { git = "https://github.com/rust3ds/ctru-rs.git" }
+ctru-sys = { git = "https://github.com/rust3ds/ctru-rs.git" }
 png = { version = "0.17", default-features = false }
+
+[[bin]]
+name = "cube"
+path = "cube/main.rs"
+
+[[bin]]
+name = "accum"
+path = "accum/main.rs"
+
+[[bin]]
+name = "lists"
+path = "lists/main.rs"
+
+[[bin]]
+name = "pixels"
+path = "pixels/main.rs"
+
+[[bin]]
+name = "select"
+path = "select/main.rs"
+
+[[bin]]
+name = "stipple"
+path = "stipple/main.rs"
+
+[[bin]]
+name = "texgen"
+path = "texgen/main.rs"
 
 [profile.release]
 panic = "abort"
