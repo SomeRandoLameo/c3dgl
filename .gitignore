@@ -67,3 +67,4 @@ __pycache__/
 
 # Example build outputs
 examples/rust/target/
+build-examples-*/

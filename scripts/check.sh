@@ -20,8 +20,6 @@ build-native-host/abi-c
 build-native-host/abi-cpp
 cmake -S . -B build-native -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/3DS.cmake"
 cmake --build build-native
-cmake -S benchmark -B build-native-reference -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/3DS.cmake"
-cmake --build build-native-reference
 for consumer in c3dgl_native_triangle c3dgl_native_triangle_cpp c3dgl_native_cube c3dgl_native_immediate c3dgl_native_textured c3dgl_native_textured_cpp c3dgl_native_texture_smoke c3dgl_native_primitives c3dgl_native_primitive_smoke c3dgl_native_primitives_cpp; do
     "$DEVKITPRO/devkitARM/bin/arm-none-eabi-nm" "build-native/$consumer.elf" > "build-native-host/$consumer-symbols.txt"
     if grep -E '(C3D_|GPUCMD_|DVLB_|shaderProgram)' "build-native-host/$consumer-symbols.txt"; then

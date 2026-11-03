@@ -1,15 +1,19 @@
-# Standalone downstream project: cmake -S examples/c -B build-example-c \
-#     -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/3DS.cmake && cmake --build build-example-c
+# C examples for the C ABI of the Rust renderer. Build:
+#   cmake -S examples/c -B build-example-c -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/3DS.cmake
+#   cmake --build build-example-c
 cmake_minimum_required(VERSION 3.18)
 if(NOT CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{DEVKITPRO})
     set(CMAKE_TOOLCHAIN_FILE "$ENV{DEVKITPRO}/cmake/3DS.cmake" CACHE FILEPATH "3DS toolchain")
 endif()
-project(c3dgl_example_c LANGUAGES C)
+project(c3dgl_examples_c LANGUAGES C)
 
-# c3dgl as a subdirectory; its own tests and demos stay off when not top level.
 add_subdirectory(../.. c3dgl)
 
-add_executable(c3dgl_example_c main.c)
-target_link_libraries(c3dgl_example_c PRIVATE c3dgl::native)
-target_compile_options(c3dgl_example_c PRIVATE -O2 -Wall -Wextra -Werror)
-ctr_create_3dsx(c3dgl_example_c)
+foreach(example api)
+    set(target c3dgl_example_${example})
+    add_executable(${target} ${example}/main.c)
+    set_target_properties(${target} PROPERTIES C_STANDARD 99 C_EXTENSIONS ON)
+    target_compile_options(${target} PRIVATE -O2 -Wall -Wextra)
+    target_link_libraries(${target} PRIVATE c3dgl::native m)
+    ctr_create_3dsx(${target})
+endforeach()

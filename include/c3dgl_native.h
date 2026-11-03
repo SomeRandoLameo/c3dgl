@@ -11,6 +11,10 @@ extern "C" {
  * Renderer has exclusive ownership of GPU submission between Init and Close.
  * Return codes: 0 success; -1 unavailable; -2 invalid call; -3 platform failure;
  * -4 command overflow (previous valid draws still present). */
+#define C3DGL_TOP_SCREEN_WIDTH    400
+#define C3DGL_BOTTOM_SCREEN_WIDTH 320
+#define C3DGL_SCREEN_HEIGHT       240
+
 typedef struct {
     float position[4]; /* Object space x,y,z,w; identity GL matrices by default. */
     float color[4];    /* RGBA, 0..1 */

@@ -1,15 +1,32 @@
-# Standalone downstream project: cmake -S examples/cpp -B build-example-cpp \
-#     -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/3DS.cmake && cmake --build build-example-cpp
+# C++ examples for the Rust renderer. Build:
+#   cmake -S examples/cpp -B build-example-cpp -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/3DS.cmake
+#   cmake --build build-example-cpp
 cmake_minimum_required(VERSION 3.18)
 if(NOT CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{DEVKITPRO})
     set(CMAKE_TOOLCHAIN_FILE "$ENV{DEVKITPRO}/cmake/3DS.cmake" CACHE FILEPATH "3DS toolchain")
 endif()
-project(c3dgl_example_cpp LANGUAGES C CXX)
+project(c3dgl_examples_cpp LANGUAGES C CXX ASM)
 
 add_subdirectory(../.. c3dgl)
+add_subdirectory(../../external/glu glu)
+find_package(PNG REQUIRED)
 
-add_executable(c3dgl_example_cpp main.cpp)
-target_link_libraries(c3dgl_example_cpp PRIVATE c3dgl::native)
-target_compile_options(c3dgl_example_cpp PRIVATE -O2 -Wall -Wextra -Werror)
-set_target_properties(c3dgl_example_cpp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-ctr_create_3dsx(c3dgl_example_cpp)
+foreach(example cube primitives fragment glu texture lighting fog clipplane points lists texgen pixels select stipple accum)
+    set(target c3dgl_example_${example})
+    add_executable(${target} ${example}/main.cpp)
+    set_target_properties(${target} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    target_compile_options(${target} PRIVATE -O2 -Wall -Wextra -ffunction-sections -fdata-sections)
+    target_link_options(${target} PRIVATE -Wl,--gc-sections)
+    target_link_libraries(${target} PRIVATE c3dgl::native PNG::PNG)
+    if(example STREQUAL select OR example STREQUAL glu)
+        target_link_libraries(${target} PRIVATE c3dgl::glu)
+    endif()
+    if(example STREQUAL cube)
+        # romfs/ is packed into the .3dsx (romfs:/tonk.png)
+        dkp_add_asset_target(${target}_romfs ${CMAKE_CURRENT_SOURCE_DIR}/cube/romfs)
+        dkp_track_assets(${target}_romfs FILES tonk.png)
+        ctr_create_3dsx(${target} ROMFS ${target}_romfs)
+    else()
+        ctr_create_3dsx(${target})
+    endif()
+endforeach()

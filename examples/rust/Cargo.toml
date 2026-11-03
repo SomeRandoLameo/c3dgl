@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 c3dgl-native = { path = "../..", features = ["rust3ds"] }
 ctru-rs = { git = "https://github.com/rust3ds/ctru-rs.git" }
+png = { version = "0.17", default-features = false }
 
 [profile.release]
 panic = "abort"

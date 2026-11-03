@@ -1,7 +1,5 @@
 # Native Rust renderer
 
-The original C implementation lives in [`legacy/`](legacy/); it is the reference the comparison tooling builds against.
-
 `no_std` + `alloc` Rust static library with a C ABI. The renderer generates its
 own PICA200 commands, uploads its own vertex shader and renders into VRAM.
 Citro3D is not linked. All allocation, GSP/GX, cache, display, event, APT and timing
