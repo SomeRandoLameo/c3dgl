@@ -176,6 +176,8 @@ pub unsafe fn shaded_cube(texcoords: bool) {
 pub struct Checks {
     pub total: u32,
     pub failures: u32,
+    /// Optional log file that also receives the failing checks.
+    pub log: Option<std::fs::File>,
 }
 
 impl Checks {
@@ -184,6 +186,10 @@ impl Checks {
         if !ok {
             self.failures += 1;
             println!("FAIL {line}: {what}");
+            if let Some(log) = &mut self.log {
+                use std::io::Write;
+                let _ = writeln!(log, "FAIL {line}: {what}");
+            }
         }
     }
 
@@ -197,5 +203,14 @@ impl Checks {
 macro_rules! check {
     ($checks:expr, $cond:expr) => {
         $checks.check($cond, stringify!($cond), line!())
+    };
+}
+
+/// `gl!(glFoo(a, b))`: calls a GL entry point converting every argument with `as _`, so that
+/// literals and enum constants of another numeric type fit the parameter type.
+#[allow(unused_macros)]
+macro_rules! gl {
+    ($f:ident($($a:expr),* $(,)?)) => {
+        $f($(($a) as _),*)
     };
 }

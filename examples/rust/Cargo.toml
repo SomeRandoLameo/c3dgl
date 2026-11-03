@@ -68,6 +68,10 @@ path = "primitives/main.rs"
 name = "texture"
 path = "texture/main.rs"
 
+[[bin]]
+name = "api"
+path = "api/main.rs"
+
 [profile.release]
 panic = "abort"
 lto = true
