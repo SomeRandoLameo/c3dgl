@@ -37,6 +37,10 @@ The `.3dsx` files appear in the build directory (`target/armv6k-nintendo-3ds/rel
 - `glu` and `select` use Mesa GLU (`external/glu`) in the C and C++ sets. GLU is a C/C++ library
   and not part of the Rust crate, so the Rust set has no `glu` example; its `select` uses a small
   pick-matrix helper instead of `gluPickMatrix`.
+- Checked in Azahar (macOS): all 16 C, all 15 C++ and all 10 Rust examples start and render. `clipplane`
+  (33/33), `fog` (29/29) and `glu` (20/20) pass all their on-screen checks. `lighting` reports 58/62
+  (identical in C and C++) and `api` lists failing checks (among them logic ops, which Azahar on macOS
+  does not support in its hardware renderer): these are open renderer issues, not example bugs.
 - The Rust set is not complete yet: `glu`, `api`, `lighting`, `points`, `primitives` and
   `texture` are still missing there.
 - `cube` loads `romfs:/tonk.png` (C, C++: libpng from romfs; Rust: the `png` crate, embedded).
