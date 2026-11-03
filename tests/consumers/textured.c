@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #ifdef C3DGL_TEXTURE_SMOKE
-#include "../tests/texture_smoke.h"
+#include "../texture_smoke.h"
 #endif
 typedef struct { float position[3]; float uv[2]; uint8_t color[4]; } TexVertex;
 static const TexVertex mesh[]={

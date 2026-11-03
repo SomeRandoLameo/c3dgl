@@ -128,7 +128,7 @@ Independent consumer comparisons and performance gates remain separate.
 
 ## Original-example acceptance
 
-Use existing `examples/*/main.*` scene functions and inputs as the primary oracle
+Use existing `legacy/examples/*/main.*` scene functions and inputs as the primary oracle
 for further compatibility work, with a common capture entry point for C and Rust.
 Do not replace missing original features with stubs or modified inputs. Extend
 shared selection as the port grows and make full original pages runnable. Separate
@@ -165,7 +165,7 @@ hardware gates.
 
 ## Original texcoord page checkpoint
 
-The complete unchanged `drawTexcoordPage` from `examples/texture/main.cpp` now
+The complete unchanged `drawTexcoordPage` from `legacy/examples/texture/main.cpp` now
 runs through the shared adapter and matches the C framebuffer exactly, with
 zero GL errors. It covers projective q interpolation, nonprojective coordinates,
 ignored r, SHORT/BYTE/FIXED/FLOAT/DOUBLE arrays and sizes 1, 2 and 4.
@@ -209,7 +209,7 @@ attributes (position, color, three texcoord sets) and outputs texcoord0/1/2
 through per-unit texture-matrix rows (c5..c11); texture units 0..2 have their own
 image registers and TEV stages 0..2 carry the per-unit TexEnv words (modulate,
 add, replace, decal, blend and COMBINE with sources, operands, constants and
-scales). The complete unchanged `drawMultitexturePage` of `examples/texture/main.cpp`
+scales). The complete unchanged `drawMultitexturePage` of `legacy/examples/texture/main.cpp`
 (eight cells: modulate, add, COMBINE interpolate/dot3/subtract with RGB_SCALE, three
 units, unit-1 texture matrix, per-unit client arrays) matches the C framebuffer
 exactly; all six selected original scenes match. See `native-results/multitexture-step/`
@@ -260,7 +260,7 @@ screen-aligned NDC quads (w clipping, square caps, perpendicular half width, as 
 the C renderer) and drawn with an identity projection and without culling; the
 renderer switches between this clip-space state and the normal MVP state per draw.
 Immediate mode and client/VBO arrays share the path; expanded geometry is
-transient. The complete unchanged `drawOverlay` of `examples/cube/main.cpp`
+transient. The complete unchanged `drawOverlay` of `legacy/examples/cube/main.cpp`
 (scissored quad plus four `GL_LINES`) and all nine selected original scenes match
 the C framebuffer exactly (`native-results/lines-step/`, one run each). Open: line
 stipple, smooth lines, point sprites/attenuation/size arrays, polygon modes and
@@ -279,7 +279,7 @@ offset of filled polygons is folded into the z row of the uploaded MVP (z' = z +
 one draw per bias, with no shader change. Evaluators (`glMap1/2`, `glMapGrid`,
 `glEvalCoord/Point/Mesh`, `glGetMap`) evaluate Bezier maps on the CPU into immediate
 vertices (colors, texcoords, rational vertices). The complete unchanged pages 1, 2 and
-3 of `examples/primitives/main.cpp` (points, lines, strips and fans, elements; flat
+3 of `legacy/examples/primitives/main.cpp` (points, lines, strips and fans, elements; flat
 shading, polygon modes, edge flags, polygon offset, depth range; curves, rational
 curve, colored/wire/textured bicubic patches and point meshes) match the C
 framebuffer exactly, as do the eleven selected original scenes
@@ -312,7 +312,7 @@ object-linear, eye-linear and sphere-map modes, ported with the C renderer's fol
 planes, modelview and texture matrix so rounding is identical. Units with generated
 coordinates get an identity texture matrix in the shader and unit 0 samples in projection
 mode, like the C renderer; generated draws use the CPU vertex path. `GL_CLAMP` is
-accepted as a wrap mode (clamp to edge). The original `examples/texgen/main.cpp` now keeps
+accepted as a wrap mode (clamp to edge). The original `legacy/examples/texgen/main.cpp` now keeps
 its scene setup and one frame in `setupScene()` and `drawFrame()` (bodies unchanged apart
 from indentation; `main` calls them): the first frame matches the C framebuffer exactly,
 as do the twelve earlier scenes (`native-results/texgen-step/`, one run each). Host tests: 47 pass.

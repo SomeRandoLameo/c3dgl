@@ -1,7 +1,7 @@
 # Existing examples as the compatibility oracle
 
 Build the same capture entry point twice, linking the old C renderer or the native
-Rust renderer. `old_examples.cpp` includes the existing `examples/*/main.cpp`
+Rust renderer. `old_examples.cpp` includes the existing `legacy/examples/*/main.cpp`
 directly and invokes its existing scene/texture functions. No geometry, texture
 patterns or drawing algorithms are copied or replaced. Original example files
 remain unchanged. Both consumers use the original GL declarations; native linkage

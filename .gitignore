@@ -64,3 +64,6 @@ __pycache__/
 # Keep protocol attribution and license notices for the native renderer.
 !third_party/
 !third_party/**
+
+# Example build outputs
+examples/rust/target/

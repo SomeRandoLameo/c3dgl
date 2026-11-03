@@ -1,0 +1,15 @@
+[package]
+name = "c3dgl-example-rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Build with cargo-3ds from this directory:  cargo 3ds build --release
+[dependencies]
+c3dgl-native = { path = "../..", features = ["rust3ds"] }
+ctru-rs = { git = "https://github.com/rust3ds/ctru-rs.git" }
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

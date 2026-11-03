@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-#include "../tests/depth_scene.h"
+#include "../depth_scene.h"
 
 static const C3DGLnativeVertex vertices[] = {
     {{-.8f, -.7f, 0, 1}, {1, 0, 0, 1}},
